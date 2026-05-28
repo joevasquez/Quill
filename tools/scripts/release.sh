@@ -194,9 +194,9 @@ fi
 
 if [ -x "$GENERATE_APPCAST" ]; then
   echo "→ Generating appcast.xml..."
-  # generate_appcast scans a directory for DMGs and builds the XML.
-  # We point it at the release dir which contains our signed DMG.
-  # It reads the EdDSA signature from the Keychain automatically.
+  # generate_appcast errors on duplicate versions if it finds both the
+  # .zip (used for notarization) and the .dmg. Remove the zip first.
+  rm -f "$BUILD_DIR/Quill.zip"
   "$GENERATE_APPCAST" --download-url-prefix "https://github.com/joevasquez/Hex/releases/download/v${VERSION}/" \
     "$BUILD_DIR" 2>&1 | tail -5 || true
 
