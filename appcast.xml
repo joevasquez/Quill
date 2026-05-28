@@ -4,11 +4,11 @@
         <title>Quill</title>
         <item>
             <title>0.13.0</title>
-            <pubDate>Thu, 28 May 2026 17:43:24 -0400</pubDate>
+            <pubDate>Thu, 28 May 2026 18:00:42 -0400</pubDate>
             <sparkle:version>97</sparkle:version>
             <sparkle:shortVersionString>0.13.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/joevasquez/Hex/releases/download/v0.13.0/Hex-latest.dmg" length="14043707" type="application/octet-stream" sparkle:edSignature="U2vfnm9brPYRDq4puTmvf4S9qTUUYvTP2IpPVSsf9hNbzEhHJxLfoxZqrprCSiJXmtfx35Dpbx1qwamQyNoyBQ=="/>
+            <enclosure url="https://github.com/joevasquez/Hex/releases/download/v0.13.0/Hex-latest.dmg" length="14043741" type="application/octet-stream" sparkle:edSignature="PyINkLCPUsRbc0FSZ+hNiklTFadQC4VHCWsjTYIrdjsEM3pXAUv6fL7GRquUpMt1pEgT55RtK1iJpIqrNlZlAg=="/>
         </item>
     </channel>
 </rss>
