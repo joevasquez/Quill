@@ -35,12 +35,6 @@ struct AboutView: View {
                     }
                 }
                 HStack {
-                    Label("Quill is open source", systemImage: "apple.terminal.on.rectangle")
-                    Spacer()
-                    Link("Visit GitHub", destination: URL(string: "https://github.com/joevasquez/Hex")!)
-                }
-
-                HStack {
                     Label("Built by Joe Vasquez", systemImage: "person.circle")
                     Spacer()
                     Link("joevasquez.com", destination: URL(string: "https://joevasquez.com")!)
