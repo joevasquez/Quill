@@ -163,19 +163,76 @@ if [ ! -s "$NOTES_PATH" ]; then
   echo "⚠️  No release notes found for v$VERSION in CHANGELOG.md. Add a '## $VERSION' section."
 fi
 
+# 8. Sign the DMG for Sparkle and update the appcast
+SIGN_UPDATE="$REPO_ROOT/bin/sign_update"
+GENERATE_APPCAST="$REPO_ROOT/bin/generate_appcast"
+APPCAST_PATH="$REPO_ROOT/appcast.xml"
+DOWNLOAD_URL="https://github.com/joevasquez/Hex/releases/download/v${VERSION}/$DMG_NAME"
+
+if [ -x "$SIGN_UPDATE" ]; then
+  echo "→ Signing DMG for Sparkle..."
+  SIGNATURE=$("$SIGN_UPDATE" "$DMG_PATH" 2>&1 | grep 'sparkle:edSignature=' | head -1)
+  if [ -n "$SIGNATURE" ]; then
+    ED_SIGNATURE=$(echo "$SIGNATURE" | sed 's/.*sparkle:edSignature="\([^"]*\)".*/\1/')
+    LENGTH=$(echo "$SIGNATURE" | sed 's/.*length="\([^"]*\)".*/\1/')
+    echo "   edSignature: ${ED_SIGNATURE:0:20}..."
+    echo "   length:      $LENGTH"
+  else
+    # sign_update may print just the signature on a single line
+    ED_SIGNATURE=$("$SIGN_UPDATE" "$DMG_PATH" 2>&1 | tail -1)
+    LENGTH=$(stat -f%z "$DMG_PATH")
+    echo "   edSignature: ${ED_SIGNATURE:0:20}..."
+    echo "   length:      $LENGTH"
+  fi
+else
+  echo "⚠️  bin/sign_update not found — skipping Sparkle signing."
+  echo "   Copy it from DerivedData:"
+  echo "     cp \$(find ~/Library/Developer/Xcode/DerivedData -path '*/artifacts/sparkle/Sparkle/bin/sign_update' | head -1) bin/"
+  ED_SIGNATURE=""
+  LENGTH=$(stat -f%z "$DMG_PATH")
+fi
+
+if [ -x "$GENERATE_APPCAST" ]; then
+  echo "→ Generating appcast.xml..."
+  # generate_appcast scans a directory for DMGs and builds the XML.
+  # We point it at the release dir which contains our signed DMG.
+  # It reads the EdDSA signature from the Keychain automatically.
+  "$GENERATE_APPCAST" --download-url-prefix "https://github.com/joevasquez/Hex/releases/download/v${VERSION}/" \
+    "$BUILD_DIR" 2>&1 | tail -5 || true
+
+  # generate_appcast writes appcast.xml inside the scanned directory
+  if [ -f "$BUILD_DIR/appcast.xml" ]; then
+    cp "$BUILD_DIR/appcast.xml" "$APPCAST_PATH"
+    echo "   Updated $APPCAST_PATH"
+  else
+    echo "⚠️  generate_appcast did not produce appcast.xml — you may need to create it manually."
+  fi
+else
+  echo "⚠️  bin/generate_appcast not found — skipping appcast generation."
+fi
+
 DMG_SIZE_MB=$(du -m "$DMG_PATH" | cut -f1)
 echo ""
 echo "✅ Done — $DMG_PATH (${DMG_SIZE_MB} MB)"
 echo ""
 echo "Next steps:"
 echo ""
-echo "  git tag v$VERSION"
-echo "  git push fork v$VERSION"
+echo "  1. Commit the updated appcast.xml:"
+echo "     git add appcast.xml"
+echo "     git commit -m 'Update appcast for v$VERSION'"
 echo ""
-echo "  gh release create v$VERSION --repo joevasquez/Hex \\"
-echo "    --title 'Quill v$VERSION' \\"
-echo "    --notes-file '$NOTES_PATH' \\"
-echo "    '$DMG_PATH'"
+echo "  2. Tag and push:"
+echo "     git tag v$VERSION"
+echo "     git push fork main v$VERSION"
+echo ""
+echo "  3. Create the GitHub Release:"
+echo "     gh release create v$VERSION --repo joevasquez/Hex \\"
+echo "       --title 'Quill v$VERSION' \\"
+echo "       --notes-file '$NOTES_PATH' \\"
+echo "       '$DMG_PATH'"
 echo ""
 echo "The download URL on your site stays stable:"
 echo "  https://github.com/joevasquez/Hex/releases/latest/download/$DMG_NAME"
+echo ""
+echo "Sparkle will check for updates at:"
+echo "  https://raw.githubusercontent.com/joevasquez/Hex/main/appcast.xml"

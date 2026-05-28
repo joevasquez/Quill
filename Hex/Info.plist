@@ -28,5 +28,9 @@
 	<string>Quill creates reminders from your voice commands in Action mode.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Quill uses on-device speech recognition to show a live transcript while you dictate.</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/joevasquez/Hex/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>RguvjeSBsy8FhBUELA3+vysxk39N4jmvO7CM6bsEnxs=</string>
 </dict>
 </plist>
