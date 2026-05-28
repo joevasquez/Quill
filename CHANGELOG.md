@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.0
+
+### Minor Changes
+
+- 4fc1f58: Add multi-action mode: voice commands with multiple actions (e.g. 'remind me to buy milk and schedule a meeting tomorrow at 2pm') are now parsed into separate items, each shown as an editable card in the confirmation panel. Supports independent execution with per-item success/failure tracking on both macOS and iOS.
+
+### Patch Changes
+
+- 3eb9989: Add per-app clipboard paste delay for remote desktop apps like Citrix, RDP, and VMware
+- 3eb9989: Configure Sparkle auto-updates with EdDSA signing and appcast feed URL
+
 ## 0.12.1
 
 ### Patch Changes
