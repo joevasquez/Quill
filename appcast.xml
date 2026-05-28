@@ -1,0 +1,14 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Quill</title>
+        <item>
+            <title>0.13.0</title>
+            <pubDate>Thu, 28 May 2026 17:43:24 -0400</pubDate>
+            <sparkle:version>97</sparkle:version>
+            <sparkle:shortVersionString>0.13.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/joevasquez/Hex/releases/download/v0.13.0/Hex-latest.dmg" length="14043707" type="application/octet-stream" sparkle:edSignature="U2vfnm9brPYRDq4puTmvf4S9qTUUYvTP2IpPVSsf9hNbzEhHJxLfoxZqrprCSiJXmtfx35Dpbx1qwamQyNoyBQ=="/>
+        </item>
+    </channel>
+</rss>
