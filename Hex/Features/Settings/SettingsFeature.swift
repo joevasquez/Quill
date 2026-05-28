@@ -90,6 +90,9 @@ struct SettingsFeature {
     case toggleSuperFastMode(Bool)
     case setUseClipboardPaste(Bool)
     case setCopyToClipboard(Bool)
+    case addAppPasteDelay
+    case updateAppPasteDelay(AppPasteDelay)
+    case removeAppPasteDelay(UUID)
     case setDoubleTapLockEnabled(Bool)
     case setUseDoubleTapOnly(Bool)
     case setMinimumKeyTime(Double)
@@ -544,6 +547,26 @@ struct SettingsFeature {
 
       case let .setCopyToClipboard(enabled):
         state.$hexSettings.withLock { $0.copyToClipboard = enabled }
+        return .none
+
+      case .addAppPasteDelay:
+        state.$hexSettings.withLock {
+          $0.appPasteDelays.append(.init(bundleIdentifier: "", appName: "", delayMs: 300))
+        }
+        return .none
+
+      case let .updateAppPasteDelay(rule):
+        state.$hexSettings.withLock {
+          if let idx = $0.appPasteDelays.firstIndex(where: { $0.id == rule.id }) {
+            $0.appPasteDelays[idx] = rule
+          }
+        }
+        return .none
+
+      case let .removeAppPasteDelay(id):
+        state.$hexSettings.withLock {
+          $0.appPasteDelays.removeAll { $0.id == id }
+        }
         return .none
 
       case let .setRecordingAudioBehavior(behavior):

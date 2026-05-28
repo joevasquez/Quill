@@ -41,6 +41,139 @@ struct RecordingOutputSectionView: View {
 		} header: {
 			Text("Output")
 		}
-		.enableInjection()
+
+		if store.hexSettings.useClipboardPaste {
+			Section {
+				ForEach(store.hexSettings.appPasteDelays) { rule in
+					AppPasteDelayRow(
+						rule: rule,
+						onPickApp: { picked in
+							store.send(.updateAppPasteDelay(.init(
+								id: rule.id,
+								bundleIdentifier: picked.bundleIdentifier,
+								appName: picked.appName,
+								delayMs: rule.delayMs,
+								isEnabled: true
+							)))
+						},
+						onDelayChange: { ms in
+							var updated = rule
+							updated.delayMs = ms
+							store.send(.updateAppPasteDelay(updated))
+						},
+						onToggle: { enabled in
+							var updated = rule
+							updated.isEnabled = enabled
+							store.send(.updateAppPasteDelay(updated))
+						},
+						onRemove: { store.send(.removeAppPasteDelay(rule.id)) }
+					)
+				}
+
+				Button {
+					store.send(.addAppPasteDelay)
+				} label: {
+					Label("Add app…", systemImage: "plus.circle")
+				}
+				.buttonStyle(.plain)
+			} header: {
+				Text("Clipboard paste delay")
+			} footer: {
+				Text("Add extra delay before Cmd+V for remote desktop apps (Citrix, RDP, VMware) where the clipboard syncs over the network.")
+					.settingsCaption()
+			}
+		}
+		EmptyView()
+			.enableInjection()
+	}
+}
+
+// MARK: - AppPasteDelayRow
+
+struct AppPasteDelayRow: View {
+	let rule: AppPasteDelay
+	let onPickApp: (PickedApp) -> Void
+	let onDelayChange: (Int) -> Void
+	let onToggle: (Bool) -> Void
+	let onRemove: () -> Void
+
+	struct PickedApp {
+		let bundleIdentifier: String
+		let appName: String
+	}
+
+	var body: some View {
+		HStack(spacing: 10) {
+			Toggle("", isOn: Binding(
+				get: { rule.isEnabled },
+				set: { onToggle($0) }
+			))
+			.labelsHidden()
+			.toggleStyle(.switch)
+			.controlSize(.mini)
+
+			Button {
+				pickApp()
+			} label: {
+				HStack(spacing: 8) {
+					Image(systemName: "app.badge")
+						.foregroundStyle(.secondary)
+					Text(displayName)
+						.lineLimit(1)
+						.foregroundStyle(rule.bundleIdentifier.isEmpty ? .secondary : .primary)
+				}
+				.padding(.vertical, 4)
+			}
+			.buttonStyle(.plain)
+			.help("Click to pick the app this delay should apply to.")
+
+			Spacer(minLength: 8)
+
+			Stepper(
+				"\(rule.delayMs) ms",
+				value: Binding(
+					get: { rule.delayMs },
+					set: { onDelayChange($0) }
+				),
+				in: 50...2000,
+				step: 50
+			)
+			.frame(maxWidth: 130)
+
+			Button(role: .destructive) {
+				onRemove()
+			} label: {
+				Image(systemName: "trash")
+			}
+			.buttonStyle(.borderless)
+			.help("Remove this app.")
+		}
+		.opacity(rule.isEnabled ? 1 : 0.5)
+	}
+
+	private var displayName: String {
+		if !rule.appName.isEmpty { return rule.appName }
+		if !rule.bundleIdentifier.isEmpty { return rule.bundleIdentifier }
+		return "Pick app…"
+	}
+
+	private func pickApp() {
+		let panel = NSOpenPanel()
+		panel.canChooseFiles = true
+		panel.canChooseDirectories = false
+		panel.allowsMultipleSelection = false
+		panel.allowedContentTypes = [.application]
+		panel.directoryURL = URL(fileURLWithPath: "/Applications")
+		panel.message = "Choose the app that needs a clipboard paste delay"
+		panel.prompt = "Select"
+		guard panel.runModal() == .OK, let url = panel.url else { return }
+
+		let bundle = Bundle(url: url)
+		let bundleID = bundle?.bundleIdentifier ?? ""
+		let name = bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+			?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
+			?? url.deletingPathExtension().lastPathComponent
+
+		onPickApp(.init(bundleIdentifier: bundleID, appName: name))
 	}
 }

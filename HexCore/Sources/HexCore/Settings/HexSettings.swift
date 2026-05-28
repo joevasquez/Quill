@@ -77,6 +77,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var selectedPlan: String?
 	public var cloudSyncEnabled: Bool
 	public var hudPinnedToTop: Bool
+	public var appPasteDelays: [AppPasteDelay]
 
 	private mutating func normalizeDoubleTapSettings() {
 		if !doubleTapLockEnabled {
@@ -128,7 +129,8 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		hasCompletedOnboarding: Bool = false,
 		selectedPlan: String? = nil,
 		cloudSyncEnabled: Bool = false,
-		hudPinnedToTop: Bool = false
+		hudPinnedToTop: Bool = false,
+		appPasteDelays: [AppPasteDelay] = AppPasteDelay.defaults
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
 		self.soundEffectsVolume = soundEffectsVolume
@@ -169,6 +171,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.selectedPlan = selectedPlan
 		self.cloudSyncEnabled = cloudSyncEnabled
 		self.hudPinnedToTop = hudPinnedToTop
+		self.appPasteDelays = appPasteDelays
 		normalizeDoubleTapSettings()
 	}
 
@@ -232,6 +235,7 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case selectedPlan
 	case cloudSyncEnabled
 	case hudPinnedToTop
+	case appPasteDelays
 }
 
 private struct SettingsField<Value: Codable & Sendable> {
@@ -387,6 +391,7 @@ private enum HexSettingsSchema {
 		SettingsField(.selectedPlan, keyPath: \.selectedPlan, default: defaults.selectedPlan).eraseToAny(),
 		SettingsField(.cloudSyncEnabled, keyPath: \.cloudSyncEnabled, default: defaults.cloudSyncEnabled).eraseToAny(),
 		SettingsField(.hudPinnedToTop, keyPath: \.hudPinnedToTop, default: defaults.hudPinnedToTop).eraseToAny(),
+		SettingsField(.appPasteDelays, keyPath: \.appPasteDelays, default: defaults.appPasteDelays).eraseToAny(),
 	]
 }
 

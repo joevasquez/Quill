@@ -117,8 +117,14 @@ struct PasteboardClientLive {
             return
         }
 
+        let targetBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+        let pasteDelay = AppPasteDelay.delayMs(for: targetBundleID, in: hexSettings.appPasteDelays)
+        if pasteDelay > 0 {
+            pasteboardLogger.info("Using \(pasteDelay)ms clipboard paste delay for \(targetBundleID, privacy: .public)")
+        }
+
         if hexSettings.useClipboardPaste {
-            await pasteWithClipboard(text)
+            await pasteWithClipboard(text, clipboardPasteDelayMs: pasteDelay)
         } else {
             simulateTypingWithAppleScript(text)
         }
@@ -305,7 +311,7 @@ struct PasteboardClientLive {
     }
 
     @MainActor
-    func pasteWithClipboard(_ text: String) async {
+    func pasteWithClipboard(_ text: String, clipboardPasteDelayMs: Int = 0) async {
         // Check Accessibility permission once. Both the AX-insertion
         // path AND the Cmd+V injection path require it (CGEvent.post
         // silently fails without AX trust). If denied, we can still
@@ -352,7 +358,7 @@ struct PasteboardClientLive {
         _ = await waitForPasteboardCommit(targetChangeCount: targetChangeCount)
 
         if hasAXPermission {
-            _ = await postCmdV(delayMs: 0)
+            _ = await postCmdV(delayMs: clipboardPasteDelayMs)
         } else {
             pasteboardLogger.notice(
                 "Cmd+V injection skipped (no Accessibility permission). Transcription left in the clipboard."
@@ -442,7 +448,9 @@ struct PasteboardClientLive {
     private func attemptPaste(_ text: String, using strategy: PasteStrategy) async -> Bool {
         switch strategy {
         case .cmdV:
-            return await postCmdV(delayMs: 0)
+            let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+            let delay = AppPasteDelay.delayMs(for: bundleID, in: hexSettings.appPasteDelays)
+            return await postCmdV(delayMs: delay)
         case .menuItem:
             return PasteboardClientLive.pasteToFrontmostApp()
         case .accessibility:
