@@ -379,32 +379,97 @@ The iOS target is a `PBXFileSystemSynchronizedRootGroup` — new files in `Quill
 
 ## Releasing a New Version
 
-Two release scripts live at `tools/scripts/`. Both are bash, both read prerequisites from the keychain / env, neither uses the `tools/src/cli.ts` path that earlier docs referenced (that path doesn't exist).
+Two release scripts live at `tools/scripts/`. Both are bash, both read prerequisites from the keychain / env.
 
 ### macOS (DMG via GitHub Releases + Sparkle)
 
+#### End-to-end release flow
+
+This is the complete sequence for shipping a new macOS version. The release script handles archive → sign → notarize → DMG → Sparkle signing → appcast generation. Post-script steps (commit, tag, push, GitHub Release upload) are manual.
+
 ```bash
-bash tools/scripts/release.sh [VERSION]
+# 1. Create a changeset for user-facing changes
+bun run changeset:add-ai minor "Summary of changes"
+
+# 2. Bump version — folds changesets into CHANGELOG.md, bumps package.json
+bun run changeset:version
+
+# 3. Sync version into Info.plist and pbxproj (changeset only bumps package.json)
+#    - Update CFBundleShortVersionString in Hex/Info.plist
+#    - Increment CFBundleVersion (build number) in Hex/Info.plist
+#    - Update MARKETING_VERSION in Hex.xcodeproj/project.pbxproj (4 occurrences for macOS)
+#    - Update CURRENT_PROJECT_VERSION in Hex.xcodeproj/project.pbxproj (4 occurrences for macOS)
+#    - Copy CHANGELOG.md to Hex/Resources/changelog.md (embedded resource)
+
+# 4. Commit all version bumps + changelog
+git add -A && git commit -m "Bump version to X.Y.Z"
+
+# 5. Run the release script (archive, sign, notarize, DMG, Sparkle)
+bash tools/scripts/release.sh
+
+# 6. The script regenerates appcast.xml with only the new version.
+#    Manually re-add the previous version's <item> block so users can
+#    roll back. The old entry is in git history if needed.
+
+# 7. Commit appcast, tag, push
+git add appcast.xml
+git commit -m "Update appcast for vX.Y.Z"
+git tag vX.Y.Z
+git push origin main vX.Y.Z
+
+# 8. Upload DMG to GitHub Release (or create if new)
+gh release create vX.Y.Z --repo joevasquez/Quill \
+  --title "Quill vX.Y.Z" \
+  --notes-file build/release/release-notes.md \
+  build/release/Hex-latest.dmg
+
+# If re-uploading a notarized build to an existing release:
+gh release upload vX.Y.Z build/release/Hex-latest.dmg --clobber --repo joevasquez/Quill
 ```
 
-If `VERSION` is omitted, the script reads from `Hex/Info.plist`. The script doesn't auto-bump the version — bump first by running `bun run changeset:version` (which folds pending changesets into `Hex/Resources/changelog.md` and bumps `package.json` + `Info.plist`).
+#### Prerequisites (one-time)
 
-**Prerequisites** (one-time):
-1. Developer ID Application certificate in the login keychain. Verify: `security find-identity -p codesigning -v`.
-2. Notarization credentials stored under profile `QUILL_NOTARY`:
+1. **Developer ID Application certificate** in the login keychain. Verify: `security find-identity -p codesigning -v`. Should show `Developer ID Application: Joseph Vasquez (ND4KZ9EE2W)`.
+
+2. **Notarization credentials** stored under profile `QUILL_NOTARY`. **Use the App Store Connect API key** (not Apple ID + app-specific password — that approach fails with Joe's account):
    ```bash
    xcrun notarytool store-credentials QUILL_NOTARY \
-     --apple-id "you@example.com" \
-     --team-id  ND4KZ9EE2W \
-     --password "APP_SPECIFIC_PASSWORD"
+     --key ~/.appstoreconnect/private_keys/AuthKey_3QDATSKTNN.p8 \
+     --key-id 3QDATSKTNN \
+     --issuer 69a6de80-182b-47e3-e053-5b8c7c11a4d1
    ```
-   App-specific password from appleid.apple.com → Sign-In and Security.
+   The `.p8` key file lives at `~/.appstoreconnect/private_keys/AuthKey_3QDATSKTNN.p8`. This is the same key used for TestFlight uploads. No Apple ID password needed.
 
-**What it does**: archives via xcodebuild → exports + signs with Developer ID → notarizes the .app → creates + signs the DMG → notarizes + staples the DMG → emits build artifacts to `build/release/`. The script does NOT push commits, tags, or upload to S3 / GitHub — that's a separate manual step (or wrap with your own automation).
+3. **Sparkle signing tools** at `bin/sign_update` and `bin/generate_appcast`. Already committed to the repo. The EdDSA private key lives in the keychain (created by `generate_keys` during initial Sparkle setup).
+
+#### What the script does
+
+1. Archives via `xcodebuild -scheme Quill -configuration Release`
+2. Exports with Developer ID signing (automatic signing style, team `ND4KZ9EE2W`)
+3. Zips the `.app` and submits to Apple notary service (waits for `Accepted`)
+4. Staples the notarization ticket to the `.app`
+5. Creates a DMG (`Hex-latest.dmg` — stable name for download URLs)
+6. Submits + staples the DMG itself (both `.app` and DMG are independently notarized)
+7. Extracts release notes from `CHANGELOG.md` for the current version
+8. Signs the DMG with `bin/sign_update` (EdDSA signature for Sparkle verification)
+9. Runs `bin/generate_appcast` to produce `appcast.xml`
 
 Output:
-- `build/release/Hex-latest.dmg` — signed, notarized, stapled DMG
+- `build/release/Hex-latest.dmg` — signed, notarized, stapled DMG (~14 MB)
 - `build/release/release-notes.md` — extracted notes for this version
+- `appcast.xml` — updated at repo root (needs manual commit + push)
+
+#### Sparkle auto-update flow
+
+- `Info.plist` contains `SUFeedURL` pointing to `https://raw.githubusercontent.com/joevasquez/Hex/main/appcast.xml`
+- `Info.plist` contains `SUPublicEDKey` (EdDSA public key for signature verification)
+- Sparkle checks the appcast periodically; when `sparkle:version` > installed build number, it offers the update
+- The `enclosure` URL points to the GitHub Release asset: `https://github.com/joevasquez/Hex/releases/download/vX.Y.Z/Hex-latest.dmg`
+- `sparkle:edSignature` in the appcast must match what `bin/sign_update` produced for the exact DMG file uploaded to GitHub — if you re-build or re-notarize, the signature changes and the appcast must be regenerated
+
+#### Appcast maintenance
+
+`generate_appcast` scans `build/release/` and writes a fresh `appcast.xml` with only the builds it finds. Since we only have the current build in that directory, the generated appcast has one `<item>`. To preserve rollback capability, manually add the previous version's `<item>` block back before committing. The old entries are always in git history.
 
 ### iOS (TestFlight)
 
@@ -416,7 +481,7 @@ Auto-bumps `CFBundleVersion` in `Quill iOS/Info.plist` (App Store Connect requir
 
 **Prerequisites** (one-time):
 1. Apple Distribution cert in the login keychain, OR Xcode signed into the Apple ID so `-allowProvisioningUpdates` can mint one.
-2. App Store Connect API key `.p8` file at one of: `./private_keys`, `~/private_keys`, `~/.private_keys`, `~/.appstoreconnect/private_keys` (recommended). Filename: `AuthKey_<KEY_ID>.p8`.
+2. App Store Connect API key `.p8` file at `~/.appstoreconnect/private_keys/AuthKey_3QDATSKTNN.p8` (same key as notarization).
 3. App Store Connect app record with bundle ID `com.joevasquez.Quill.iOS`.
 
 **Env overrides**:
@@ -435,13 +500,16 @@ Output:
    ```bash
    bun run changeset:add-ai patch "Your summary here"
    ```
-3. `bun run changeset:version` → bumps + writes changelog. Commit the result.
-4. macOS: `bash tools/scripts/release.sh`. iOS: `bash tools/scripts/testflight.sh`.
-5. After a successful macOS build, manually upload the DMG to GitHub Releases and (if hosting your own appcast) S3.
+3. `bun run changeset:version` → bumps package.json + writes CHANGELOG.md. Commit the result.
+4. Manually sync version to `Hex/Info.plist`, `Hex.xcodeproj/project.pbxproj`, and `Hex/Resources/changelog.md`.
+5. macOS: `bash tools/scripts/release.sh`. iOS: `bash tools/scripts/testflight.sh`.
+6. After a successful macOS build: commit appcast, tag, push, upload DMG to GitHub Releases.
 
 ### Troubleshooting
 
 - **"Working tree is not clean"**: commit or stash before releasing.
-- **Notarization fails**: re-verify the `QUILL_NOTARY` keychain profile + app-specific password hasn't expired.
+- **`notarytool profile 'QUILL_NOTARY' not found`**: re-run the `store-credentials` command above with the `.p8` API key. Do NOT use Apple ID + app-specific password — it doesn't work with Joe's account setup. The API key approach is simpler and more reliable.
+- **Notarization returns `Invalid`**: check `xcrun notarytool log <submission-id> --keychain-profile QUILL_NOTARY` for details. Common causes: unsigned frameworks, hardened-runtime violations, or missing `--options=runtime` in codesign.
 - **Build fails on `xcodebuild`**: ensure `xcode-select` points at `/Applications/Xcode.app/Contents/Developer`, not `/Library/Developer/CommandLineTools`. Both scripts pin `DEVELOPER_DIR` at the top to defend against this.
+- **Sparkle update not showing**: verify (a) `appcast.xml` is committed and pushed to `main`, (b) the `sparkle:edSignature` matches the uploaded DMG, (c) `sparkle:version` (build number) is strictly greater than the installed version. If you re-notarized and re-uploaded the DMG, the file changed — re-run `bin/sign_update` and `bin/generate_appcast` and push the updated appcast.
 - **TestFlight rejects upload with "build number must be higher"**: the auto-bump should handle this; if it didn't, manually bump `CFBundleVersion` in `Quill iOS/Info.plist` and re-run.
