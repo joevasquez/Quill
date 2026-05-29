@@ -380,6 +380,10 @@ struct NotesView: View {
       selection.selectedNoteID = nil
     }
     cloudSync.cloudNotes.removeAll { $0.id == id }
+    cloudSync.clearDirty(id: id)
+    Task {
+      await cloudSync.deleteNoteFromCloud(id: id)
+    }
   }
 }
 

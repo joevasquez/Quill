@@ -46,7 +46,7 @@ public struct Integration: Identifiable, Equatable, Hashable, Sendable {
     ),
     .init(
       identifier: .calendar,
-      name: "Calendar",
+      name: "Apple Calendar",
       systemImage: "calendar",
       tintHex: "#FF2D55",
       tagline: "Create calendar events from dictation — \"schedule a meeting with John on Friday at 2pm\".",

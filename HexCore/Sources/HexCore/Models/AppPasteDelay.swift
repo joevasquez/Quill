@@ -22,17 +22,33 @@ public struct AppPasteDelay: Codable, Equatable, Identifiable, Sendable {
 	}
 
 	public static let defaults: [AppPasteDelay] = [
-		.init(bundleIdentifier: "com.citrix.receiver.nomas", appName: "Citrix Workspace", delayMs: 300, isEnabled: false),
-		.init(bundleIdentifier: "com.citrix.XenAppViewer", appName: "Citrix Viewer", delayMs: 300, isEnabled: false),
-		.init(bundleIdentifier: "com.microsoft.rdc.macos", appName: "Microsoft Remote Desktop", delayMs: 300, isEnabled: false),
-		.init(bundleIdentifier: "com.vmware.horizon", appName: "VMware Horizon", delayMs: 300, isEnabled: false),
-		.init(bundleIdentifier: "com.parallels.desktop.console", appName: "Parallels Desktop", delayMs: 300, isEnabled: false),
+		.init(bundleIdentifier: "com.citrix.receiver.nomas", appName: "Citrix Workspace", delayMs: 500, isEnabled: true),
+		.init(bundleIdentifier: "com.citrix.XenAppViewer", appName: "Citrix Viewer", delayMs: 500, isEnabled: true),
+		.init(bundleIdentifier: "com.microsoft.rdc.macos", appName: "Microsoft Remote Desktop", delayMs: 300, isEnabled: true),
+		.init(bundleIdentifier: "com.vmware.horizon", appName: "VMware Horizon", delayMs: 300, isEnabled: true),
+		.init(bundleIdentifier: "com.parallels.desktop.console", appName: "Parallels Desktop", delayMs: 300, isEnabled: true),
+	]
+
+	/// Known remote desktop bundle IDs that need an extra clipboard sync
+	/// delay. Used as a fallback when the user hasn't explicitly configured
+	/// a per-app delay — remote desktops synchronize the macOS clipboard to
+	/// the remote session asynchronously, so Cmd+V arriving before the sync
+	/// finishes produces a stale or empty paste.
+	private static let remoteDesktopDefaults: [String: Int] = [
+		"com.citrix.receiver.nomas": 500,
+		"com.citrix.XenAppViewer": 500,
+		"com.microsoft.rdc.macos": 300,
+		"com.vmware.horizon": 300,
+		"com.parallels.desktop.console": 300,
 	]
 
 	public static func delayMs(for bundleID: String, in delays: [AppPasteDelay]) -> Int {
-		guard let match = delays.first(where: { $0.bundleIdentifier == bundleID && $0.isEnabled }) else {
-			return 0
+		// Check user-configured delays first.
+		if let match = delays.first(where: { $0.bundleIdentifier == bundleID && $0.isEnabled }) {
+			return match.delayMs
 		}
-		return match.delayMs
+		// Fall back to built-in remote desktop defaults so Citrix/RDP/etc.
+		// get a delay even for users who haven't touched the settings.
+		return remoteDesktopDefaults[bundleID] ?? 0
 	}
 }

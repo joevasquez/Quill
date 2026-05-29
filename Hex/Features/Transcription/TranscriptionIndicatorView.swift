@@ -143,18 +143,20 @@ struct TranscriptionIndicatorView: View {
   /// locked one wins over whatever the LLM picks. Each chip carries a
   /// `fn + N` shortcut badge so the user can toggle without a click.
   private var actionIntegrationRow: some View {
-    HStack(spacing: 6) {
-      ForEach(Array(actionIntegrations.prefix(9).enumerated()), id: \.offset) { offset, id in
-        IntegrationToggleButton(
-          identifier: id,
-          isLocked: lockedActionIntegration == id,
-          shortcutNumber: offset + 1,
-          onTap: { onToggleActionIntegration(id) }
-        )
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 6) {
+        ForEach(Array(actionIntegrations.prefix(9).enumerated()), id: \.offset) { offset, id in
+          IntegrationToggleButton(
+            identifier: id,
+            isLocked: lockedActionIntegration == id,
+            shortcutNumber: offset + 1,
+            onTap: { onToggleActionIntegration(id) }
+          )
+        }
       }
+      .padding(.horizontal, 8)
+      .padding(.vertical, 6)
     }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 6)
     .background(
       RoundedRectangle(cornerRadius: 14, style: .continuous)
         .fill(.ultraThinMaterial)
@@ -509,13 +511,14 @@ private struct IntegrationToggleButton: View {
     Integration.all.first { $0.identifier == identifier }
   }
 
-  /// Compact name for the chip — drop the platform prefix so "Apple
-  /// Reminders" → "Reminders" and "Google Calendar" → "Calendar". The
-  /// integration's tint already conveys which one it is.
+  /// Compact name for the chip — drop the "Apple" prefix so "Apple
+  /// Reminders" → "Reminders", but keep "Google" prefixes (e.g.
+  /// "Google Cal") since we need to distinguish Google Calendar from
+  /// Apple Calendar. Gmail is already short enough on its own.
   private var shortName: String {
     let name = integration?.name ?? identifier.rawValue
     if name.hasPrefix("Apple ") { return String(name.dropFirst("Apple ".count)) }
-    if name.hasPrefix("Google ") { return String(name.dropFirst("Google ".count)) }
+    if identifier == .googleCalendar { return "G Cal" }
     return name
   }
 
@@ -530,6 +533,8 @@ private struct IntegrationToggleButton: View {
         Text(shortName)
           .font(.system(size: 12, weight: .medium))
           .foregroundStyle(.white.opacity(isLocked ? 1.0 : 0.85))
+          .lineLimit(1)
+          .fixedSize(horizontal: true, vertical: false)
 
         Text("fn\(shortcutNumber)")
           .font(.system(size: 9, weight: .semibold).monospacedDigit())

@@ -34,6 +34,10 @@ final class MacCloudSync: ObservableObject {
     dirtyNoteIDs.insert(id)
   }
 
+  func clearDirty(id: UUID) {
+    dirtyNoteIDs.remove(id)
+  }
+
   func uploadDirtyNote(id: UUID) async {
     guard let note = cloudNotes.first(where: { $0.id == id }),
           let accessToken = await getAccessToken(),
@@ -135,6 +139,19 @@ final class MacCloudSync: ObservableObject {
     let device = Host.current().localizedName ?? "Mac"
     await CloudSyncManager.shared.writeTombstone(id: id, sourceDevice: device, accessToken: accessToken, userEmail: email)
     await CloudSyncManager.shared.deleteTranscript(id: id, accessToken: accessToken, userEmail: email)
+  }
+
+  func deleteNoteFromCloud(id: UUID) async {
+    @Shared(.hexSettings) var hexSettings: HexSettings
+    guard hexSettings.cloudSyncEnabled,
+          let accessToken = await getAccessToken(),
+          let email = getUserEmail()
+    else { return }
+
+    let device = Host.current().localizedName ?? "Mac"
+    await CloudSyncManager.shared.writeTombstone(id: id, sourceDevice: device, accessToken: accessToken, userEmail: email)
+    await CloudSyncManager.shared.deleteNote(id: id, accessToken: accessToken, userEmail: email)
+    syncLogger.info("Deleted note \(id) from cloud with tombstone")
   }
 
   func uploadTranscript(_ transcript: Transcript) async {
