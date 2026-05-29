@@ -13,6 +13,8 @@ struct GeneralSectionView: View {
 	@AppStorage(ErrorMonitoringSettings.crashReportingEnabledKey)
 	private var crashReportingEnabled: Bool = false
 
+	@State private var showResetConfirmation = false
+
 	var body: some View {
 		Section {
 			Label {
@@ -67,8 +69,40 @@ struct GeneralSectionView: View {
 			Text("Privacy")
 		} footer: {
 			Text("Off by default. When on, Quill sends crash stack traces and OS version to Sentry — never your transcripts, audio, notes, or contacts. Helps Joe diagnose problems you can't easily reproduce.")
-				.font(.caption)
-				.foregroundStyle(.secondary)
+				.settingsCaption()
+		}
+
+		Section {
+			Button {
+				store.send(.exportSettings)
+			} label: {
+				Label("Export Settings…", systemImage: "square.and.arrow.up")
+			}
+
+			Button {
+				store.send(.importSettings)
+			} label: {
+				Label("Import Settings…", systemImage: "square.and.arrow.down")
+			}
+
+			Button(role: .destructive) {
+				showResetConfirmation = true
+			} label: {
+				Label("Reset All Settings to Defaults", systemImage: "arrow.counterclockwise")
+			}
+			.alert("Reset Settings?", isPresented: $showResetConfirmation) {
+				Button("Cancel", role: .cancel) {}
+				Button("Reset", role: .destructive) {
+					store.send(.resetToDefaults)
+				}
+			} message: {
+				Text("This will reset all settings to their defaults. Your API keys and transcription history will be preserved.")
+			}
+		} header: {
+			Text("Data")
+		} footer: {
+			Text("Export saves your current settings as JSON. Import loads settings from a file. Reset restores defaults. API keys are never included in exports.")
+				.settingsCaption()
 		}
 		.enableInjection()
 	}

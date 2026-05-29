@@ -76,8 +76,90 @@ extension GoogleOAuthClient: DependencyKey {
   private static let tokenEndpoint = URL(string: "https://oauth2.googleapis.com/token")!
   private static let userInfoEndpoint = URL(string: "https://www.googleapis.com/oauth2/v3/userinfo")!
 
+  // MARK: - In-memory token cache
+
+  /// Keeps Google OAuth tokens in memory so `refreshIfNeeded` doesn't
+  /// hit the macOS Keychain on every call (which triggers the system
+  /// password dialog). The cache is populated on first read and updated
+  /// on authorize / refresh / disconnect.
+  private final class TokenCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _accessToken: String?
+    private var _refreshToken: String?
+    private var _expiresAt: Date?
+    private var _loaded = false
+
+    func load(keychain: KeychainClient) async {
+      lock.lock()
+      if _loaded { lock.unlock(); return }
+      lock.unlock()
+
+      let at = await keychain.read(KeychainKey.googleAccessToken)
+      let rt = await keychain.read(KeychainKey.googleRefreshToken)
+      let exp: Date? = {
+        guard let s = UserDefaults.standard.string(forKey: "quill.googleTokenExpiry") else { return nil }
+        return ISO8601DateFormatter().date(from: s)
+      }()
+
+      // Also try keychain for expiry if UserDefaults doesn't have it
+      let expiry: Date?
+      if let exp {
+        expiry = exp
+      } else {
+        let ks = await keychain.read(KeychainKey.googleTokenExpiry)
+        expiry = ks.flatMap { ISO8601DateFormatter().date(from: $0) }
+      }
+
+      lock.lock()
+      _accessToken = at
+      _refreshToken = rt
+      _expiresAt = expiry
+      _loaded = true
+      lock.unlock()
+    }
+
+    var tokens: (accessToken: String, refreshToken: String, expiresAt: Date)? {
+      lock.lock()
+      defer { lock.unlock() }
+      guard let at = _accessToken, !at.isEmpty,
+            let rt = _refreshToken, !rt.isEmpty,
+            let exp = _expiresAt
+      else { return nil }
+      return (at, rt, exp)
+    }
+
+    func update(accessToken: String, refreshToken: String, expiresAt: Date) {
+      lock.lock()
+      _accessToken = accessToken
+      _refreshToken = refreshToken
+      _expiresAt = expiresAt
+      _loaded = true
+      lock.unlock()
+    }
+
+    func updateAccess(token: String, expiresAt: Date) {
+      lock.lock()
+      _accessToken = token
+      _expiresAt = expiresAt
+      lock.unlock()
+    }
+
+    func clear() {
+      lock.lock()
+      _accessToken = nil
+      _refreshToken = nil
+      _expiresAt = nil
+      _loaded = true
+      lock.unlock()
+    }
+  }
+
+  private static let tokenCache = TokenCache()
+
   static var liveValue: Self {
-    .init(
+    let cache = tokenCache
+
+    return .init(
       authorize: { scopes in
         @Dependency(\.keychain) var keychain
 
@@ -119,22 +201,28 @@ extension GoogleOAuthClient: DependencyKey {
         let expiryString = ISO8601DateFormatter().string(from: tokens.expiresAt)
         try? await keychain.save(KeychainKey.googleTokenExpiry, expiryString)
 
+        // Update in-memory cache so subsequent reads skip the keychain.
+        cache.update(
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          expiresAt: tokens.expiresAt
+        )
+
         oauthLogger.info("Google OAuth tokens stored in Keychain")
         return tokens
       },
       refreshIfNeeded: {
         @Dependency(\.keychain) var keychain
 
-        guard let accessToken = await keychain.read(KeychainKey.googleAccessToken),
-              let refreshToken = await keychain.read(KeychainKey.googleRefreshToken),
-              let expiryString = await keychain.read(KeychainKey.googleTokenExpiry),
-              let expiresAt = ISO8601DateFormatter().date(from: expiryString)
-        else {
+        // Populate the in-memory cache from keychain once per launch.
+        await cache.load(keychain: keychain)
+
+        guard let tokens = cache.tokens else {
           throw GoogleOAuthError.notAuthorized
         }
 
-        if expiresAt.timeIntervalSinceNow > 300 {
-          return accessToken
+        if tokens.expiresAt.timeIntervalSinceNow > 300 {
+          return tokens.accessToken
         }
 
         oauthLogger.info("Google access token expired or expiring soon; refreshing")
@@ -148,7 +236,7 @@ extension GoogleOAuthClient: DependencyKey {
         // refresh requests with just client_id + refresh_token.
         let body = [
           "client_id=\(clientId)",
-          "refresh_token=\(refreshToken)",
+          "refresh_token=\(tokens.refreshToken)",
           "grant_type=refresh_token",
         ].joined(separator: "&")
         request.httpBody = body.data(using: .utf8)
@@ -180,32 +268,41 @@ extension GoogleOAuthClient: DependencyKey {
         let newExpiryString = ISO8601DateFormatter().string(from: newExpiry)
         try? await keychain.save(KeychainKey.googleTokenExpiry, newExpiryString)
 
+        // Update the in-memory cache with the fresh access token.
+        cache.updateAccess(token: newAccessToken, expiresAt: newExpiry)
+
         oauthLogger.info("Google access token refreshed, expires in \(expiresIn, privacy: .public)s")
         return newAccessToken
       },
       isAuthorized: {
-        @Dependency(\.keychain) var keychain
-        guard let token = await keychain.read(KeychainKey.googleRefreshToken),
-              !token.isEmpty
-        else { return false }
-        return true
+        // Use the cached email in UserDefaults as a fast, synchronous
+        // proxy for "has a refresh token." The email is written on
+        // successful sign-in and cleared on disconnect — same lifecycle
+        // as the keychain tokens — so it avoids a keychain read (and
+        // the macOS password prompt that can accompany it) on every
+        // settings tab switch.
+        let email = UserDefaults.standard.string(forKey: googleAccountEmailDefaultsKey)
+        return email?.isEmpty == false
       },
       disconnect: {
         @Dependency(\.keychain) var keychain
         await keychain.delete(KeychainKey.googleAccessToken)
         await keychain.delete(KeychainKey.googleRefreshToken)
         await keychain.delete(KeychainKey.googleTokenExpiry)
+        cache.clear()
         UserDefaults.standard.removeObject(forKey: googleAccountEmailDefaultsKey)
         oauthLogger.info("Google OAuth tokens cleared from Keychain")
       },
       fetchUserEmail: {
-        @Dependency(\.keychain) var keychain
-        // Read the access token directly rather than calling refreshIfNeeded
-        // (which lives on a sibling closure) — if it's expired the userinfo
-        // call will surface a 401 and the caller can re-auth.
-        guard let accessToken = await keychain.read(KeychainKey.googleAccessToken),
-              !accessToken.isEmpty
-        else { return nil }
+        // Use the in-memory cache if available; fall back to keychain.
+        let accessToken: String?
+        if let tokens = cache.tokens, !tokens.accessToken.isEmpty {
+          accessToken = tokens.accessToken
+        } else {
+          @Dependency(\.keychain) var keychain
+          accessToken = await keychain.read(KeychainKey.googleAccessToken)
+        }
+        guard let accessToken, !accessToken.isEmpty else { return nil }
 
         var request = URLRequest(url: userInfoEndpoint)
         request.httpMethod = "GET"

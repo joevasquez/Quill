@@ -47,14 +47,10 @@ struct AppFeature {
     /// Things, Slack, Linear). Frontend-only as of 0.9.x — connection
     /// state is persisted but send adapters land in a follow-up.
     case integrations
-    /// Word remapping / removal scratchpad (legacy name "transforms").
-    case remappings
     /// Transcription history viewer.
     case history
     /// Cloud-synced notes (originating on iOS) viewer.
     case notes
-    /// About / version / Sparkle update info.
-    case about
   }
 
 	@ObservableState
@@ -515,26 +511,24 @@ struct AppView: View {
         .padding(.top, 16)
         .padding(.bottom, 12)
 
-        // Sub-tabs — only meaningful in Settings mode. We render
-        // an empty placeholder in History mode so the sidebar
-        // stays a stable width and the pills don't shift.
+        // Sub-tabs — only meaningful in Settings mode. Notes mode
+        // shows the cloud-synced note list here so the detail
+        // pane gets the full window width for the editor.
         if sidebarMode == .settings {
           List(selection: $store.activeTab) {
             tabRow(.general, label: "General", icon: "gearshape")
             tabRow(.recording, label: "Recording", icon: "mic.circle")
-            tabRow(.ai, label: "AI", icon: "sparkles")
+            tabRow(.ai, label: "AI Processing", icon: "sparkles")
             tabRow(.integrations, label: "Integrations", icon: "app.connected.to.app.below.fill")
-            tabRow(.remappings, label: "Transforms", icon: "text.badge.plus")
-            tabRow(.about, label: "About", icon: "info.circle")
           }
           .listStyle(.sidebar)
+        } else if sidebarMode == .notes {
+          NotesSidebarList()
         } else {
-          // Subtle hint that the sidebar is intentionally empty
-          // while the right pane owns the full width.
           Spacer()
           HStack {
             Spacer()
-            Text(sidebarMode == .notes ? "Showing synced notes" : "Showing all transcripts")
+            Text("Showing all transcripts")
               .font(.caption)
               .foregroundStyle(.secondary)
             Spacer()
@@ -565,18 +559,12 @@ struct AppView: View {
       case .integrations:
         IntegrationsSettingsTabView(store: store.scope(state: \.settings, action: \.settings))
           .navigationTitle("Integrations")
-      case .remappings:
-        WordRemappingsView(store: store.scope(state: \.settings, action: \.settings))
-          .navigationTitle("Transforms")
       case .history:
         HistoryView(store: store.scope(state: \.history, action: \.history))
           .navigationTitle("History")
       case .notes:
         NotesView()
           .navigationTitle("Notes")
-      case .about:
-        AboutView(store: store.scope(state: \.settings, action: \.settings))
-          .navigationTitle("About")
       }
     }
     .sheet(isPresented: Binding(

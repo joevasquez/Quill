@@ -46,8 +46,8 @@ struct GoogleOAuthSheet: View {
           .controlSize(.regular)
         }
         Spacer()
-        Button("Cancel") { dismiss() }
-          .keyboardShortcut(.cancelAction)
+        Button(isConnected ? "Done" : "Cancel") { dismiss() }
+          .keyboardShortcut(isConnected ? .defaultAction : .cancelAction)
         if !isConnected {
           Button {
             signIn()

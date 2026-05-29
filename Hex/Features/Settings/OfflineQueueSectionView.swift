@@ -26,22 +26,16 @@ struct OfflineQueueSectionView: View {
 
   var body: some View {
     Section {
-      if isLoading {
-        HStack(spacing: 8) {
-          ProgressView().controlSize(.small)
-          Text("Checking queue…")
+      if items.isEmpty && !isLoading {
+        HStack(spacing: 6) {
+          Image(systemName: "checkmark.circle.fill")
+            .foregroundStyle(.green)
+            .font(.caption)
+          Text("No pending actions")
             .font(.caption)
             .foregroundStyle(.secondary)
         }
-      } else if items.isEmpty {
-        Label {
-          Text("No pending actions")
-            .foregroundStyle(.secondary)
-        } icon: {
-          Image(systemName: "checkmark.circle")
-            .foregroundStyle(.green)
-        }
-      } else {
+      } else if !items.isEmpty {
         ForEach(items) { item in
           QueueRow(item: item) {
             Task { await discard(id: item.id) }
@@ -67,11 +61,20 @@ struct OfflineQueueSectionView: View {
         }
       }
     } header: {
-      Text("Offline Queue")
+      HStack {
+        Text("Offline Queue")
+        if !items.isEmpty {
+          Text("\(items.count)")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Color.orange, in: Capsule())
+        }
+      }
     } footer: {
       Text("Actions you take while offline are saved here and retried automatically when you're back online.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .settingsCaption()
     }
     .task { await refresh() }
     .enableInjection()

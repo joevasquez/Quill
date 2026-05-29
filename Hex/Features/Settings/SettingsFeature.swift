@@ -8,6 +8,7 @@ import IdentifiedCollections
 import Sauce
 import ServiceManagement
 import SwiftUI
+import UniformTypeIdentifiers
 
 private let settingsLogger = HexLog.settings
 private typealias SettingsAudioPropertyListenerBlock = @convention(block) (UInt32, UnsafePointer<AudioObjectPropertyAddress>) -> Void
@@ -69,6 +70,11 @@ struct SettingsFeature {
     // AI Processing
     var loadedAPIKey: String = ""
     var apiKeySaved: Bool = false
+
+    /// Guards `.task` so the long-running effect (key-event listener,
+    /// device monitoring, model fetch, API key load) only runs once —
+    /// not on every tab switch.
+    var hasRunTask: Bool = false
   }
 
   enum Action: BindableAction {
@@ -156,6 +162,14 @@ struct SettingsFeature {
     /// again on the next launch / window open. Triggered by the
     /// "Replay Tutorial" entry in Settings → General.
     case replayOnboarding
+
+    /// Reset all settings to factory defaults. Preserves API keys
+    /// in the Keychain and the onboarding-complete flag.
+    case resetToDefaults
+    /// Export current settings to a user-chosen JSON file.
+    case exportSettings
+    /// Import settings from a user-chosen JSON file.
+    case importSettings
 
     // Cloud Sync
     case setCloudSyncEnabled(Bool)
@@ -297,6 +311,9 @@ struct SettingsFeature {
         return .none
 
       case .task:
+        guard !state.hasRunTask else { return .none }
+        state.hasRunTask = true
+
         if let url = Bundle.main.url(forResource: "languages", withExtension: "json"),
           let data = try? Data(contentsOf: url),
           let languages = try? JSONDecoder().decode([Language].self, from: data)
@@ -306,8 +323,14 @@ struct SettingsFeature {
           settingsLogger.error("Failed to load languages JSON from bundle")
         }
 
+        // Eagerly load the API key so the Status overview can show the
+        // right state without a separate keychain hit on the AI tab.
+        let provider = state.hexSettings.aiProvider
+
         // Listen for key events and load microphones (existing + new)
         return .run { send in
+          // Load API key once at startup so switching tabs doesn't re-prompt.
+          await send(.loadAPIKey(provider))
           func audioPropertyAddress(
             _ selector: AudioObjectPropertySelector,
             scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
@@ -802,6 +825,57 @@ struct SettingsFeature {
       case .replayOnboarding:
         state.$hexSettings.withLock { $0.hasCompletedOnboarding = false }
         return .none
+
+      case .resetToDefaults:
+        let preserveOnboarding = state.hexSettings.hasCompletedOnboarding
+        state.$hexSettings.withLock { settings in
+          let fresh = HexSettings()
+          // Preserve onboarding flag so user doesn't see the tutorial again
+          settings = fresh
+          settings.hasCompletedOnboarding = preserveOnboarding
+        }
+        return .none
+
+      case .exportSettings:
+        return .run { [settings = state.hexSettings] _ in
+          await MainActor.run {
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.json]
+            panel.nameFieldStringValue = "quill-settings.json"
+            panel.title = "Export Settings"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            do {
+              let encoder = JSONEncoder()
+              encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+              let data = try encoder.encode(settings)
+              try data.write(to: url)
+            } catch {
+              HexLog.settings.error("Failed to export settings: \(error.localizedDescription)")
+            }
+          }
+        }
+
+      case .importSettings:
+        return .run { send in
+          await MainActor.run {
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.json]
+            panel.allowsMultipleSelection = false
+            panel.title = "Import Settings"
+            panel.message = "Choose a Quill settings file to import"
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            do {
+              let data = try Data(contentsOf: url)
+              var imported = try JSONDecoder().decode(HexSettings.self, from: data)
+              // Preserve onboarding flag
+              imported.hasCompletedOnboarding = true
+              @Shared(.hexSettings) var hexSettings
+              $hexSettings.withLock { $0 = imported }
+            } catch {
+              HexLog.settings.error("Failed to import settings: \(error.localizedDescription)")
+            }
+          }
+        }
 
       case let .setCloudSyncEnabled(enabled):
         state.$hexSettings.withLock { $0.cloudSyncEnabled = enabled }

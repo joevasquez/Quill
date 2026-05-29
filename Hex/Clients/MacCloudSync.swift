@@ -20,13 +20,45 @@ final class MacCloudSync: ObservableObject {
   static let shared = MacCloudSync()
 
   private(set) var lastSyncNotesCount: Int = 0
-  @Published private(set) var cloudNotes: [SyncableNote] = []
+  @Published var cloudNotes: [SyncableNote] = []
   @Published private(set) var status: CloudSyncStatus = .idle
   /// Map of noteId → ordered photoIds, derived from photo manifests. The
   /// NotesView reads this to know which photos to render inline.
   @Published private(set) var cloudNotePhotos: [UUID: [UUID]] = [:]
+  /// IDs of notes that have local edits not yet synced to cloud.
+  @Published private(set) var dirtyNoteIDs: Set<UUID> = []
 
   private init() {}
+
+  func markDirty(id: UUID) {
+    dirtyNoteIDs.insert(id)
+  }
+
+  func uploadDirtyNote(id: UUID) async {
+    guard let note = cloudNotes.first(where: { $0.id == id }),
+          let accessToken = await getAccessToken(),
+          let email = getUserEmail()
+    else { return }
+
+    status = .syncing
+    await CloudSyncManager.shared.uploadNote(note, accessToken: accessToken, userEmail: email)
+    dirtyNoteIDs.remove(id)
+    status = .completed(transcriptsUp: 0, notesDown: 0, at: Date())
+  }
+
+  func uploadAllDirtyNotes() async {
+    guard let accessToken = await getAccessToken(),
+          let email = getUserEmail()
+    else { return }
+
+    status = .syncing
+    let dirty = cloudNotes.filter { dirtyNoteIDs.contains($0.id) }
+    for note in dirty {
+      await CloudSyncManager.shared.uploadNote(note, accessToken: accessToken, userEmail: email)
+    }
+    dirtyNoteIDs.removeAll()
+    status = .completed(transcriptsUp: 0, notesDown: dirty.count, at: Date())
+  }
 
   func isGoogleAuthorized() -> Bool {
     let email = UserDefaults.standard.string(forKey: GoogleOAuthClient.googleAccountEmailDefaultsKey)

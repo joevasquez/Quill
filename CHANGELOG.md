@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.0
+
+### Minor Changes
+
+- Settings overhaul: consolidated 6→4 tabs, unified Formatting Modes, Notes pane with search/new-note/cloud-sync/markdown-editor, in-memory OAuth token cache to eliminate keychain prompts
+
 ## 0.13.0
 
 ### Minor Changes

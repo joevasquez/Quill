@@ -201,8 +201,15 @@ FluidAudio models reside under `Application Support/FluidAudio/Models`.
 
 ## UI
 
+- **Settings tabs (macOS)**: Four tabs in the sidebar — General, Recording, AI Processing, Integrations. Each is a wrapper view in `SettingsTabs.swift` that composes existing section views into a `Form { … }.formStyle(.grouped)`. The "About" section (version, changelog, replay tutorial) and "Transforms" (word remappings) are folded into General and Recording respectively — no standalone tabs. Cloud Sync settings live in the Notes pane, not General.
+- **AI Formatting Modes**: The AI tab's "Formatting Modes" section unifies the built-in mode picker, auto-select-by-app toggle, and the user's custom modes library in one section. `CustomModeEditorMac` (the sheet for creating/editing custom modes) is defined in `AIProcessingSectionView.swift` as a non-private struct shared by both the inline section and the legacy `CustomModesSectionView`.
+- **Notes pane (macOS)**: Sidebar shows `NotesSidebarList` with `.searchable` (case-insensitive match on title/body/location). Detail pane is `NotesView` with a "New Note" toolbar button, a rich `NoteEditorView` with markdown live-highlighting via `MarkdownHighlighter` (NSTextStorage attributes — bold, italic, strikethrough, code, headings, bullets — markers fade to near-invisible while content gets typographic treatment). Cloud sync controls (toggle + status + Sync Now) appear in the detail pane's landing view when no note is selected and Google is connected.
+- **Markdown editor architecture**: `MarkdownTextEditor` is an `NSViewRepresentable` wrapping `NSTextView`. It exposes a `textView` binding so the formatting toolbar (Bold ⌘B, Italic ⌘I, Strikethrough, Code, Heading, Bullet) can call `wrapSelection(prefix:suffix:)` and `insertAtLineStart(_:)`. Highlighting is reapplied after every `textDidChange` via `MarkdownHighlighter.highlight(_:)`, with undo registration suspended during attribute application.
 - Settings → Transcription Model shows a compact list with radio selection, accuracy/speed dots, size on right, and trailing menu / download‑check icon.
 - Context menu offers Show in Finder / Delete.
+- **`AppPickerButton`**: Shared `NSOpenPanel`-based app-picker component (`AppPickerButton.swift`) used by both `AppModeRuleRow` (per-app AI mode overrides) and `AppPasteDelayRow` (per-app paste delay). Extracted to eliminate duplicate `PickedApp` structs and `pickApp()` methods.
+- **API key auto-save**: The AI provider section uses a 1-second debounced auto-save (`autoSaveAPIKey`) instead of a manual "Save" button — the key is written to keychain after the user stops typing.
+- **GoogleOAuthSheet**: Shows "Done" (with `.defaultAction` shortcut) after successful sign-in instead of "Cancel".
 
 ## iOS Companion App
 
@@ -321,6 +328,12 @@ The iOS target is a `PBXFileSystemSynchronizedRootGroup` — new files in `Quill
 
 8. **`UIDevice.current.name` returns "iPhone" on iOS 16+.** The user-assigned device name is now gated behind a special entitlement (`com.apple.developer.device-information.user-assigned-device-name`) that Apple grants on request only. Use `identifierForVendor` + the model name for cross-device identification — see `DeviceIdentity.id` in `NotesStore`.
 
+9. **macOS Keychain prompts on every settings tab switch.** The system keychain password dialog fires on *every* `SecItemCopyMatching` call in sandboxed debug builds with ad-hoc signing. Three places were reading the keychain repeatedly: (a) `GoogleOAuthClient.refreshIfNeeded()` read three items (access token, refresh token, expiry) on every cloud sync, (b) `GoogleOAuthClient.isAuthorized()` read the refresh token on every call, (c) `AIProcessingSectionView.onAppear` re-loaded the API key on every AI tab visit. Fix: add an in-memory `TokenCache` to `GoogleOAuthClient` that loads from keychain once per launch and serves all subsequent reads from RAM. `isAuthorized()` now checks UserDefaults (the cached email) instead of keychain. The `SettingsFeature.task` action is guarded by `hasRunTask` so it only fires once, and it eagerly loads the API key on first run.
+
+10. **SwiftUI `onChange` fires during initial value assignment.** When a `NoteEditorView` opens, `loadFields()` sets `editingTitle` and `editingBody`, which triggers `onChange(of:)` handlers that call `onMarkDirty()` — marking every note as dirty the instant it's selected. Fix: gate `onChange` handlers with a `hasInitialized` flag that's set to `false` before assignment and flipped back via `DispatchQueue.main.async` after the assignments complete (so the `onChange` closures triggered by the assignments see `false`).
+
+11. **SettingsFeature `.task` runs per tab, not once.** Each settings tab wrapper has `.task { await store.send(.task).finish() }`. Without a guard, switching between General → Recording → AI → Integrations fires `.task` four times, launching duplicate long-running effects (key-event listeners, device monitors, model fetches). Fix: add `state.hasRunTask` and return `.none` on subsequent calls.
+
 ## Enhancement Opportunities
 
 1. **WhisperKit streaming for the live preview**: We use SFSpeechRecognizer for the live transcript card (see Implementation Detail #19). It's good but English-biased and not always identical to what WhisperKit/Parakeet ultimately produce. A WhisperKit streaming API or a lightweight second-model instance would give a preview that matches the final transcript more closely.
@@ -330,6 +343,14 @@ The iOS target is a `PBXFileSystemSynchronizedRootGroup` — new files in `Quill
 3. **Per-app AX skip list**: Some apps (Chrome, Electron) never respond to `kAXSelectedTextAttribute`. Could maintain a bundle-ID skip list to go straight to clipboard fallback, saving the AX timeout.
 
 4. **Edit mode undo stack**: Currently tracks one pending edit (Accept/Undo pill). Could support multi-level undo for consecutive edits to the same selection.
+
+5. **macOS Notes: record directly into a note**: The "New Note" button creates an empty note and selects it, but the user still has to use the global hotkey to dictate. A dedicated "Dictate into this note" button in the Notes editor toolbar could start a recording scoped to the active note, appending the transcript on stop.
+
+6. **macOS Notes: delete note with cloud tombstone**: `NotesView.deleteNote` currently removes the note from the local array only. It doesn't write a `SyncTombstone` to Firestore, so the note will reappear on the next cloud sync. Wire up `MacCloudSync.writeTombstone(id:)` from the delete action.
+
+7. **macOS Notes: photo download on demand**: The notes detail pane shows placeholder cards for photos that haven't been downloaded from GCS yet. Could add a "Download" button or auto-fetch visible photos when the note is selected.
+
+8. **Keychain migration to `kSecUseDataProtectionKeychain`**: The current `SecItemAdd` / `SecItemCopyMatching` calls use the legacy macOS keychain, which is why the system password dialog appears. Adding `kSecUseDataProtectionKeychain: true` to queries would use the modern Data Protection keychain (no password prompts, syncs better with sandboxed apps). Requires testing that existing items are migrated or re-saved.
 
 ## Troubleshooting
 

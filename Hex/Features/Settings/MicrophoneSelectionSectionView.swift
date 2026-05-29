@@ -79,8 +79,7 @@ struct MicrophoneSelectionSectionView: View {
 			Text("Microphone Selection")
 		} footer: {
 			Text("Override the system default microphone with a specific input device. This setting will persist across sessions.")
-				.font(.footnote)
-				.foregroundColor(.secondary)
+				.settingsCaption()
 		}
 		.enableInjection()
 	}

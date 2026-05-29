@@ -55,8 +55,7 @@ struct IntegrationsSectionView: View {
         Text("Integrations")
       } footer: {
         Text("Send dictations into your favorite tools — \"remind me Friday to review the launch deck\" becomes a Todoist task. Free plan includes \(IntegrationLimits.freeTierMaxConnections) integrations; Pro unlocks all.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+          .settingsCaption()
       }
     }
     .formStyle(.grouped)

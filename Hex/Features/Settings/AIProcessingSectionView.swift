@@ -3,11 +3,92 @@
 //  Hex
 //
 
-import AppKit
 import ComposableArchitecture
 import HexCore
 import Inject
 import SwiftUI
+
+// MARK: - Custom mode editor (shared between inline and standalone use)
+
+struct CustomModeEditorMac: View {
+  @Environment(\.dismiss) private var dismiss
+  let initial: CustomAIMode?
+  let onSave: (CustomAIMode) -> Void
+
+  @State private var name: String
+  @State private var prompt: String
+  @State private var icon: String
+
+  init(initial: CustomAIMode?, onSave: @escaping (CustomAIMode) -> Void) {
+    self.initial = initial
+    self.onSave = onSave
+    _name = State(initialValue: initial?.name ?? "")
+    _prompt = State(initialValue: initial?.systemPrompt ?? "")
+    _icon = State(initialValue: initial?.icon ?? "sparkles")
+  }
+
+  private let iconChoices = [
+    "sparkles", "stethoscope", "briefcase", "doc.text",
+    "list.bullet.clipboard", "envelope", "bubble.left.and.bubble.right",
+    "chevron.left.forwardslash.chevron.right", "heart.text.square",
+    "books.vertical", "brain", "wand.and.stars",
+  ]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      Text(initial == nil ? "New Custom Mode" : "Edit Custom Mode")
+        .font(.title2.weight(.semibold))
+
+      Form {
+        TextField("Name", text: $name, prompt: Text("e.g. Clinical note, VC update"))
+        Picker("Icon", selection: $icon) {
+          ForEach(iconChoices, id: \.self) { name in
+            Label(name, systemImage: name).tag(name)
+          }
+        }
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Transformation prompt")
+            .font(.caption.weight(.semibold))
+          TextEditor(text: $prompt)
+            .frame(minHeight: 160)
+            .font(.body)
+            .border(Color.secondary.opacity(0.3))
+          Text("Quill wraps your prompt in the standard safety preamble. Describe only the transformation you want — e.g. \"Rewrite as a clinical progress note in SOAP format. Preserve dates, medications, and dosages. Use past tense.\"")
+            .settingsCaption()
+        }
+      }
+      .formStyle(.grouped)
+
+      HStack {
+        Spacer()
+        Button("Cancel") { dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button("Save") { save() }
+          .keyboardShortcut(.defaultAction)
+          .disabled(!canSave)
+      }
+    }
+    .padding(20)
+    .frame(minWidth: 540, minHeight: 420)
+  }
+
+  private var canSave: Bool {
+    !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+      !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private func save() {
+    let mode = CustomAIMode(
+      id: initial?.id ?? UUID(),
+      name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+      systemPrompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+      icon: icon,
+      createdAt: initial?.createdAt ?? Date()
+    )
+    onSave(mode)
+    dismiss()
+  }
+}
 
 /// Renders the AI tab's grouped sections: the master toggle on top,
 /// then Provider / Default Mode / Behavior subsections — each in its
@@ -18,6 +99,9 @@ struct AIProcessingSectionView: View {
   @Bindable var store: StoreOf<SettingsFeature>
   @State private var apiKeyText: String = ""
   @State private var isAPIKeyVisible: Bool = false
+  @State private var saveTask: Task<Void, Never>?
+  @State private var editingCustomMode: CustomAIMode?
+  @State private var showingNewCustomMode = false
 
   var body: some View {
     // Master toggle — always visible at the top of the tab.
@@ -42,7 +126,7 @@ struct AIProcessingSectionView: View {
 
     if store.hexSettings.aiProcessingEnabled {
       providerSection
-      defaultModeSection
+      formattingModesSection
       perAppOverridesSection
       behaviorSection
     }
@@ -93,15 +177,12 @@ struct AIProcessingSectionView: View {
               Image(systemName: isAPIKeyVisible ? "eye.slash" : "eye")
             }
             .buttonStyle(.borderless)
-            Button("Save") {
-              store.send(.saveAPIKey(apiKeyText, forProvider: store.hexSettings.aiProvider))
-            }
-            .buttonStyle(.borderless)
           }
           if store.apiKeySaved {
-            Text("Key saved to Keychain")
+            Label("Saved to Keychain", systemImage: "checkmark.circle.fill")
               .font(.caption)
               .foregroundStyle(.green)
+              .transition(.opacity)
           } else {
             Text("Your API key is stored securely in the macOS Keychain")
               .settingsCaption()
@@ -111,24 +192,35 @@ struct AIProcessingSectionView: View {
         Image(systemName: "key")
       }
       .onAppear {
-        store.send(.loadAPIKey(store.hexSettings.aiProvider))
+        // Populate the text field from the already-loaded key (loaded
+        // once in SettingsFeature.task). Only re-read from keychain if
+        // the provider changed and the cached key is stale.
+        if !store.loadedAPIKey.isEmpty && apiKeyText.isEmpty {
+          apiKeyText = store.loadedAPIKey
+        } else if apiKeyText.isEmpty {
+          store.send(.loadAPIKey(store.hexSettings.aiProvider))
+        }
       }
       .onChange(of: store.loadedAPIKey) { _, newValue in
         if !newValue.isEmpty && apiKeyText.isEmpty {
           apiKeyText = newValue
         }
       }
+      .onChange(of: apiKeyText) { _, newValue in
+        autoSaveAPIKey(newValue)
+      }
     } header: {
       Text("Provider")
     }
   }
 
-  // MARK: - Default Mode
+  // MARK: - Formatting Modes
 
-  /// What flavor of post-processing runs by default, plus the
-  /// auto-pick-by-app override. Grouped because both controls answer
-  /// the same question: "which mode should fire when I dictate?"
-  @ViewBuilder private var defaultModeSection: some View {
+  /// Unified section covering both built-in modes (clean, email, notes,
+  /// message, code) and user-authored custom modes. The default-mode
+  /// picker sits on top, followed by the auto-select toggle, then the
+  /// user's custom modes library with edit / delete / create controls.
+  @ViewBuilder private var formattingModesSection: some View {
     Section {
       Label {
         HStack {
@@ -167,8 +259,61 @@ struct AIProcessingSectionView: View {
       } icon: {
         Image(systemName: "app.badge")
       }
+
+      // Custom modes inline
+      let modes = store.hexSettings.customAIModes
+      if !modes.isEmpty {
+        Divider()
+        ForEach(modes) { mode in
+          HStack(alignment: .top, spacing: 10) {
+            Image(systemName: mode.icon)
+              .foregroundStyle(.purple)
+              .frame(width: 22, height: 22)
+              .background(Circle().fill(Color.purple.opacity(0.14)))
+
+            VStack(alignment: .leading, spacing: 2) {
+              Text(mode.displayName)
+                .font(.body.weight(.semibold))
+              Text(mode.systemPrompt)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            }
+            Spacer()
+            Button("Edit") { editingCustomMode = mode }
+              .controlSize(.small)
+            Button(role: .destructive) {
+              store.send(.removeCustomAIMode(mode.id))
+            } label: {
+              Image(systemName: "trash")
+            }
+            .controlSize(.small)
+          }
+          .padding(.vertical, 4)
+        }
+      }
+
+      Button {
+        showingNewCustomMode = true
+      } label: {
+        Label("New Custom Mode…", systemImage: "plus.circle")
+      }
+      .controlSize(.small)
     } header: {
-      Text("Default Mode")
+      Text("Formatting Modes")
+    } footer: {
+      Text("Custom modes appear alongside built-ins in the mode picker. Quill wraps your prompt in the standard safety preamble automatically.")
+        .settingsCaption()
+    }
+    .sheet(isPresented: $showingNewCustomMode) {
+      CustomModeEditorMac(initial: nil) { newMode in
+        store.send(.addCustomAIMode(newMode))
+      }
+    }
+    .sheet(item: $editingCustomMode) { mode in
+      CustomModeEditorMac(initial: mode) { updated in
+        store.send(.updateCustomAIMode(updated))
+      }
     }
   }
 
@@ -287,19 +432,19 @@ struct AIProcessingSectionView: View {
         Image(systemName: "text.cursor")
       }
 
-      Label {
-        Toggle(
-          "Show live transcript while recording",
-          isOn: .constant(false)
-        )
-        .disabled(true)
-        Text("Coming soon — requires streaming transcription support")
-          .settingsCaption()
-      } icon: {
-        Image(systemName: "text.bubble")
-      }
     } header: {
       Text("Behavior")
+    }
+  }
+
+  // MARK: - Auto-save
+
+  private func autoSaveAPIKey(_ key: String) {
+    saveTask?.cancel()
+    saveTask = Task {
+      try? await Task.sleep(for: .seconds(1))
+      guard !Task.isCancelled else { return }
+      store.send(.saveAPIKey(key, forProvider: store.hexSettings.aiProvider))
     }
   }
 }
@@ -317,29 +462,14 @@ struct AppModeRuleRow: View {
   let onModeChange: (AIProcessingMode) -> Void
   let onRemove: () -> Void
 
-  /// Lightweight DTO returned by the picker so we don't leak AppKit
-  /// types up into the reducer.
-  struct PickedApp {
-    let bundleIdentifier: String
-    let appName: String
-  }
-
   var body: some View {
     HStack(spacing: 10) {
-      Button {
-        pickApp()
-      } label: {
-        HStack(spacing: 8) {
-          Image(systemName: "app.badge")
-            .foregroundStyle(.secondary)
-          Text(displayName)
-            .lineLimit(1)
-            .foregroundStyle(rule.bundleIdentifier.isEmpty ? .secondary : .primary)
-        }
-        .padding(.vertical, 4)
-      }
-      .buttonStyle(.plain)
-      .help("Click to pick the app this rule should apply to.")
+      AppPickerButton(
+        currentName: displayName,
+        isEmpty: rule.bundleIdentifier.isEmpty,
+        message: "Choose the app this rule should apply to",
+        onPick: onPickApp
+      )
 
       Spacer(minLength: 8)
 
@@ -371,30 +501,6 @@ struct AppModeRuleRow: View {
   private var displayName: String {
     if !rule.appName.isEmpty { return rule.appName }
     if !rule.bundleIdentifier.isEmpty { return rule.bundleIdentifier }
-    return "Pick app…"
-  }
-
-  /// Open `NSOpenPanel` scoped to /Applications, read the picked
-  /// bundle's `Info.plist` for the bundle identifier + display name.
-  /// Falls back to the file basename if the plist read fails (rare,
-  /// but possible for non-app bundles the user might pick by mistake).
-  private func pickApp() {
-    let panel = NSOpenPanel()
-    panel.canChooseFiles = true
-    panel.canChooseDirectories = false
-    panel.allowsMultipleSelection = false
-    panel.allowedContentTypes = [.application]
-    panel.directoryURL = URL(fileURLWithPath: "/Applications")
-    panel.message = "Choose the app this rule should apply to"
-    panel.prompt = "Select"
-    guard panel.runModal() == .OK, let url = panel.url else { return }
-
-    let bundle = Bundle(url: url)
-    let bundleID = bundle?.bundleIdentifier ?? ""
-    let name = bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-      ?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
-      ?? url.deletingPathExtension().lastPathComponent
-
-    onPickApp(.init(bundleIdentifier: bundleID, appName: name))
+    return "Pick app\u{2026}"
   }
 }

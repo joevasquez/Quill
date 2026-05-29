@@ -36,8 +36,6 @@ struct CloudSyncSectionView: View {
           .disabled(isSyncing)
 
           statusText
-            .font(.caption)
-            .foregroundStyle(statusColor)
         }
       } else {
         HStack {
@@ -53,8 +51,7 @@ struct CloudSyncSectionView: View {
       Text("Cloud Sync")
     } footer: {
       Text("When on, your transcriptions sync to Google Cloud so you can access them from your iPhone and other devices. Requires a Google account.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .settingsCaption()
     }
   }
 
@@ -67,24 +64,38 @@ struct CloudSyncSectionView: View {
   private var statusText: some View {
     switch cloudSync.status {
     case .idle:
-      Text("No sync since launch.")
+      Label("No sync since launch", systemImage: "clock")
+        .font(.caption)
+        .foregroundStyle(.secondary)
     case .syncing:
-      Text("Syncing…")
+      Label("Syncing…", systemImage: "arrow.triangle.2.circlepath")
+        .font(.caption)
+        .foregroundStyle(.blue)
     case .completed(let up, let down, let at):
       let when = at.formatted(.relative(presentation: .named))
-      if up == 0 && down == 0 {
-        Text("Already up to date · \(when)")
-      } else {
-        Text("Synced \(up) up, \(down) down · \(when)")
+      HStack(spacing: 12) {
+        Label {
+          if up == 0 && down == 0 {
+            Text("Up to date")
+          } else {
+            Text("\(up)↑ \(down)↓")
+          }
+        } icon: {
+          Image(systemName: "checkmark.circle.fill")
+            .foregroundStyle(.green)
+        }
+        .font(.caption)
+        Spacer()
+        Text(when)
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
       }
     case .failed(let msg):
-      Text("Sync failed: \(msg)")
+      Label(msg, systemImage: "exclamationmark.triangle.fill")
+        .font(.caption)
+        .foregroundStyle(.red)
+        .lineLimit(2)
     }
-  }
-
-  private var statusColor: Color {
-    if case .failed = cloudSync.status { return .red }
-    return .secondary
   }
 }
 #endif

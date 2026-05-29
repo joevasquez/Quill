@@ -51,22 +51,20 @@ struct HistorySectionView: View {
 						.padding(.leading, 28)
 				}
 
-				PasteLastTranscriptHotkeyRow(store: store)
 			}
 		} header: {
 			Text("History")
 		} footer: {
 			if !store.hexSettings.saveTranscriptionHistory {
 				Text("When disabled, transcriptions will not be saved and audio files will be deleted immediately after transcription.")
-					.font(.footnote)
-					.foregroundColor(.secondary)
+					.settingsCaption()
 			}
 		}
 		.enableInjection()
 	}
 }
 
-private struct PasteLastTranscriptHotkeyRow: View {
+struct PasteLastTranscriptHotkeyRow: View {
 	@ObserveInjection var inject
 	@Bindable var store: StoreOf<SettingsFeature>
 

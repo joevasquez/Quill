@@ -97,11 +97,6 @@ struct AppPasteDelayRow: View {
 	let onToggle: (Bool) -> Void
 	let onRemove: () -> Void
 
-	struct PickedApp {
-		let bundleIdentifier: String
-		let appName: String
-	}
-
 	var body: some View {
 		HStack(spacing: 10) {
 			Toggle("", isOn: Binding(
@@ -112,20 +107,12 @@ struct AppPasteDelayRow: View {
 			.toggleStyle(.switch)
 			.controlSize(.mini)
 
-			Button {
-				pickApp()
-			} label: {
-				HStack(spacing: 8) {
-					Image(systemName: "app.badge")
-						.foregroundStyle(.secondary)
-					Text(displayName)
-						.lineLimit(1)
-						.foregroundStyle(rule.bundleIdentifier.isEmpty ? .secondary : .primary)
-				}
-				.padding(.vertical, 4)
-			}
-			.buttonStyle(.plain)
-			.help("Click to pick the app this delay should apply to.")
+			AppPickerButton(
+				currentName: displayName,
+				isEmpty: rule.bundleIdentifier.isEmpty,
+				message: "Choose the app that needs a clipboard paste delay",
+				onPick: onPickApp
+			)
 
 			Spacer(minLength: 8)
 
@@ -154,26 +141,6 @@ struct AppPasteDelayRow: View {
 	private var displayName: String {
 		if !rule.appName.isEmpty { return rule.appName }
 		if !rule.bundleIdentifier.isEmpty { return rule.bundleIdentifier }
-		return "Pick app…"
-	}
-
-	private func pickApp() {
-		let panel = NSOpenPanel()
-		panel.canChooseFiles = true
-		panel.canChooseDirectories = false
-		panel.allowsMultipleSelection = false
-		panel.allowedContentTypes = [.application]
-		panel.directoryURL = URL(fileURLWithPath: "/Applications")
-		panel.message = "Choose the app that needs a clipboard paste delay"
-		panel.prompt = "Select"
-		guard panel.runModal() == .OK, let url = panel.url else { return }
-
-		let bundle = Bundle(url: url)
-		let bundleID = bundle?.bundleIdentifier ?? ""
-		let name = bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-			?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
-			?? url.deletingPathExtension().lastPathComponent
-
-		onPickApp(.init(bundleIdentifier: bundleID, appName: name))
+		return "Pick app\u{2026}"
 	}
 }

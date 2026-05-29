@@ -43,7 +43,7 @@ struct CuratedRow: View {
 								.clipShape(RoundedRectangle(cornerRadius: 4))
 						}
 					}
-					HStack(spacing: 16) {
+					HStack(spacing: 24) {
 						HStack(spacing: 6) {
 							StarRatingView(model.accuracyStars)
 							Text("Accuracy").font(.caption2).foregroundStyle(.secondary)

@@ -17,6 +17,7 @@
 import ComposableArchitecture
 import HexCore
 import Inject
+import Sparkle
 import SwiftUI
 
 // MARK: - General
@@ -36,6 +37,11 @@ struct GeneralSettingsTabView: View {
 
   var body: some View {
     Form {
+      StatusOverviewView(
+        store: store,
+        microphonePermission: microphonePermission,
+        accessibilityPermission: accessibilityPermission
+      )
       if microphonePermission != .granted
           || accessibilityPermission != .granted
           || inputMonitoringPermission != .granted
@@ -50,19 +56,8 @@ struct GeneralSettingsTabView: View {
       SoundSectionView(store: store)
       GeneralSectionView(store: store)
       OfflineQueueSectionView()
-      CloudSyncSectionView(store: store)
-
-      Section {
-        Button {
-          store.send(.replayOnboarding)
-        } label: {
-          Label("Replay Tutorial", systemImage: "sparkle.magnifyingglass")
-        }
-      } footer: {
-        Text("Re-runs the first-launch welcome walk-through.")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
+      KeyboardShortcutReferenceView(store: store)
+      AboutSectionView(store: store)
     }
     .formStyle(.grouped)
     .task { await store.send(.task).finish() }
@@ -99,6 +94,7 @@ struct RecordingSettingsTabView: View {
       RecordingBehaviorSectionView(store: store)
       RecordingOutputSectionView(store: store)
       HistorySectionView(store: store)
+      WordRemappingsSection(store: store)
     }
     .formStyle(.grouped)
     .task { await store.send(.task).finish() }
@@ -121,7 +117,6 @@ struct AISettingsTabView: View {
   var body: some View {
     Form {
       AIProcessingSectionView(store: store)
-      CustomModesSectionView(store: store)
     }
     .formStyle(.grouped)
     .task { await store.send(.task).finish() }
@@ -152,5 +147,220 @@ struct IntegrationsSettingsTabView: View {
     }
     .task { await store.send(.task).finish() }
     .enableInjection()
+  }
+}
+
+// MARK: - Status Overview
+
+private struct StatusOverviewView: View {
+  @Bindable var store: StoreOf<SettingsFeature>
+  let microphonePermission: PermissionStatus
+  let accessibilityPermission: PermissionStatus
+
+  var body: some View {
+    Section {
+      statusRow(
+        "Microphone",
+        icon: "mic.fill",
+        ok: microphonePermission == .granted,
+        detail: microphonePermission == .granted ? "Ready" : "Permission needed"
+      )
+      statusRow(
+        "Accessibility",
+        icon: "accessibility",
+        ok: accessibilityPermission == .granted,
+        detail: accessibilityPermission == .granted ? "Ready" : "Permission needed"
+      )
+      statusRow(
+        "Transcription Model",
+        icon: "cpu",
+        ok: !store.hexSettings.selectedModel.isEmpty,
+        detail: modelDisplayName
+      )
+      statusRow(
+        "AI Processing",
+        icon: "sparkles",
+        ok: !store.hexSettings.aiProcessingEnabled || store.apiKeySaved,
+        detail: aiDetail
+      )
+    } header: {
+      Text("Status")
+    }
+  }
+
+  @ViewBuilder
+  private func statusRow(_ label: String, icon: String, ok: Bool, detail: String) -> some View {
+    HStack(spacing: 10) {
+      Image(systemName: icon)
+        .frame(width: 16)
+        .foregroundStyle(.white)
+      Text(label)
+      Spacer()
+      Text(detail)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+        .font(.caption)
+        .foregroundStyle(ok ? .green : .orange)
+    }
+  }
+
+  private var modelDisplayName: String {
+    let model = store.hexSettings.selectedModel
+    if model.isEmpty { return "Not selected" }
+    // Show a friendly name: strip path prefixes and model family suffixes
+    let components = model.split(separator: "/")
+    return String(components.last ?? Substring(model))
+  }
+
+  private var aiDetail: String {
+    if !store.hexSettings.aiProcessingEnabled { return "Off" }
+    if store.apiKeySaved { return "\(store.hexSettings.aiProvider.displayName) \u{2713}" }
+    return "API key needed"
+  }
+}
+
+// MARK: - Keyboard Shortcuts
+
+private struct KeyboardShortcutReferenceView: View {
+  @Bindable var store: StoreOf<SettingsFeature>
+
+  var body: some View {
+    Section {
+      shortcutRow(
+        label: "Record",
+        hotkey: store.hexSettings.hotkey,
+        icon: "mic.fill"
+      )
+
+      if let cycleHotkey = store.hexSettings.cycleModeHotkey {
+        shortcutRow(
+          label: "Cycle Mode",
+          hotkey: cycleHotkey,
+          icon: "rectangle.3.group.fill"
+        )
+      }
+
+      if let pasteHotkey = store.hexSettings.pasteLastTranscriptHotkey {
+        shortcutRow(
+          label: "Paste Last",
+          hotkey: pasteHotkey,
+          icon: "doc.on.clipboard"
+        )
+      }
+    } header: {
+      Text("Keyboard Shortcuts")
+    } footer: {
+      Text("Configure shortcuts in the Recording tab under Hot Key.")
+        .settingsCaption()
+    }
+  }
+
+  @ViewBuilder
+  private func shortcutRow(label: String, hotkey: HotKey, icon: String) -> some View {
+    HStack {
+      Label(label, systemImage: icon)
+      Spacer()
+      Text(hotkeyDisplayString(hotkey))
+        .font(.system(.body, design: .rounded).weight(.medium))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+    }
+  }
+
+  private func hotkeyDisplayString(_ hotkey: HotKey) -> String {
+    var parts: [String] = []
+    if hotkey.modifiers.isHyperkey {
+      parts.append("✦")
+    } else {
+      parts.append(contentsOf: hotkey.modifiers.sorted.map(\.kind.symbol))
+    }
+    if let key = hotkey.key {
+      parts.append(key.toString)
+    }
+    let result = parts.joined()
+    return result.isEmpty ? "Not set" : result
+  }
+}
+
+// MARK: - About
+
+private struct AboutSectionView: View {
+  @Bindable var store: StoreOf<SettingsFeature>
+  @State private var viewModel = CheckForUpdatesViewModel.shared
+  @State private var showingChangelog = false
+
+  var body: some View {
+    Section {
+      HStack {
+        Label("Version", systemImage: "info.circle")
+        Spacer()
+        Text(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown")
+          .foregroundStyle(.secondary)
+        Button("Check for Updates") {
+          viewModel.checkForUpdates()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+      }
+      HStack {
+        Label("Changelog", systemImage: "doc.text")
+        Spacer()
+        Button("Show Changelog") {
+          showingChangelog.toggle()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .sheet(isPresented: $showingChangelog) {
+          ChangelogView()
+        }
+      }
+      Button {
+        store.send(.replayOnboarding)
+      } label: {
+        Label("Replay Tutorial", systemImage: "sparkle.magnifyingglass")
+      }
+      HStack {
+        Label("Built by Joe Vasquez", systemImage: "person.circle")
+        Spacer()
+        Link("joevasquez.com", destination: URL(string: "https://joevasquez.com")!)
+          .font(.caption)
+      }
+    } header: {
+      Text("About")
+    }
+  }
+}
+
+// MARK: - Word Corrections (formerly Transforms tab)
+
+/// Collapsible section wrapping the transcript-modification rules (word
+/// removals & remappings) that previously lived on a standalone Transforms
+/// tab. Embedded in the Recording tab so users find all recording-pipeline
+/// settings in one place.
+private struct WordRemappingsSection: View {
+  @Bindable var store: StoreOf<SettingsFeature>
+
+  var body: some View {
+    Section {
+      DisclosureGroup {
+        WordRemappingsView(store: store)
+          .padding(.top, 8)
+      } label: {
+        Label {
+          VStack(alignment: .leading, spacing: 2) {
+            Text("Word Corrections")
+              .font(.subheadline.weight(.semibold))
+            Text("Remove filler words or auto-replace specific terms in every transcript")
+              .settingsCaption()
+          }
+        } icon: {
+          Image(systemName: "text.badge.plus")
+        }
+      }
+    } header: {
+      Text("Transcript Modifications")
+    }
   }
 }

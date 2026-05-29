@@ -52,6 +52,8 @@ struct HotKeySectionView: View {
 
             CycleModeHotkeyRow(store: store)
 
+            PasteLastTranscriptHotkeyRow(store: store)
+
             Label {
                 Toggle(
                     "Enable double-tap lock",
