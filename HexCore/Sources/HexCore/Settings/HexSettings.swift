@@ -7,6 +7,11 @@ public enum RecordingAudioBehavior: String, Codable, CaseIterable, Equatable, Se
 	case doNothing
 }
 
+public enum DisplayMode: String, Codable, CaseIterable, Equatable, Sendable {
+	case hud
+	case orb
+}
+
 /// User-configurable settings saved to disk.
 public struct HexSettings: Codable, Equatable, Sendable {
 	public static let defaultPasteLastTranscriptHotkey = HotKey(key: .v, modifiers: [.option, .shift])
@@ -77,6 +82,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var selectedPlan: String?
 	public var cloudSyncEnabled: Bool
 	public var hudPinnedToTop: Bool
+	public var displayMode: DisplayMode
 	public var appPasteDelays: [AppPasteDelay]
 
 	private mutating func normalizeDoubleTapSettings() {
@@ -130,6 +136,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		selectedPlan: String? = nil,
 		cloudSyncEnabled: Bool = false,
 		hudPinnedToTop: Bool = false,
+		displayMode: DisplayMode = .hud,
 		appPasteDelays: [AppPasteDelay] = AppPasteDelay.defaults
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
@@ -171,6 +178,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.selectedPlan = selectedPlan
 		self.cloudSyncEnabled = cloudSyncEnabled
 		self.hudPinnedToTop = hudPinnedToTop
+		self.displayMode = displayMode
 		self.appPasteDelays = appPasteDelays
 		normalizeDoubleTapSettings()
 	}
@@ -235,6 +243,7 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case selectedPlan
 	case cloudSyncEnabled
 	case hudPinnedToTop
+	case displayMode
 	case appPasteDelays
 }
 
@@ -391,6 +400,7 @@ private enum HexSettingsSchema {
 		SettingsField(.selectedPlan, keyPath: \.selectedPlan, default: defaults.selectedPlan).eraseToAny(),
 		SettingsField(.cloudSyncEnabled, keyPath: \.cloudSyncEnabled, default: defaults.cloudSyncEnabled).eraseToAny(),
 		SettingsField(.hudPinnedToTop, keyPath: \.hudPinnedToTop, default: defaults.hudPinnedToTop).eraseToAny(),
+		SettingsField(.displayMode, keyPath: \.displayMode, default: defaults.displayMode).eraseToAny(),
 		SettingsField(.appPasteDelays, keyPath: \.appPasteDelays, default: defaults.appPasteDelays).eraseToAny(),
 	]
 }

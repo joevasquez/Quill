@@ -24,11 +24,13 @@ class HUDPanel: NSPanel {
       .utilityWindow,
     ]
 
-    // Height accommodates: pill (~36) + integration row (~40) + live
-    // transcript card (~108) + spacing/shadow buffer. Width is set wide
-    // enough for the 520pt transcript card with breathing room.
+    // Height accommodates both display modes:
+    //  - Standard HUD: pill (~36) + integration row (~40) + live
+    //    transcript card (~108) + spacing/shadow buffer
+    //  - Orb: sphere (~220) + caption (~120) + transcript card
+    // Width covers the 520pt transcript card with breathing room.
     super.init(
-      contentRect: .init(x: 0, y: 0, width: 560, height: 240),
+      contentRect: .init(x: 0, y: 0, width: 560, height: 460),
       styleMask: styleMask,
       backing: .buffered,
       defer: false

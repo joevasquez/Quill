@@ -94,6 +94,7 @@ struct SettingsFeature {
     case toggleOpenOnLogin(Bool)
     case toggleShowDockIcon(Bool)
     case toggleHudPinnedToTop(Bool)
+    case setDisplayMode(DisplayMode)
     case togglePreventSystemSleep(Bool)
     case setRecordingAudioBehavior(RecordingAudioBehavior)
     case toggleSuperFastMode(Bool)
@@ -563,6 +564,10 @@ struct SettingsFeature {
             )
           }
         }
+
+      case let .setDisplayMode(mode):
+        state.$hexSettings.withLock { $0.displayMode = mode }
+        return .none
 
       case let .togglePreventSystemSleep(enabled):
         state.$hexSettings.withLock { $0.preventSystemSleep = enabled }

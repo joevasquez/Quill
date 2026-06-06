@@ -5,6 +5,7 @@ import HexCore
 
 // Re-export types so the app target can use them without HexCore prefixes.
 typealias RecordingAudioBehavior = HexCore.RecordingAudioBehavior
+typealias DisplayMode = HexCore.DisplayMode
 typealias HexSettings = HexCore.HexSettings
 
 extension SharedReaderKey

@@ -50,6 +50,19 @@ struct GeneralSectionView: View {
 			} icon: {
 				Image(systemName: "pin")
 			}
+
+			Label {
+				Picker("Display Mode", selection: Binding(
+					get: { store.hexSettings.displayMode },
+					set: { store.send(.setDisplayMode($0)) }
+				)) {
+					Text("Standard HUD").tag(DisplayMode.hud)
+					Text("Orb").tag(DisplayMode.orb)
+				}
+				.pickerStyle(.segmented)
+			} icon: {
+				Image(systemName: "circle.circle")
+			}
 		} header: {
 			Text("App")
 		}

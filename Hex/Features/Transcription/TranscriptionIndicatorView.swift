@@ -462,7 +462,7 @@ private struct PulseModifier: ViewModifier {
 /// content from one line up to four; beyond that the head truncates so
 /// the most recent words are always visible (`.truncationMode(.head)`).
 /// `reservesSpace: false` lets the card shrink back when the user pauses.
-private struct LiveTranscriptCard: View {
+struct LiveTranscriptCard: View {
   let text: String
 
   var body: some View {
@@ -501,7 +501,7 @@ private struct LiveTranscriptCard: View {
 /// active routing target reads at a glance. The shortcut badge mirrors
 /// the `fn + N` global hotkey so users learn the keystroke without a
 /// tooltip.
-private struct IntegrationToggleButton: View {
+struct IntegrationToggleButton: View {
   let identifier: Integration.Identifier
   let isLocked: Bool
   let shortcutNumber: Int

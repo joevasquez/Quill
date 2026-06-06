@@ -199,6 +199,14 @@ XDG_CACHE_HOME = ~/Library/Containers/com.joevasquez.Quill/Data/Library/Applicat
 
 FluidAudio models reside under `Application Support/FluidAudio/Models`.
 
+21. **Orb display mode (macOS)**: Alternative HUD skin toggled via Settings → General → Display Mode (`HexSettings.displayMode: .hud | .orb`). The orb is a luminous sphere whose hue encodes the mode (Dictate=blue 248°, Edit=violet 305°, Action=teal 188°, Success=green 150°) and whose motion encodes the phase (idle→listening→transcribing→result). All rendering is native SwiftUI — no WKWebView.
+    - **Architecture**: `OrbView` (`Hex/Features/Transcription/OrbView.swift`) takes the same inputs as `TranscriptionIndicatorView` (status, mode, meter, partialTranscript, etc.). `TranscriptionView.body` conditionally renders one or the other based on `store.hexSettings.displayMode`. Both are hosted in the same `HUDPanel`.
+    - **Colour animation**: SwiftUI can't interpolate `Color` inside a `RadialGradient`. The orb uses a white gradient base + `.colorMultiply(orbColor)` so the tint animates. `@State displayedHue` and `displayedSaturation` update via `withAnimation` on `onChange(of: targetHue/targetSaturation)` for smooth hue sweeps between modes.
+    - **Orbiting particles**: 6 small circles on tilted elliptical paths. The correct SwiftUI transform chain is `.offset(x: radius)` → `.rotationEffect(spin)` → `.scaleEffect(x:1, y:0.5)` → `.rotationEffect(tilt)` — matching the CSS prototype's `rotate(tilt) scaleY(0.5)` container transform. Using `rotation3DEffect` instead produces incorrect linear paths.
+    - **Dark backdrop**: A frosted glass card (`ultraThinMaterial` + black overlay) behind the orb ensures contrast against any desktop wallpaper.
+    - **Shared sub-views**: `LiveTranscriptCard` and `IntegrationToggleButton` (in `TranscriptionIndicatorView.swift`) are `internal` access so both display modes can reference them.
+    - **Future**: The mode badge supports a "guessed" suffix for a future Auto mode that predicts context (selection present → Edit, intent keyword → Action, otherwise → Dictate). Currently the badge shows the mode name only.
+
 ## UI
 
 - **Settings tabs (macOS)**: Four tabs in the sidebar — General, Recording, AI Processing, Integrations. Each is a wrapper view in `SettingsTabs.swift` that composes existing section views into a `Form { … }.formStyle(.grouped)`. The "About" section (version, changelog, replay tutorial) and "Transforms" (word remappings) are folded into General and Recording respectively — no standalone tabs. Cloud Sync settings live in the Notes pane, not General.
@@ -209,6 +217,7 @@ FluidAudio models reside under `Application Support/FluidAudio/Models`.
 - Context menu offers Show in Finder / Delete.
 - **`AppPickerButton`**: Shared `NSOpenPanel`-based app-picker component (`AppPickerButton.swift`) used by both `AppModeRuleRow` (per-app AI mode overrides) and `AppPasteDelayRow` (per-app paste delay). Extracted to eliminate duplicate `PickedApp` structs and `pickApp()` methods.
 - **API key auto-save**: The AI provider section uses a 1-second debounced auto-save (`autoSaveAPIKey`) instead of a manual "Save" button — the key is written to keychain after the user stops typing.
+- **Display Mode picker**: Settings → General → App section includes a segmented picker ("Standard HUD" / "Orb") that toggles `HexSettings.displayMode`. The orb renders in the same `HUDPanel` as the standard pill — switching is instant with no panel recreation.
 - **GoogleOAuthSheet**: Shows "Done" (with `.defaultAction` shortcut) after successful sign-in instead of "Cancel".
 
 ## iOS Companion App
@@ -353,6 +362,8 @@ The iOS target is a `PBXFileSystemSynchronizedRootGroup` — new files in `Quill
 5. **macOS Notes: delete note with cloud tombstone**: `NotesView.deleteNote` currently removes the note from the local array only. It doesn't write a `SyncTombstone` to Firestore, so the note will reappear on the next cloud sync. Wire up `MacCloudSync.writeTombstone(id:)` from the delete action.
 
 6. **macOS Notes: photo download on demand**: The notes detail pane shows placeholder cards for photos that haven't been downloaded from GCS yet. Could add a "Download" button or auto-fetch visible photos when the note is selected.
+
+8. **Orb Auto mode**: A fourth mode that predicts context — selection present → Edit, intent keyword detected ("add to…", "remind me…") → Action, otherwise → Dictate. The orb mode badge already supports a "guessed" suffix for this; re-enable it when Auto is wired. Requires hooking into `InlineEditClient.captureSelectionSync` at recording-start (careful — see Lesson #1 about AX at record-start) and partial-transcript NLU for intent keywords.
 
 7. **Keychain migration to `kSecUseDataProtectionKeychain`**: The current `SecItemAdd` / `SecItemCopyMatching` calls use the legacy macOS keychain, which is why the system password dialog appears. Adding `kSecUseDataProtectionKeychain: true` to queries would use the modern Data Protection keychain (no password prompts, syncs better with sandboxed apps). Requires testing that existing items are migrated or re-saved.
 

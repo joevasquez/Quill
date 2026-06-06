@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.0
+
+### Minor Changes
+
+- Add Orb display mode — an alternative floating HUD that renders a luminous sphere with mode-encoded color, audio-reactive animations, and orbiting particles
+
 ## 0.15.0
 
 ### Minor Changes
