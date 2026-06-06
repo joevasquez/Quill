@@ -3,20 +3,20 @@
     <channel>
         <title>Quill</title>
         <item>
+            <title>0.16.0</title>
+            <pubDate>Sat, 06 Jun 2026 18:48:13 -0400</pubDate>
+            <sparkle:version>101</sparkle:version>
+            <sparkle:shortVersionString>0.16.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/joevasquez/Hex/releases/download/v0.16.0/Hex-latest.dmg" length="14246986" type="application/octet-stream" sparkle:edSignature="a1g52T3eekdXtuCtCqB1l3r5mOi2gtJ+dmNQhpGXTxgr682CNzqGixLJQTEnOayB/qOTx0XEXiTMov1L1kkvBw=="/>
+        </item>
+        <item>
             <title>0.15.0</title>
             <pubDate>Sat, 06 Jun 2026 16:35:50 -0400</pubDate>
             <sparkle:version>100</sparkle:version>
             <sparkle:shortVersionString>0.15.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <enclosure url="https://github.com/joevasquez/Hex/releases/download/v0.15.0/Hex-latest.dmg" length="14142044" type="application/octet-stream" sparkle:edSignature="wuCM+Ot7o8c53F6YSrWgoEbu465pNOt0ejkcSS6DFETkdqN8xCLvFSgrjQKOmH7Bbw7brzDU8madrNibeevkAw=="/>
-        </item>
-        <item>
-            <title>0.14.0</title>
-            <pubDate>Thu, 28 May 2026 21:00:35 -0400</pubDate>
-            <sparkle:version>99</sparkle:version>
-            <sparkle:shortVersionString>0.14.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/joevasquez/Hex/releases/download/v0.14.0/Hex-latest.dmg" length="14106978" type="application/octet-stream" sparkle:edSignature="6O59VC7yLd8fL1FzFWJ7Vbt9BlZqJ1pcW23FuFetACsiv9U7DyoE5ko8q6+aqOanRKDLK7oqKb5nT52sK6CyBQ=="/>
         </item>
     </channel>
 </rss>
