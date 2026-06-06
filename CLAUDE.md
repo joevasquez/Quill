@@ -334,23 +334,27 @@ The iOS target is a `PBXFileSystemSynchronizedRootGroup` — new files in `Quill
 
 11. **SettingsFeature `.task` runs per tab, not once.** Each settings tab wrapper has `.task { await store.send(.task).finish() }`. Without a guard, switching between General → Recording → AI → Integrations fires `.task` four times, launching duplicate long-running effects (key-event listeners, device monitors, model fetches). Fix: add `state.hasRunTask` and return `.none` on subsequent calls.
 
+12. **Parakeet transcription can beat the clipboard fallback.** Parakeet TDT v3 transcribes in ~0.07s with a warm model — faster than the 150ms clipboard fallback (Cmd+C simulation) used when AX selection reading fails. Without guarding against this race, `handleTranscriptionResult` sees `inlineEditSelection == nil` and falls through to the Dictate path, pasting raw instruction text instead of processing it as an Edit command. Fix: `editClipboardFallbackPending` flag + `pendingTranscriptionForEdit` stash. When the transcription arrives before the clipboard result, the result is stashed and replayed once the clipboard fallback resolves. The stash stores the raw (uncleaned) result so the full `handleTranscriptionResult` pipeline (WhisperOutputCleaner, voice commands, word remapping) runs exactly once on replay.
+
+13. **CGEvent key injection can leave modifiers stuck in VDI apps.** Citrix Viewer, Microsoft RDP, and VMware Horizon bridge CGEvent keystrokes to a remote session over the network. When Quill simulates Cmd+C (clipboard fallback) or Cmd+V (paste), the remote app may process the key-down but swallow or delay the key-up. This leaves the Command key "held" in the remote session — all subsequent clicks become Cmd+Click (no-op in most apps) and typing is interpreted as shortcuts. The mouse still moves (cursor tracking is separate from keyboard state). Fix: after every CGEvent key sequence, post a `flagsChanged` event with empty flags (`CGEvent.flags = []`) to explicitly clear all modifier state. Applied in `clipboardFallbackCapture`, `postCmdV`, `sendKeyboardCommand`, and `sendUndoToSourceApp`.
+
+14. **`AIProcessingClient.process()` returns input unchanged on missing API key — it doesn't throw.** For Dictate mode this is fine (raw text paste). For inline Edit mode it's catastrophic: the returned "input" is `InlineEditPrompt.userMessage(instruction:selection:)` — a formatted LLM prompt containing both the instruction and the selection — which gets pasted over the user's selected text. Fix: callers (Branch 1 and Branch 2 in `handleTranscriptionResult`) now pre-check the API key via `keychain.read()` before calling `aiProcessing.process()`, and surface a clear HUD message ("Add an API key in Settings → AI") instead of silently failing.
+
 ## Enhancement Opportunities
 
 1. **WhisperKit streaming for the live preview**: We use SFSpeechRecognizer for the live transcript card (see Implementation Detail #19). It's good but English-biased and not always identical to what WhisperKit/Parakeet ultimately produce. A WhisperKit streaming API or a lightweight second-model instance would give a preview that matches the final transcript more closely.
 
-2. **Edit mode "no selection" UX**: When both AX and clipboard fallback fail to capture a selection, the dictation falls through to normal paste. Could show a transient HUD banner ("No text selected — pasted as dictation") so the user understands why their edit instruction wasn't applied.
+2. **Per-app AX skip list**: Some apps (Chrome, Electron) never respond to `kAXSelectedTextAttribute`. Could maintain a bundle-ID skip list to go straight to clipboard fallback, saving the AX timeout.
 
-3. **Per-app AX skip list**: Some apps (Chrome, Electron) never respond to `kAXSelectedTextAttribute`. Could maintain a bundle-ID skip list to go straight to clipboard fallback, saving the AX timeout.
+3. **Edit mode undo stack**: Currently tracks one pending edit (Accept/Undo pill). Could support multi-level undo for consecutive edits to the same selection.
 
-4. **Edit mode undo stack**: Currently tracks one pending edit (Accept/Undo pill). Could support multi-level undo for consecutive edits to the same selection.
+4. **macOS Notes: record directly into a note**: The "New Note" button creates an empty note and selects it, but the user still has to use the global hotkey to dictate. A dedicated "Dictate into this note" button in the Notes editor toolbar could start a recording scoped to the active note, appending the transcript on stop.
 
-5. **macOS Notes: record directly into a note**: The "New Note" button creates an empty note and selects it, but the user still has to use the global hotkey to dictate. A dedicated "Dictate into this note" button in the Notes editor toolbar could start a recording scoped to the active note, appending the transcript on stop.
+5. **macOS Notes: delete note with cloud tombstone**: `NotesView.deleteNote` currently removes the note from the local array only. It doesn't write a `SyncTombstone` to Firestore, so the note will reappear on the next cloud sync. Wire up `MacCloudSync.writeTombstone(id:)` from the delete action.
 
-6. **macOS Notes: delete note with cloud tombstone**: `NotesView.deleteNote` currently removes the note from the local array only. It doesn't write a `SyncTombstone` to Firestore, so the note will reappear on the next cloud sync. Wire up `MacCloudSync.writeTombstone(id:)` from the delete action.
+6. **macOS Notes: photo download on demand**: The notes detail pane shows placeholder cards for photos that haven't been downloaded from GCS yet. Could add a "Download" button or auto-fetch visible photos when the note is selected.
 
-7. **macOS Notes: photo download on demand**: The notes detail pane shows placeholder cards for photos that haven't been downloaded from GCS yet. Could add a "Download" button or auto-fetch visible photos when the note is selected.
-
-8. **Keychain migration to `kSecUseDataProtectionKeychain`**: The current `SecItemAdd` / `SecItemCopyMatching` calls use the legacy macOS keychain, which is why the system password dialog appears. Adding `kSecUseDataProtectionKeychain: true` to queries would use the modern Data Protection keychain (no password prompts, syncs better with sandboxed apps). Requires testing that existing items are migrated or re-saved.
+7. **Keychain migration to `kSecUseDataProtectionKeychain`**: The current `SecItemAdd` / `SecItemCopyMatching` calls use the legacy macOS keychain, which is why the system password dialog appears. Adding `kSecUseDataProtectionKeychain: true` to queries would use the modern Data Protection keychain (no password prompts, syncs better with sandboxed apps). Requires testing that existing items are migrated or re-saved.
 
 ## Troubleshooting
 

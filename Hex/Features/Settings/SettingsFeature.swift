@@ -70,6 +70,9 @@ struct SettingsFeature {
     // AI Processing
     var loadedAPIKey: String = ""
     var apiKeySaved: Bool = false
+    /// Result of the last API key validation ping: nil = not yet checked,
+    /// true = key works, false = key is invalid (401/403).
+    var apiKeyValid: Bool?
 
     /// Guards `.task` so the long-running effect (key-event listener,
     /// device monitoring, model fetch, API key load) only runs once —
@@ -148,6 +151,7 @@ struct SettingsFeature {
     case saveAPIKey(String, forProvider: AIProvider)
     case loadAPIKey(AIProvider)
     case apiKeyLoaded(String)
+    case apiKeyValidated(Bool)
     case setContextEnrichmentEnabled(Bool)
     case setLiveTranscriptEnabled(Bool)
     case setInlineEditEnabled(Bool)
@@ -757,20 +761,28 @@ struct SettingsFeature {
 
       case let .saveAPIKey(key, forProvider: provider):
         state.apiKeySaved = false
+        state.apiKeyValid = nil
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         return .run { [keychain] send in
           let keychainKey: String
           switch provider {
           case .openAI: keychainKey = KeychainKey.openAIAPIKey
           case .anthropic: keychainKey = KeychainKey.anthropicAPIKey
           }
-          if key.isEmpty {
+          if trimmed.isEmpty {
             await keychain.delete(keychainKey)
           } else {
-            try? await keychain.save(keychainKey, key)
+            try? await keychain.save(keychainKey, trimmed)
           }
           // Reload to confirm it saved
           let saved = await keychain.read(keychainKey)
           await send(.apiKeyLoaded(saved ?? ""))
+
+          // Validate the key with a lightweight API ping
+          if !trimmed.isEmpty {
+            let valid = await validateAPIKey(trimmed, provider: provider)
+            await send(.apiKeyValidated(valid))
+          }
         }
 
       case let .loadAPIKey(provider):
@@ -782,11 +794,21 @@ struct SettingsFeature {
           }
           let value = await keychain.read(keychainKey) ?? ""
           await send(.apiKeyLoaded(value))
+
+          // Validate the existing key on load
+          if !value.isEmpty {
+            let valid = await validateAPIKey(value, provider: provider)
+            await send(.apiKeyValidated(valid))
+          }
         }
 
       case let .apiKeyLoaded(key):
         state.loadedAPIKey = key
         state.apiKeySaved = !key.isEmpty
+        return .none
+
+      case let .apiKeyValidated(valid):
+        state.apiKeyValid = valid
         return .none
 
       case let .setContextEnrichmentEnabled(enabled):
@@ -894,5 +916,44 @@ struct SettingsFeature {
 
       }
     }
+  }
+}
+
+// MARK: - API Key Validation
+
+/// Lightweight validation: hit a cheap endpoint to confirm the key
+/// authenticates. Returns true if the API accepts it, false on 401/403.
+private func validateAPIKey(_ key: String, provider: AIProvider) async -> Bool {
+  switch provider {
+  case .anthropic:
+    // Send a minimal messages request — Anthropic doesn't have a
+    // dedicated "whoami" endpoint, so we send max_tokens=1 to
+    // keep the response tiny and fast.
+    var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue(key, forHTTPHeaderField: "x-api-key")
+    request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+    request.timeoutInterval = 10
+    let body: [String: Any] = [
+      "model": "claude-sonnet-4-20250514",
+      "messages": [["role": "user", "content": "hi"]],
+      "max_tokens": 1,
+    ]
+    request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+    guard let (_, response) = try? await URLSession.shared.data(for: request),
+          let http = response as? HTTPURLResponse
+    else { return false }
+    return http.statusCode == 200
+
+  case .openAI:
+    // GET /v1/models is free and confirms the key.
+    var request = URLRequest(url: URL(string: "https://api.openai.com/v1/models")!)
+    request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+    request.timeoutInterval = 10
+    guard let (_, response) = try? await URLSession.shared.data(for: request),
+          let http = response as? HTTPURLResponse
+    else { return false }
+    return http.statusCode == 200
   }
 }

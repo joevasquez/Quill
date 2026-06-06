@@ -179,10 +179,30 @@ struct AIProcessingSectionView: View {
             .buttonStyle(.borderless)
           }
           if store.apiKeySaved {
-            Label("Saved to Keychain", systemImage: "checkmark.circle.fill")
-              .font(.caption)
-              .foregroundStyle(.green)
-              .transition(.opacity)
+            HStack(spacing: 6) {
+              Label("Saved to Keychain", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+              Text("·")
+                .foregroundStyle(.secondary)
+              if let valid = store.apiKeyValid {
+                if valid {
+                  Label("Key verified", systemImage: "checkmark.shield.fill")
+                    .foregroundStyle(.green)
+                } else {
+                  Label("Invalid key", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                }
+              } else {
+                HStack(spacing: 4) {
+                  ProgressView()
+                    .controlSize(.mini)
+                  Text("Verifying…")
+                    .foregroundStyle(.secondary)
+                }
+              }
+            }
+            .font(.caption)
+            .transition(.opacity)
           } else {
             Text("Your API key is stored securely in the macOS Keychain")
               .settingsCaption()

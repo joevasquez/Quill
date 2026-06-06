@@ -68,7 +68,8 @@ extension AIProcessingClient: DependencyKey {
               aiLogger.warning("Anthropic API key not configured; skipping AI processing")
               return text
             }
-            response = try await callAnthropic(text: text, systemPrompt: enrichedPrompt, apiKey: apiKey, skipTranscriptWrapping: skipTranscriptWrapping)
+            let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            response = try await callAnthropic(text: text, systemPrompt: enrichedPrompt, apiKey: trimmedKey, skipTranscriptWrapping: skipTranscriptWrapping)
           }
         } catch {
           // Capture LLM call failures (network / API / decoding) so we

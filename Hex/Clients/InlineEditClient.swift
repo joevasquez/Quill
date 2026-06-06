@@ -45,7 +45,7 @@ struct InlineEditClient {
   /// This is the same approach used by Raycast, Rewind, and most
   /// "AI text actions" apps. AX selection reading is too inconsistent
   /// across the macOS app ecosystem to rely on as the sole path.
-  var captureSelectionViaClipboard: @Sendable () async -> String? = { nil }
+  var captureSelectionViaClipboard: @Sendable (_ timeout: TimeInterval) async -> String? = { _ in nil }
 
   /// Replace the selected text in the focused element with `text`,
   /// returning true on success. Uses the same AX mechanism the
@@ -75,8 +75,8 @@ extension InlineEditClient: DependencyKey {
         // to the AX-talking helper.
         MainActor.assumeIsolated { _captureSelectionFromAX() }
       },
-      captureSelectionViaClipboard: {
-        await clipboardFallbackCapture()
+      captureSelectionViaClipboard: { timeout in
+        await clipboardFallbackCapture(timeout: timeout)
       },
       replaceSelection: { text in
         await MainActor.run { replaceSelectionSync(with: text) }
@@ -203,7 +203,7 @@ private func _captureSelectionFromAX() -> String? {
 /// Named to avoid collision with the `@DependencyClient`-generated
 /// `_captureSelectionViaClipboard` backing store.
 @MainActor
-private func clipboardFallbackCapture() async -> String? {
+private func clipboardFallbackCapture(timeout: TimeInterval = 0.15) async -> String? {
   guard AXIsProcessTrusted() else {
     // CGEvent.post silently fails without Accessibility permission —
     // same gate as the AX path.
@@ -254,9 +254,20 @@ private func clipboardFallbackCapture() async -> String? {
   cUp?.post(tap: .cghidEventTap)
   cmdUp?.post(tap: .cghidEventTap)
 
+  // Post a flags-changed event with empty flags to clear any stuck
+  // modifiers. VDI apps (Citrix, RDP) can swallow key-up events when
+  // they bridge CGEvent keystrokes to the remote session, leaving the
+  // Command key "held" — which freezes click/type in the remote desktop.
+  if let clearFlags = CGEvent(source: source) {
+    clearFlags.type = .flagsChanged
+    clearFlags.flags = []
+    clearFlags.post(tap: .cghidEventTap)
+  }
+
   // ── 3. Wait for the target app to process the copy ──
-  // 150 ms covers Chrome and Electron which can be sluggish.
-  try? await Task.sleep(for: .milliseconds(150))
+  // Default 150 ms covers Chrome and Electron. VDI apps (Citrix, RDP)
+  // need longer (500 ms) since the clipboard syncs over the network.
+  try? await Task.sleep(for: .milliseconds(Int(timeout * 1000)))
 
   // ── 4. Check if the pasteboard changed ──
   if pasteboard.changeCount == savedChangeCount {
@@ -388,6 +399,13 @@ private func sendUndoToSourceApp(bundleID: String?) async {
   zDown?.post(tap: .cghidEventTap)
   zUp?.post(tap: .cghidEventTap)
   cmdUp?.post(tap: .cghidEventTap)
+
+  // Clear stuck modifiers — VDI apps can swallow key-up events
+  if let clearFlags = CGEvent(source: source) {
+    clearFlags.type = .flagsChanged
+    clearFlags.flags = []
+    clearFlags.post(tap: .cghidEventTap)
+  }
 }
 
 // MARK: - Prompt
@@ -441,5 +459,32 @@ public enum InlineEditPrompt {
     \(selection)
     </selection>
     """
+  }
+
+  public static let noSelectionSystemPrompt: String = """
+    You are a voice-controlled text generator. The user spoke a command or instruction \
+    without selecting any text. Generate the requested content directly from their instruction.
+
+    CRITICAL RULES:
+    1. Return ONLY the generated content. Nothing else.
+    2. NEVER respond conversationally. NEVER ask questions, explain your reasoning, or add commentary.
+    3. The instruction was voice-dictated so minor transcription errors are expected — infer intent from context.
+    4. Match the format the user asked for (email, list, paragraph, code, etc.).
+    5. No preamble, no commentary, no wrapping tags, no quotes around the output.
+    """
+}
+
+public enum VDIBundleIdentifiers {
+  public static let known: Set<String> = [
+    "com.citrix.receiver.nomas",
+    "com.citrix.XenAppViewer",
+    "com.microsoft.rdc.macos",
+    "com.vmware.horizon",
+    "com.parallels.desktop.console",
+  ]
+
+  public static func isVDI(_ bundleID: String?) -> Bool {
+    guard let bundleID else { return false }
+    return known.contains(bundleID)
   }
 }

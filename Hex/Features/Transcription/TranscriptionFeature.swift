@@ -58,6 +58,13 @@ struct TranscriptionFeature {
     /// The raw transcript that was sent to the action LLM parser. Carried
     /// through to the confirmation panel so the "HEARD" section can quote it.
     var lastActionTranscript: String = ""
+    /// True when a clipboard-based selection capture is in flight (Edit mode,
+    /// AX failed). Prevents the transcription result from racing ahead of the
+    /// clipboard fallback — if the transcription finishes first, the result
+    /// is stashed in `pendingTranscriptionForEdit` and replayed once the
+    /// clipboard result arrives.
+    var editClipboardFallbackPending: Bool = false
+    var pendingTranscriptionForEdit: PendingTranscription?
     var recordingSessionID = UUID()
     @Shared(.hexSettings) var hexSettings: HexSettings
     @Shared(.isRemappingScratchpadFocused) var isRemappingScratchpadFocused: Bool = false
@@ -127,6 +134,11 @@ struct TranscriptionFeature {
     /// No-op if the digit is out of range or Action mode isn't active.
     case actionIntegrationKeyboardToggle(Int)
 
+    // Mode error feedback
+    case editModeNeedsAPIKey
+    case actionModeNeedsAPIKey
+    case editModeAIFailed(String)
+
     // Model availability
     case modelMissing
   }
@@ -136,6 +148,13 @@ struct TranscriptionFeature {
     let original: String
     let edited: String
     let sourceAppBundleID: String?
+  }
+
+  /// Stashed transcription result waiting for clipboard fallback to resolve.
+  struct PendingTranscription: Equatable {
+    let result: String
+    let audioURL: URL
+    let sessionID: UUID
   }
 
   enum CancelID {
@@ -265,35 +284,38 @@ struct TranscriptionFeature {
         return .none
 
       case let .editClipboardFallbackResult(selection, isEditMode):
+        state.editClipboardFallbackPending = false
+
         if let selection {
           state.inlineEditSelection = selection
           let charCount = selection.count
           transcriptionFeatureLogger.info(
             "Inline edit: clipboard fallback captured \(charCount) chars (isEditMode=\(isEditMode))"
           )
-          return .none
         } else if isEditMode {
-          state.editNeedsSelectionMessage = "Highlight text first"
-          state.isTranscribing = false
-          state.isPrewarming = false
+          // No selection captured. Don't cancel transcription — the
+          // Edit-mode-no-selection branch in handleTranscriptionResult
+          // will treat the dictation as a standalone AI instruction.
           transcriptionFeatureLogger.notice(
-            "Edit mode: both AX and clipboard capture failed — cancelling transcription, showing selection hint"
-          )
-          return .merge(
-            .cancel(id: CancelID.transcription),
-            .run { [soundEffect] send in
-              soundEffect.play(.cancel)
-              try? await Task.sleep(for: .seconds(3))
-              await send(.editNeedsSelectionDismiss)
-            }
-            .cancellable(id: CancelID.editNeedsSelectionTimer, cancelInFlight: true)
+            "Edit mode: both AX and clipboard capture failed — continuing with no-selection fallback"
           )
         } else {
           transcriptionFeatureLogger.info(
             "Dictate mode: both AX and clipboard capture failed — falling through to normal paste path"
           )
-          return .none
         }
+
+        // If the transcription result arrived before this clipboard
+        // fallback (race condition), replay the stashed result now
+        // that we know whether a selection was captured.
+        if let stashed = state.pendingTranscriptionForEdit {
+          state.pendingTranscriptionForEdit = nil
+          transcriptionFeatureLogger.info(
+            "Replaying stashed transcription result after clipboard fallback resolved"
+          )
+          return .send(.transcriptionResult(stashed.result, stashed.audioURL, sessionID: stashed.sessionID))
+        }
+        return .none
 
       case let .inlineEditApplied(pending):
         state.pendingEditResult = pending
@@ -355,11 +377,56 @@ struct TranscriptionFeature {
 
       case let .actionParsingFailed(rawText):
         transcriptionFeatureLogger.warning("Action parsing failed; falling back to paste")
+        state.editNeedsSelectionMessage = "Action failed — pasted as text"
         let bundleID = state.sourceAppBundleID
-        return .run { [pasteboard] _ in
-          await pasteboard.paste(rawText, bundleID)
-          soundEffect.play(.pasteTranscript)
-        }
+        return .merge(
+          .run { [pasteboard] _ in
+            await pasteboard.paste(rawText, bundleID)
+            soundEffect.play(.pasteTranscript)
+          },
+          .run { send in
+            try? await Task.sleep(for: .seconds(3))
+            await send(.editNeedsSelectionDismiss)
+          }
+          .cancellable(id: CancelID.editNeedsSelectionTimer, cancelInFlight: true)
+        )
+
+      case .editModeNeedsAPIKey:
+        state.editNeedsSelectionMessage = "Add an API key in Settings → AI"
+        return .merge(
+          .run { _ in soundEffect.play(.cancel) },
+          .run { send in
+            try? await Task.sleep(for: .seconds(3))
+            await send(.editNeedsSelectionDismiss)
+          }
+          .cancellable(id: CancelID.editNeedsSelectionTimer, cancelInFlight: true)
+        )
+
+      case .actionModeNeedsAPIKey:
+        state.editNeedsSelectionMessage = "Add an API key in Settings → AI"
+        return .merge(
+          .run { _ in soundEffect.play(.cancel) },
+          .run { send in
+            try? await Task.sleep(for: .seconds(3))
+            await send(.editNeedsSelectionDismiss)
+          }
+          .cancellable(id: CancelID.editNeedsSelectionTimer, cancelInFlight: true)
+        )
+
+      case let .editModeAIFailed(rawText):
+        state.editNeedsSelectionMessage = "Edit failed — pasted as text"
+        let bundleID = state.sourceAppBundleID
+        return .merge(
+          .run { [pasteboard] _ in
+            await pasteboard.paste(rawText, bundleID)
+            soundEffect.play(.pasteTranscript)
+          },
+          .run { send in
+            try? await Task.sleep(for: .seconds(3))
+            await send(.editNeedsSelectionDismiss)
+          }
+          .cancellable(id: CancelID.editNeedsSelectionTimer, cancelInFlight: true)
+        )
 
       case .actionParsingQueued:
         // Same audio cue as a successful paste — confirms something
@@ -644,6 +711,8 @@ private extension TranscriptionFeature {
     state.capturedContext = nil
     state.partialTranscript = ""
     state.inlineEditSelection = nil
+    state.editClipboardFallbackPending = false
+    state.pendingTranscriptionForEdit = nil
     state.isTranscribing = false
     state.isAIProcessing = false
 
@@ -755,17 +824,22 @@ private extension TranscriptionFeature {
     // the HUD is a non-activating panel, so AX reads the same state
     // the user saw when they pressed the hotkey.
     let isEditMode = state.selectedMode == .edit
+    let isVDI = VDIBundleIdentifiers.isVDI(state.sourceAppBundleID)
+
     if isEditMode || state.hexSettings.inlineEditEnabled {
       if let selection = inlineEdit.captureSelectionSync() {
         state.inlineEditSelection = selection
         transcriptionFeatureLogger.info(
           "Edit capture: AX got \(selection.count) chars at stop time"
         )
-      } else if !isEditMode {
-        transcriptionFeatureLogger.info(
-          "Inline edit enabled but no selection — normal paste path"
-        )
+      } else {
+        if !isEditMode {
+          transcriptionFeatureLogger.info(
+            "Inline edit enabled but no selection — normal paste path"
+          )
+        }
       }
+    } else {
     }
 
     // Otherwise, proceed to transcription
@@ -813,18 +887,21 @@ private extension TranscriptionFeature {
     )
 
     // If AX didn't capture and we attempted it (Edit mode or
-    // inlineEditEnabled), run clipboard fallback (~150 ms) in
-    // parallel with transcription (~1-3 s). The fallback result
-    // lands via editClipboardFallbackResult well before
-    // handleTranscriptionResult needs it.
+    // inlineEditEnabled), run clipboard fallback in parallel with
+    // transcription. The fallback result lands via
+    // editClipboardFallbackResult. If transcription finishes first
+    // (possible with warm models), the result is stashed and
+    // replayed once the clipboard result arrives.
     if (isEditMode || state.hexSettings.inlineEditEnabled) && state.inlineEditSelection == nil {
+      let clipboardTimeout: TimeInterval = isVDI ? 0.5 : 0.15
       transcriptionFeatureLogger.info(
-        "Inline edit: AX returned nil at stop (isEditMode=\(isEditMode)) — trying clipboard fallback in parallel with transcription"
+        "Inline edit: AX returned nil at stop (isEditMode=\(isEditMode) isVDI=\(isVDI)) — trying clipboard fallback (timeout=\(clipboardTimeout)s) in parallel with transcription"
       )
+      state.editClipboardFallbackPending = true
       return .merge(
         transcriptionEffect,
         .run { [inlineEdit] send in
-          let selection = await inlineEdit.captureSelectionViaClipboard()
+          let selection = await inlineEdit.captureSelectionViaClipboard(clipboardTimeout)
           await send(.editClipboardFallbackResult(selection, isEditMode: isEditMode))
         }
       )
@@ -851,6 +928,8 @@ private extension TranscriptionFeature {
     // into the active app's paste buffer, word-remapping output, voice
     // command detection, and history.
     let result = WhisperOutputCleaner.clean(rawResult)
+    if result != rawResult {
+    }
 
     // Check for force quit command (emergency escape hatch)
     if ForceQuitCommandDetector.matches(result) {
@@ -925,6 +1004,21 @@ private extension TranscriptionFeature {
       return .none
     }
 
+    // ── Fix A: If clipboard fallback is still in flight (Edit mode,
+    // AX failed), stash the transcription result and wait. The result
+    // will be replayed once editClipboardFallbackResult arrives.
+    if state.editClipboardFallbackPending && state.selectedMode == .edit && state.inlineEditSelection == nil {
+      transcriptionFeatureLogger.info(
+        "Stashing transcription result — clipboard fallback still pending"
+      )
+      state.pendingTranscriptionForEdit = PendingTranscription(
+        result: rawResult,
+        audioURL: audioURL,
+        sessionID: state.recordingSessionID
+      )
+      return .none
+    }
+
     // Resolve AI processing mode (context-aware or manual)
     let resolvedMode = resolveAIMode(state: state)
     let aiEnabled = state.hexSettings.aiProcessingEnabled && resolvedMode != .off
@@ -941,11 +1035,10 @@ private extension TranscriptionFeature {
     let transcriptionHistory = state.$transcriptionHistory
     let inlineEditSelection = state.inlineEditSelection
     let sessionID = state.recordingSessionID
+    let selectedMode = state.selectedMode
 
     // Decision-tree log — emitted before every finalize so we can
-    // see at a glance which branch (inline-edit vs normal paste)
-    // is taken and why. Surfaces in Console.app under the
-    // `com.joevasquez.Quill` subsystem.
+    // see at a glance which branch is taken and why.
     let _inlineEditEnabled = state.hexSettings.inlineEditEnabled
     let _selectionLabel: String = {
       guard let sel = inlineEditSelection else { return "nil" }
@@ -953,17 +1046,26 @@ private extension TranscriptionFeature {
     }()
     let _previewSnippet = String(modifiedResult.prefix(80))
     transcriptionFeatureLogger.info(
-      "Finalize: inlineEditEnabled=\(_inlineEditEnabled) inlineEditSelection=\(_selectionLabel) aiEnabled=\(aiEnabled) mode=\(resolvedMode.rawValue) preview=\"\(_previewSnippet, privacy: .private)\""
+      "Finalize: inlineEditEnabled=\(_inlineEditEnabled) inlineEditSelection=\(_selectionLabel) aiEnabled=\(aiEnabled) mode=\(resolvedMode.rawValue) selectedMode=\(selectedMode.rawValue) preview=\"\(_previewSnippet, privacy: .private)\""
     )
 
-    // Inline-edit branch: user had text selected when they started
-    // dictating AND (Edit mode is active OR inlineEditEnabled is on).
-    // Skip the normal AI mode + paste flow and instead ask the LLM
-    // to transform the selection per the dictated instruction, then
-    // replace it via AX. On success, surface an Accept/Undo pill.
+    // ── Branch 1: Inline edit (selection captured) ──
+    // User had text selected AND (Edit mode is active OR inlineEditEnabled
+    // is on). Send dictation as an edit instruction to the LLM, replace
+    // the selection with the result.
     if let selection = inlineEditSelection, !modifiedResult.isEmpty {
       state.isAIProcessing = true
-      return .run { [aiProcessing, inlineEdit, pasteboard] send in
+      return .run { [aiProcessing, inlineEdit, pasteboard, keychain] send in
+        // Fix B: verify API key before calling AI
+        let keychainKey = aiProvider == .openAI ? KeychainKey.openAIAPIKey : KeychainKey.anthropicAPIKey
+        guard let apiKey = await keychain.read(keychainKey), !apiKey.isEmpty else {
+          transcriptionFeatureLogger.warning("Inline edit: no \(aiProvider.displayName) API key — cannot process")
+          await send(.aiProcessingFinished)
+          await send(.editModeNeedsAPIKey)
+          try? FileManager.default.removeItem(at: audioURL)
+          return
+        }
+
         let userMessage = InlineEditPrompt.userMessage(
           instruction: modifiedResult,
           selection: selection
@@ -992,21 +1094,59 @@ private extension TranscriptionFeature {
           soundEffect.play(.pasteTranscript)
           try? FileManager.default.removeItem(at: audioURL)
         } catch {
-          transcriptionFeatureLogger.error("Inline edit AI failed: \(error.localizedDescription); pasting instruction as raw text")
+          // Fix C: surface the failure visibly
+          transcriptionFeatureLogger.error("Inline edit AI failed: \(error.localizedDescription)")
           await send(.aiProcessingFinished)
-          await pasteboard.paste(modifiedResult, sourceAppBundleID)
+          await send(.editModeAIFailed(modifiedResult))
           try? FileManager.default.removeItem(at: audioURL)
         }
       }
       .cancellable(id: CancelID.transcription)
     }
 
-    // Action mode branch: parse the voice command into a structured
-    // action intent via the LLM, then surface the confirmation panel.
-    if state.selectedMode == .action && !modifiedResult.isEmpty {
+    // ── Branch 2: Edit mode with no selection (no-selection fallback) ──
+    // User is in Edit mode but no text was selected. Treat the dictation
+    // as a standalone AI instruction and generate content directly.
+    if selectedMode == .edit && inlineEditSelection == nil && !modifiedResult.isEmpty {
       state.isAIProcessing = true
-      // Stash the raw transcript so the confirmation panel can quote it
-      // in the "HEARD" section.
+      return .run { [aiProcessing, pasteboard, keychain] send in
+        let keychainKey = aiProvider == .openAI ? KeychainKey.openAIAPIKey : KeychainKey.anthropicAPIKey
+        guard let apiKey = await keychain.read(keychainKey), !apiKey.isEmpty else {
+          transcriptionFeatureLogger.warning("Edit mode (no selection): no \(aiProvider.displayName) API key")
+          await send(.aiProcessingFinished)
+          await send(.editModeNeedsAPIKey)
+          try? FileManager.default.removeItem(at: audioURL)
+          return
+        }
+
+        do {
+          let generated = try await aiProcessing.process(
+            modifiedResult,
+            .clean,
+            aiProvider,
+            nil,
+            InlineEditPrompt.noSelectionSystemPrompt,
+            true
+          )
+          transcriptionFeatureLogger.info("Edit mode (no selection): AI generated \(generated.count) chars")
+          await send(.aiProcessingFinished)
+          await pasteboard.paste(generated, sourceAppBundleID)
+          soundEffect.play(.pasteTranscript)
+        } catch {
+          transcriptionFeatureLogger.error("Edit mode (no selection) AI failed: \(error.localizedDescription)")
+          await send(.aiProcessingFinished)
+          await send(.editModeAIFailed(modifiedResult))
+        }
+        try? FileManager.default.removeItem(at: audioURL)
+      }
+      .cancellable(id: CancelID.transcription)
+    }
+
+    // ── Branch 3: Action mode ──
+    // Parse the voice command into a structured action intent via the
+    // LLM, then surface the confirmation panel.
+    if selectedMode == .action && !modifiedResult.isEmpty {
+      state.isAIProcessing = true
       state.lastActionTranscript = modifiedResult
       return .run { [actionParsing] send in
         do {
@@ -1020,11 +1160,11 @@ private extension TranscriptionFeature {
         } catch {
           transcriptionFeatureLogger.error("Action parsing failed: \(error.localizedDescription)")
           await send(.aiProcessingFinished)
-          // Transient network errors → queue the raw transcript so the
-          // offline queue can re-parse + execute when we're back online.
-          // Permanent errors (auth, malformed JSON) fall through to the
-          // existing paste-fallback path.
-          if QueueableErrorClassifier.isQueueable(error) {
+          // Fix B: distinguish missing API key from other failures
+          if let actionError = error as? ActionParsingError,
+             case .missingAPIKey = actionError {
+            await send(.actionModeNeedsAPIKey)
+          } else if QueueableErrorClassifier.isQueueable(error) {
             await ActionQueueManager.shared.enqueueTranscript(
               modifiedResult,
               provider: aiProvider,
@@ -1040,9 +1180,9 @@ private extension TranscriptionFeature {
       .cancellable(id: CancelID.transcription)
     }
 
+    // ── Branch 4: Dictate mode (default) ──
     return .run { [aiProcessing] send in
       do {
-        // AI post-processing (if enabled)
         var finalResult = modifiedResult
         if aiEnabled {
           do {
@@ -1050,7 +1190,6 @@ private extension TranscriptionFeature {
             transcriptionFeatureLogger.info("AI processing produced \(finalResult.count) chars from \(modifiedResult.count) chars")
           } catch {
             transcriptionFeatureLogger.error("AI processing failed, using unprocessed text: \(error.localizedDescription)")
-            // Fall back to unprocessed text on AI error
           }
           await send(.aiProcessingFinished)
         }

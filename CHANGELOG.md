@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.0
+
+### Minor Changes
+
+- Fix Edit mode routing: resolve race condition where Parakeet's fast transcription (0.07s) beat clipboard selection capture, causing raw dictation text to be pasted instead of AI-processed edits
+
+### Patch Changes
+
+- Fix frozen input in Citrix/RDP after dictation: clear stuck modifier keys by posting an empty flagsChanged event after every CGEvent key sequence
+- Add API key validation in Settings: real-time 'Key verified' / 'Invalid key' indicator, auto-trim whitespace from pasted keys, and guard Edit/Action modes against missing keys with clear HUD feedback
+
 ## 0.14.0
 
 ### Minor Changes

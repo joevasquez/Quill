@@ -258,7 +258,14 @@ struct PasteboardClientLive {
             let modUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
             modUp?.post(tap: .cghidEventTap)
         }
-        
+
+        // Clear stuck modifiers — VDI apps can swallow key-up events
+        if !modifierKeyCodes.isEmpty, let clearFlags = CGEvent(source: source) {
+            clearFlags.type = .flagsChanged
+            clearFlags.flags = []
+            clearFlags.post(tap: .cghidEventTap)
+        }
+
         pasteboardLogger.debug("Sent keyboard command: \(command.displayName)")
     }
 
@@ -477,6 +484,15 @@ struct PasteboardClientLive {
         vDown?.post(tap: .cghidEventTap)
         vUp?.post(tap: .cghidEventTap)
         cmdUp?.post(tap: .cghidEventTap)
+
+        // Clear stuck modifiers — VDI apps (Citrix, RDP) can swallow
+        // key-up events when bridging to the remote session, leaving
+        // Command "held" and freezing click/type in the remote desktop.
+        if let clearFlags = CGEvent(source: source) {
+            clearFlags.type = .flagsChanged
+            clearFlags.flags = []
+            clearFlags.post(tap: .cghidEventTap)
+        }
         return true
     }
 
