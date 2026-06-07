@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.18.0
+
+### Minor Changes
+
+- Add Auto mode — a fourth mode (Auto → Dictate → Edit → Action) that auto-detects intent from voice transcripts using keyword matching, routing to Edit when text is highlighted with edit commands, Action for task/reminder keywords, and Dictate by default
+
+### Patch Changes
+
+- Compact orb idle layout — narrower at rest with caption closer to the orb, expanding both horizontally and vertically when recording starts
+
 ## 0.17.0
 
 ### Minor Changes

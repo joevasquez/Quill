@@ -29,12 +29,14 @@ struct TranscriptionIndicatorView: View {
   // MARK: Mode — user-selected dictation kind
 
   enum Mode: String, CaseIterable, Equatable {
+    case auto = "Auto"
     case dictate = "Dictate"
     case edit = "Edit"
     case action = "Action"
 
     var icon: String {
       switch self {
+      case .auto:    return "sparkles"
       case .dictate: return "waveform"
       case .edit:    return "pencil"
       case .action:  return "bolt.fill"
@@ -43,6 +45,7 @@ struct TranscriptionIndicatorView: View {
 
     var accentColor: Color {
       switch self {
+      case .auto:    return .gray
       case .dictate: return .blue
       case .edit:    return .orange
       case .action:  return .purple
@@ -78,6 +81,8 @@ struct TranscriptionIndicatorView: View {
   /// User's hard-locked Action integration, if any. The locked button
   /// shows full tint + a white ring.
   var lockedActionIntegration: Integration.Identifier?
+  /// When mode is .auto, the detected sub-mode (dictate/edit/action).
+  var autoDetectedMode: Mode = .dictate
   var isPinnedToTop: Bool = false
   var onCycleMode: () -> Void
   var onEditAccept: () -> Void
@@ -265,17 +270,40 @@ struct TranscriptionIndicatorView: View {
 
   // MARK: Mode chip — always visible on the left
 
+  /// The display mode for the chip: Auto shows the detected sub-mode
+  /// icon/color when live; otherwise shows the sparkles icon.
+  private var displayMode: Mode {
+    mode == .auto && status != .idle ? autoDetectedMode : mode
+  }
+
   private var modeChip: some View {
     HStack(spacing: 5) {
-      Image(systemName: mode.icon)
+      Image(systemName: displayMode.icon)
         .font(.system(size: 11, weight: .semibold))
-        .foregroundStyle(mode.accentColor)
+        .foregroundStyle(displayMode.accentColor)
         .contentTransition(.symbolEffect(.replace))
 
-      Text(mode.rawValue)
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(.white.opacity(0.9))
+      if mode == .auto {
+        HStack(spacing: 3) {
+          Text("Auto")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.9))
+          if status != .idle {
+            Text("·")
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundStyle(.white.opacity(0.4))
+            Text(autoDetectedMode.rawValue)
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundStyle(autoDetectedMode.accentColor)
+          }
+        }
         .contentTransition(.numericText())
+      } else {
+        Text(mode.rawValue)
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(.white.opacity(0.9))
+          .contentTransition(.numericText())
+      }
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 5)
@@ -375,7 +403,7 @@ struct TranscriptionIndicatorView: View {
 
   private var shadowGlow: Color {
     switch status {
-    case .idle:         return mode.accentColor
+    case .idle:         return displayMode.accentColor
     case .recording:    return .red
     case .transcribing: return .blue
     case .aiProcessing: return .purple

@@ -38,8 +38,12 @@ struct TranscriptionFeature {
     /// pipeline branches on this at finalize time.
     var inlineEditSelection: String?
     /// User-selected mode for the HUD pill. Cycles through
-    /// Dictate → Edit → Action on tap.
-    var selectedMode: TranscriptionIndicatorView.Mode = .dictate
+    /// Auto → Dictate → Edit → Action on tap.
+    var selectedMode: TranscriptionIndicatorView.Mode = .auto
+    /// When selectedMode is .auto, the live-detected sub-mode based
+    /// on partial transcript keyword analysis. Updated on every
+    /// partialTranscriptUpdated. Reset on recording start.
+    var autoDetectedMode: TranscriptionIndicatorView.Mode = .dictate
     /// Transient message shown when the user tries to record in
     /// Edit mode without highlighting text. Auto-dismissed after 3s.
     var editNeedsSelectionMessage: String?
@@ -258,6 +262,11 @@ struct TranscriptionFeature {
 
       case let .partialTranscriptUpdated(text):
         state.partialTranscript = text
+        // In Auto mode, run the classifier on every partial transcript
+        // update so the orb badge shifts in real time.
+        if state.selectedMode == .auto {
+          state.autoDetectedMode = AutoModeClassifier.classifyPartial(text)
+        }
         return .none
 
       case let .inlineEditSelectionCaptured(selection):
@@ -269,10 +278,13 @@ struct TranscriptionFeature {
         state.selectedMode = state.selectedMode.next
         let modeName = state.selectedMode.rawValue
         transcriptionFeatureLogger.info("Mode cycled to \(modeName)")
-        // Refresh available integrations whenever the user enters Action
-        // mode — the user may have just signed into Google or connected
-        // Todoist in another window.
-        if state.selectedMode == .action {
+        // Reset auto-detected mode when entering Auto.
+        if state.selectedMode == .auto {
+          state.autoDetectedMode = .dictate
+        }
+        // Refresh available integrations for Action or Auto (Auto may
+        // resolve to Action at stop time).
+        if state.selectedMode == .action || state.selectedMode == .auto {
           return .send(.loadActionIntegrations)
         }
         return .none
@@ -715,6 +727,7 @@ private extension TranscriptionFeature {
     state.pendingTranscriptionForEdit = nil
     state.isTranscribing = false
     state.isAIProcessing = false
+    state.autoDetectedMode = .dictate
 
     // Capture the active application
     if let activeApp = NSWorkspace.shared.frontmostApplication {
@@ -824,16 +837,19 @@ private extension TranscriptionFeature {
     // the HUD is a non-activating panel, so AX reads the same state
     // the user saw when they pressed the hotkey.
     let isEditMode = state.selectedMode == .edit
+    let isAutoMode = state.selectedMode == .auto
     let isVDI = VDIBundleIdentifiers.isVDI(state.sourceAppBundleID)
 
-    if isEditMode || state.hexSettings.inlineEditEnabled {
+    // Auto mode always attempts selection capture so we know at
+    // transcription-result time whether the user had text selected.
+    if isEditMode || isAutoMode || state.hexSettings.inlineEditEnabled {
       if let selection = inlineEdit.captureSelectionSync() {
         state.inlineEditSelection = selection
         transcriptionFeatureLogger.info(
-          "Edit capture: AX got \(selection.count) chars at stop time"
+          "Edit capture: AX got \(selection.count) chars at stop time (isAutoMode=\(isAutoMode))"
         )
       } else {
-        if !isEditMode {
+        if !isEditMode && !isAutoMode {
           transcriptionFeatureLogger.info(
             "Inline edit enabled but no selection — normal paste path"
           )
@@ -892,17 +908,17 @@ private extension TranscriptionFeature {
     // editClipboardFallbackResult. If transcription finishes first
     // (possible with warm models), the result is stashed and
     // replayed once the clipboard result arrives.
-    if (isEditMode || state.hexSettings.inlineEditEnabled) && state.inlineEditSelection == nil {
+    if (isEditMode || isAutoMode || state.hexSettings.inlineEditEnabled) && state.inlineEditSelection == nil {
       let clipboardTimeout: TimeInterval = isVDI ? 0.5 : 0.15
       transcriptionFeatureLogger.info(
-        "Inline edit: AX returned nil at stop (isEditMode=\(isEditMode) isVDI=\(isVDI)) — trying clipboard fallback (timeout=\(clipboardTimeout)s) in parallel with transcription"
+        "Edit/Auto capture: AX returned nil at stop (isEditMode=\(isEditMode) isAutoMode=\(isAutoMode) isVDI=\(isVDI)) — trying clipboard fallback (timeout=\(clipboardTimeout)s) in parallel with transcription"
       )
       state.editClipboardFallbackPending = true
       return .merge(
         transcriptionEffect,
         .run { [inlineEdit] send in
           let selection = await inlineEdit.captureSelectionViaClipboard(clipboardTimeout)
-          await send(.editClipboardFallbackResult(selection, isEditMode: isEditMode))
+          await send(.editClipboardFallbackResult(selection, isEditMode: isEditMode || isAutoMode))
         }
       )
     }
@@ -1004,10 +1020,10 @@ private extension TranscriptionFeature {
       return .none
     }
 
-    // ── Fix A: If clipboard fallback is still in flight (Edit mode,
+    // ── Fix A: If clipboard fallback is still in flight (Edit/Auto mode,
     // AX failed), stash the transcription result and wait. The result
     // will be replayed once editClipboardFallbackResult arrives.
-    if state.editClipboardFallbackPending && state.selectedMode == .edit && state.inlineEditSelection == nil {
+    if state.editClipboardFallbackPending && (state.selectedMode == .edit || state.selectedMode == .auto) && state.inlineEditSelection == nil {
       transcriptionFeatureLogger.info(
         "Stashing transcription result — clipboard fallback still pending"
       )
@@ -1017,6 +1033,23 @@ private extension TranscriptionFeature {
         sessionID: state.recordingSessionID
       )
       return .none
+    }
+
+    // ── Auto mode: resolve the effective pipeline mode ──
+    // Uses the full transcript + selection state to decide which branch
+    // (Edit / Action / Dictate) to route through.
+    let effectiveMode: TranscriptionIndicatorView.Mode
+    if state.selectedMode == .auto {
+      effectiveMode = AutoModeClassifier.resolve(
+        transcript: modifiedResult,
+        hasSelection: state.inlineEditSelection != nil,
+        hasIntegrations: !state.availableActionIntegrations.isEmpty
+      )
+      state.autoDetectedMode = effectiveMode
+      let _hasSelection = state.inlineEditSelection != nil
+      transcriptionFeatureLogger.info("Auto mode resolved to \(effectiveMode.rawValue) (hasSelection=\(_hasSelection))")
+    } else {
+      effectiveMode = state.selectedMode
     }
 
     // Resolve AI processing mode (context-aware or manual)
@@ -1046,14 +1079,19 @@ private extension TranscriptionFeature {
     }()
     let _previewSnippet = String(modifiedResult.prefix(80))
     transcriptionFeatureLogger.info(
-      "Finalize: inlineEditEnabled=\(_inlineEditEnabled) inlineEditSelection=\(_selectionLabel) aiEnabled=\(aiEnabled) mode=\(resolvedMode.rawValue) selectedMode=\(selectedMode.rawValue) preview=\"\(_previewSnippet, privacy: .private)\""
+      "Finalize: inlineEditEnabled=\(_inlineEditEnabled) inlineEditSelection=\(_selectionLabel) aiEnabled=\(aiEnabled) mode=\(resolvedMode.rawValue) selectedMode=\(selectedMode.rawValue) effectiveMode=\(effectiveMode.rawValue) preview=\"\(_previewSnippet, privacy: .private)\""
     )
 
     // ── Branch 1: Inline edit (selection captured) ──
-    // User had text selected AND (Edit mode is active OR inlineEditEnabled
-    // is on). Send dictation as an edit instruction to the LLM, replace
-    // the selection with the result.
-    if let selection = inlineEditSelection, !modifiedResult.isEmpty {
+    // Fires when selection exists AND one of:
+    //  - Auto resolved to Edit (selection + edit keywords)
+    //  - Explicit Edit mode is active
+    //  - inlineEditEnabled is on (any non-Auto mode)
+    let shouldInlineEdit = inlineEditSelection != nil && (
+      effectiveMode == .edit ||
+      (selectedMode != .auto && _inlineEditEnabled)
+    )
+    if shouldInlineEdit, let selection = inlineEditSelection, !modifiedResult.isEmpty {
       state.isAIProcessing = true
       return .run { [aiProcessing, inlineEdit, pasteboard, keychain] send in
         // Fix B: verify API key before calling AI
@@ -1105,9 +1143,9 @@ private extension TranscriptionFeature {
     }
 
     // ── Branch 2: Edit mode with no selection (no-selection fallback) ──
-    // User is in Edit mode but no text was selected. Treat the dictation
-    // as a standalone AI instruction and generate content directly.
-    if selectedMode == .edit && inlineEditSelection == nil && !modifiedResult.isEmpty {
+    // User is in explicit Edit mode (not Auto) but no text was selected.
+    // Treat the dictation as a standalone AI instruction.
+    if effectiveMode == .edit && inlineEditSelection == nil && !modifiedResult.isEmpty {
       state.isAIProcessing = true
       return .run { [aiProcessing, pasteboard, keychain] send in
         let keychainKey = aiProvider == .openAI ? KeychainKey.openAIAPIKey : KeychainKey.anthropicAPIKey
@@ -1145,7 +1183,7 @@ private extension TranscriptionFeature {
     // ── Branch 3: Action mode ──
     // Parse the voice command into a structured action intent via the
     // LLM, then surface the confirmation panel.
-    if selectedMode == .action && !modifiedResult.isEmpty {
+    if effectiveMode == .action && !modifiedResult.isEmpty {
       state.isAIProcessing = true
       state.lastActionTranscript = modifiedResult
       return .run { [actionParsing] send in
@@ -1412,6 +1450,7 @@ struct TranscriptionView: View {
     }
     let keys = parts.joined(separator: " ")
     let verb: String = switch store.selectedMode {
+    case .auto: "to start"
     case .dictate: "to dictate"
     case .edit: "to edit"
     case .action: "for action"
@@ -1433,6 +1472,7 @@ struct TranscriptionView: View {
           partialTranscript: store.partialTranscript,
           actionIntegrations: store.availableActionIntegrations,
           lockedActionIntegration: store.lockedActionIntegration,
+          autoDetectedMode: store.autoDetectedMode,
           isPinnedToTop: store.hexSettings.hudPinnedToTop,
           onCycleMode: { store.send(.cycleMode) },
           onEditAccept: { store.send(.inlineEditAccept) },
@@ -1451,6 +1491,7 @@ struct TranscriptionView: View {
           partialTranscript: store.partialTranscript,
           actionIntegrations: store.availableActionIntegrations,
           lockedActionIntegration: store.lockedActionIntegration,
+          autoDetectedMode: store.autoDetectedMode,
           isPinnedToTop: store.hexSettings.hudPinnedToTop,
           onCycleMode: { store.send(.cycleMode) },
           onEditAccept: { store.send(.inlineEditAccept) },

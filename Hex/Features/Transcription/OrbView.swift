@@ -14,6 +14,7 @@ import SwiftUI
 // MARK: - Orb colour constants
 
 private enum OrbHue {
+  static let auto: Double = 220
   static let dictate: Double = 248
   static let edit: Double = 305
   static let action: Double = 188
@@ -23,6 +24,7 @@ private enum OrbHue {
 private extension TranscriptionIndicatorView.Mode {
   var orbHue: Double {
     switch self {
+    case .auto:    return OrbHue.auto
     case .dictate: return OrbHue.dictate
     case .edit:    return OrbHue.edit
     case .action:  return OrbHue.action
@@ -62,6 +64,8 @@ struct OrbView: View {
   var partialTranscript: String = ""
   var actionIntegrations: [Integration.Identifier] = []
   var lockedActionIntegration: Integration.Identifier?
+  /// When mode is .auto, the detected sub-mode (dictate/edit/action).
+  var autoDetectedMode: Mode = .dictate
   var isPinnedToTop: Bool = false
   var onCycleMode: () -> Void
   var onEditAccept: () -> Void
@@ -77,18 +81,25 @@ struct OrbView: View {
   private var isListening: Bool { status == .recording }
   private var isTranscribing: Bool { status == .transcribing || status == .aiProcessing }
 
-  private var isActMode: Bool { mode == .action }
+  private var isActMode: Bool {
+    mode == .action || (mode == .auto && autoDetectedMode == .action)
+  }
 
   private var showResult: Bool {
     status == .idle && pendingEditResult != nil
   }
 
+  /// The hue the orb is heading toward. In Auto mode the hue shifts
+  /// to the detected sub-mode's hue during recording.
   private var targetHue: Double {
-    showResult ? OrbHue.success : mode.orbHue
+    if showResult { return OrbHue.success }
+    if mode == .auto && isLive { return autoDetectedMode.orbHue }
+    return mode.orbHue
   }
 
   private var targetSaturation: Double {
-    isLive ? 0.75 : 0.5
+    if mode == .auto && !isLive { return 0.3 }
+    return isLive ? 0.75 : 0.5
   }
 
   private var orbColor: Color {
@@ -135,6 +146,7 @@ struct OrbView: View {
     .animation(.snappy(duration: 0.25), value: partialTranscript.isEmpty)
     .animation(.snappy(duration: 0.25), value: lockedActionIntegration)
     .animation(.snappy(duration: 0.25), value: intuitedTarget)
+    .animation(.snappy(duration: 0.3), value: autoDetectedMode)
     .onAppear {
       displayedHue = targetHue
       displayedSaturation = targetSaturation
@@ -201,8 +213,8 @@ struct OrbView: View {
 
       orbCaption
     }
-    .padding(.horizontal, 24)
-    .padding(.vertical, 16)
+    .padding(.horizontal, isLive ? 24 : 16)
+    .padding(.vertical, isLive ? 16 : 14)
     .background(orbBackdrop)
   }
 
@@ -328,13 +340,13 @@ struct OrbView: View {
   // MARK: - Caption (below the orb — single transcript location)
 
   private var orbCaption: some View {
-    VStack(spacing: 6) {
+    VStack(spacing: 4) {
       modeBadge
       captionText
       statusLine
     }
-    .frame(width: 300)
-    .padding(.top, 4)
+    .frame(width: isLive ? 280 : 180)
+    .padding(.top, 2)
   }
 
   @ViewBuilder
@@ -345,9 +357,23 @@ struct OrbView: View {
           .fill(orbColor)
           .frame(width: 6, height: 6)
           .shadow(color: orbColor, radius: 4)
-        Text(mode.rawValue)
-          .font(.system(size: 12.5, weight: .semibold))
-          .foregroundStyle(orbColor)
+        if mode == .auto {
+          HStack(spacing: 4) {
+            Text("Auto")
+              .font(.system(size: 12.5, weight: .semibold))
+              .foregroundStyle(.white.opacity(0.6))
+            Text("\u{00B7}")
+              .font(.system(size: 12.5, weight: .semibold))
+              .foregroundStyle(.white.opacity(0.35))
+            Text(autoDetectedMode.rawValue)
+              .font(.system(size: 12.5, weight: .semibold))
+              .foregroundStyle(orbColor)
+          }
+        } else {
+          Text(mode.rawValue)
+            .font(.system(size: 12.5, weight: .semibold))
+            .foregroundStyle(orbColor)
+        }
       }
       .padding(.horizontal, 12)
       .padding(.vertical, 5)
