@@ -27,6 +27,38 @@ public struct Integration: Identifiable, Equatable, Hashable, Sendable {
 
   public var id: String { identifier.rawValue }
 
+  /// OKLCH-style hue (0–360) for the orb satellite ring accent colour.
+  public var satelliteHue: Double {
+    switch identifier {
+    case .todoist:        return 12
+    case .appleReminders: return 25
+    case .calendar:       return 255
+    case .googleCalendar: return 145
+    case .gmail:          return 330
+    case .notion:         return 0
+    case .things:         return 220
+    case .slack:          return 290
+    case .linear:         return 250
+    }
+  }
+
+  /// Keywords the destination classifier scans for when intuiting the
+  /// target app from partial transcript text. Ordered by priority —
+  /// explicit app names should appear before generic verbs.
+  public var intuitKeywords: [String] {
+    switch identifier {
+    case .todoist:        return ["todoist"]
+    case .appleReminders: return ["remind", "reminder", "reminders"]
+    case .calendar:       return ["calendar", "schedule", "meeting", "invite", "event", "block"]
+    case .googleCalendar: return ["google cal", "gcal", "google calendar"]
+    case .gmail:          return ["gmail", "email", "e-mail", "mail", "draft"]
+    case .notion:         return ["notion"]
+    case .things:         return ["things"]
+    case .slack:          return ["slack", "message", "dm"]
+    case .linear:         return ["linear", "issue", "ticket", "bug"]
+    }
+  }
+
   public static let all: [Integration] = [
     .init(
       identifier: .todoist,

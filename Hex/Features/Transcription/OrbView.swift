@@ -35,6 +35,9 @@ private extension TranscriptionIndicatorView.Mode {
 private enum OrbSize {
   static let core: CGFloat = 81
   static let field: CGFloat = 160
+  static let fieldWithRing: CGFloat = 220
+  static let satelliteRingRadius: CGFloat = 90
+  static let satelliteTileSize: CGFloat = 32
   static let meterFrame: CGFloat = 130
   static let meterRadius: CGFloat = 50
   static let arcFrame: CGFloat = 100
@@ -68,10 +71,13 @@ struct OrbView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var displayedHue: Double = OrbHue.dictate
   @State private var displayedSaturation: Double = 0.5
+  @State private var intuitedTarget: Integration.Identifier?
 
   private var isLive: Bool { status != .idle }
   private var isListening: Bool { status == .recording }
   private var isTranscribing: Bool { status == .transcribing || status == .aiProcessing }
+
+  private var isActMode: Bool { mode == .action }
 
   private var showResult: Bool {
     status == .idle && pendingEditResult != nil
@@ -93,6 +99,11 @@ struct OrbView: View {
     isListening ? min(1.0, meter.averagePower * 2.5) : 0
   }
 
+  /// The currently-highlighted integration: user lock wins, then AI intuition.
+  private var activeTarget: Integration.Identifier? {
+    lockedActionIntegration ?? intuitedTarget
+  }
+
   // MARK: Body
 
   var body: some View {
@@ -101,11 +112,6 @@ struct OrbView: View {
         .onTapGesture { onCycleMode() }
         .accessibilityLabel("Quill orb, \(mode.rawValue) mode")
         .accessibilityValue(statusAccessibilityLabel)
-
-      if mode == .action, !actionIntegrations.isEmpty {
-        actionIntegrationRow
-          .transition(.move(edge: .top).combined(with: .opacity))
-      }
 
       if let msg = editMessage {
         Text(msg)
@@ -128,6 +134,7 @@ struct OrbView: View {
     .animation(.snappy(duration: 0.25), value: pendingEditResult != nil)
     .animation(.snappy(duration: 0.25), value: partialTranscript.isEmpty)
     .animation(.snappy(duration: 0.25), value: lockedActionIntegration)
+    .animation(.snappy(duration: 0.25), value: intuitedTarget)
     .onAppear {
       displayedHue = targetHue
       displayedSaturation = targetSaturation
@@ -140,6 +147,22 @@ struct OrbView: View {
     .onChange(of: targetSaturation) { _, newSat in
       withAnimation(.easeInOut(duration: 0.4)) {
         displayedSaturation = newSat
+      }
+    }
+    .onChange(of: partialTranscript) { _, text in
+      guard isActMode, lockedActionIntegration == nil else { return }
+      withAnimation(.easeOut(duration: 0.25)) {
+        intuitedTarget = Self.intuitTarget(from: text, integrations: actionIntegrations)
+      }
+    }
+    .onChange(of: mode) { _, newMode in
+      if newMode != .action {
+        intuitedTarget = nil
+      }
+    }
+    .onChange(of: status) { _, newStatus in
+      if newStatus == .idle {
+        intuitedTarget = nil
       }
     }
   }
@@ -156,17 +179,25 @@ struct OrbView: View {
   // MARK: - Orb field (sphere + effects + backdrop)
 
   private var orbField: some View {
-    VStack(spacing: 0) {
+    let fieldSize = isActMode && !actionIntegrations.isEmpty ? OrbSize.fieldWithRing : OrbSize.field
+    return VStack(spacing: 0) {
       ZStack {
+        if isActMode, !actionIntegrations.isEmpty {
+          satelliteTether
+        }
         orbGlow
         pulseRings
         orbMeter
         spinnerArc
         orbCore
         checkMark
-        orbParticles
+        if isActMode, !actionIntegrations.isEmpty {
+          satelliteRing
+        } else {
+          orbParticles
+        }
       }
-      .frame(width: OrbSize.field, height: OrbSize.field)
+      .frame(width: fieldSize, height: fieldSize)
 
       orbCaption
     }
@@ -391,35 +422,79 @@ struct OrbView: View {
     .frame(height: 14)
   }
 
-  // MARK: - Action integration row (reused)
+  // MARK: - Act-mode satellite ring
 
-  private var actionIntegrationRow: some View {
-    ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: 6) {
-        ForEach(Array(actionIntegrations.prefix(9).enumerated()), id: \.offset) { offset, id in
-          IntegrationToggleButton(
-            identifier: id,
-            isLocked: lockedActionIntegration == id,
-            shortcutNumber: offset + 1,
-            onTap: { onToggleActionIntegration(id) }
-          )
-        }
+  private var satelliteRing: some View {
+    let integrations = Array(actionIntegrations.prefix(9))
+    return ZStack {
+      ForEach(Array(integrations.enumerated()), id: \.element) { index, id in
+        OrbSatelliteTile(
+          identifier: id,
+          isTarget: activeTarget == id,
+          index: index,
+          total: integrations.count,
+          radius: OrbSize.satelliteRingRadius,
+          onTap: { onToggleActionIntegration(id) }
+        )
       }
-      .padding(.horizontal, 8)
-      .padding(.vertical, 6)
     }
-    .background(
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
-        .fill(.ultraThinMaterial)
-        .overlay(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .fill(.black.opacity(0.25))
-        )
-        .overlay(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(.white.opacity(0.15), lineWidth: 1)
-        )
-    )
+    .transition(.opacity.animation(.easeOut(duration: 0.35)))
+  }
+
+  private var satelliteTether: some View {
+    let integrations = Array(actionIntegrations.prefix(9))
+    return Canvas { context, size in
+      guard let target = activeTarget,
+            let index = integrations.firstIndex(of: target)
+      else { return }
+      let center = CGPoint(x: size.width / 2, y: size.height / 2)
+      let angle = Self.satelliteAngle(index: index, total: integrations.count)
+      let dest = CGPoint(
+        x: center.x + OrbSize.satelliteRingRadius * cos(angle),
+        y: center.y + OrbSize.satelliteRingRadius * sin(angle)
+      )
+      let integration = Integration.all.first { $0.identifier == target }
+      let hue = integration?.satelliteHue ?? 200
+      let color = Color(hue: hue / 360.0, saturation: 0.6, brightness: 0.85)
+      var path = Path()
+      path.move(to: center)
+      path.addLine(to: dest)
+      context.stroke(
+        path,
+        with: .color(color.opacity(0.6)),
+        style: StrokeStyle(lineWidth: 1.5, dash: [3, 4])
+      )
+    }
+    .allowsHitTesting(false)
+    .animation(.easeOut(duration: 0.3), value: activeTarget)
+  }
+
+  // MARK: - Destination classifier
+
+  static func intuitTarget(
+    from text: String,
+    integrations: [Integration.Identifier]
+  ) -> Integration.Identifier? {
+    guard !text.isEmpty else { return nil }
+    let lowered = " " + text.lowercased() + " "
+    let priority: [Integration.Identifier] = [
+      .todoist, .gmail, .googleCalendar, .appleReminders, .calendar,
+      .notion, .things, .slack, .linear,
+    ]
+    for id in priority {
+      guard integrations.contains(id) else { continue }
+      let integration = Integration.all.first { $0.identifier == id }
+      guard let keywords = integration?.intuitKeywords else { continue }
+      for kw in keywords {
+        if lowered.contains(kw) { return id }
+      }
+    }
+    return nil
+  }
+
+  static func satelliteAngle(index: Int, total: Int) -> CGFloat {
+    let startAngle = -CGFloat.pi / 2 // top
+    return startAngle + CGFloat(index) * (2 * .pi / CGFloat(total))
   }
 
   // MARK: - Edit acceptance pill (reused)
@@ -697,6 +772,61 @@ private struct OrbParticle: View {
           }
         }
       }
+  }
+}
+
+// MARK: - Satellite tile (Act-mode integration button)
+
+private struct OrbSatelliteTile: View {
+  let identifier: Integration.Identifier
+  let isTarget: Bool
+  let index: Int
+  let total: Int
+  let radius: CGFloat
+  let onTap: () -> Void
+
+  private var integration: Integration? {
+    Integration.all.first { $0.identifier == identifier }
+  }
+
+  private var accentColor: Color {
+    let hue = integration?.satelliteHue ?? 200
+    return Color(hue: hue / 360.0, saturation: 0.6, brightness: 0.85)
+  }
+
+  private var angle: CGFloat {
+    OrbView.satelliteAngle(index: index, total: total)
+  }
+
+  var body: some View {
+    let x = radius * cos(angle)
+    let y = radius * sin(angle)
+    Button(action: onTap) {
+      Image(systemName: integration?.systemImage ?? "questionmark.circle")
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(isTarget ? .white : .white.opacity(0.7))
+        .frame(width: OrbSize.satelliteTileSize, height: OrbSize.satelliteTileSize)
+        .background(
+          RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .fill(isTarget ? accentColor : Color.white.opacity(0.08))
+        )
+        .overlay(
+          RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .strokeBorder(
+              isTarget ? accentColor : Color.white.opacity(0.15),
+              lineWidth: 1
+            )
+        )
+        .shadow(
+          color: isTarget ? accentColor.opacity(0.6) : .clear,
+          radius: isTarget ? 10 : 0
+        )
+        .scaleEffect(isTarget ? 1.16 : 1.0)
+    }
+    .buttonStyle(.plain)
+    .offset(x: x, y: y)
+    .animation(.spring(response: 0.35, dampingFraction: 0.7), value: isTarget)
+    .accessibilityLabel("Send to \(integration?.name ?? identifier.rawValue)")
   }
 }
 

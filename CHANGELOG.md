@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.0
+
+### Minor Changes
+
+- Add Act-mode satellite ring to the Orb display — connected integrations appear as tappable tiles around the orb, with live AI-driven target highlighting from partial transcript and click-to-lock override
+
 ## 0.16.0
 
 ### Minor Changes
