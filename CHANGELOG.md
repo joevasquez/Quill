@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.0
+
+### Minor Changes
+
+- Add usage stats dashboard to History tab showing words transcribed, dictation/edit/action counts, and estimated time saved. Save edit and action transcriptions to history alongside dictations.
+
 ## 0.18.0
 
 ### Minor Changes
