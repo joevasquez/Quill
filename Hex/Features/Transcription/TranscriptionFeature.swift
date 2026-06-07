@@ -74,6 +74,7 @@ struct TranscriptionFeature {
     @Shared(.isRemappingScratchpadFocused) var isRemappingScratchpadFocused: Bool = false
     @Shared(.modelBootstrapState) var modelBootstrapState: ModelBootstrapState
     @Shared(.transcriptionHistory) var transcriptionHistory: TranscriptionHistory
+    @Shared(.usageStats) var usageStats: UsageStats
   }
 
   enum Action {
@@ -929,6 +930,10 @@ private extension TranscriptionFeature {
 
 // MARK: - Transcription Handlers
 
+private func transcriptionWordCount(of text: String) -> Int {
+  text.split { $0.isWhitespace || $0.isNewline }.count
+}
+
 private extension TranscriptionFeature {
   func handleTranscriptionResult(
     _ state: inout State,
@@ -1092,8 +1097,12 @@ private extension TranscriptionFeature {
       (selectedMode != .auto && _inlineEditEnabled)
     )
     if shouldInlineEdit, let selection = inlineEditSelection, !modifiedResult.isEmpty {
+      state.$usageStats.withLock { stats in
+        stats.editCount += 1
+        stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
+      }
       state.isAIProcessing = true
-      return .run { [aiProcessing, inlineEdit, pasteboard, keychain] send in
+      return .run { [aiProcessing, inlineEdit, pasteboard, keychain, transcriptPersistence] send in
         // Fix B: verify API key before calling AI
         let keychainKey = aiProvider == .openAI ? KeychainKey.openAIAPIKey : KeychainKey.anthropicAPIKey
         guard let apiKey = await keychain.read(keychainKey), !apiKey.isEmpty else {
@@ -1130,7 +1139,11 @@ private extension TranscriptionFeature {
             sourceAppBundleID: sourceAppBundleID
           )))
           soundEffect.play(.pasteTranscript)
-          try? FileManager.default.removeItem(at: audioURL)
+          try? await storeTranscriptInHistory(
+            text: modifiedResult, audioURL: audioURL, duration: duration,
+            sourceAppBundleID: sourceAppBundleID, sourceAppName: sourceAppName,
+            mode: .edit, transcriptionHistory: transcriptionHistory
+          )
         } catch {
           // Fix C: surface the failure visibly
           transcriptionFeatureLogger.error("Inline edit AI failed: \(error.localizedDescription)")
@@ -1146,6 +1159,10 @@ private extension TranscriptionFeature {
     // User is in explicit Edit mode (not Auto) but no text was selected.
     // Treat the dictation as a standalone AI instruction.
     if effectiveMode == .edit && inlineEditSelection == nil && !modifiedResult.isEmpty {
+      state.$usageStats.withLock { stats in
+        stats.editCount += 1
+        stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
+      }
       state.isAIProcessing = true
       return .run { [aiProcessing, pasteboard, keychain] send in
         let keychainKey = aiProvider == .openAI ? KeychainKey.openAIAPIKey : KeychainKey.anthropicAPIKey
@@ -1170,12 +1187,17 @@ private extension TranscriptionFeature {
           await send(.aiProcessingFinished)
           await pasteboard.paste(generated, sourceAppBundleID)
           soundEffect.play(.pasteTranscript)
+          try? await storeTranscriptInHistory(
+            text: modifiedResult, audioURL: audioURL, duration: duration,
+            sourceAppBundleID: sourceAppBundleID, sourceAppName: sourceAppName,
+            mode: .edit, transcriptionHistory: transcriptionHistory
+          )
         } catch {
           transcriptionFeatureLogger.error("Edit mode (no selection) AI failed: \(error.localizedDescription)")
           await send(.aiProcessingFinished)
           await send(.editModeAIFailed(modifiedResult))
+          try? FileManager.default.removeItem(at: audioURL)
         }
-        try? FileManager.default.removeItem(at: audioURL)
       }
       .cancellable(id: CancelID.transcription)
     }
@@ -1184,6 +1206,10 @@ private extension TranscriptionFeature {
     // Parse the voice command into a structured action intent via the
     // LLM, then surface the confirmation panel.
     if effectiveMode == .action && !modifiedResult.isEmpty {
+      state.$usageStats.withLock { stats in
+        stats.actionCount += 1
+        stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
+      }
       state.isAIProcessing = true
       state.lastActionTranscript = modifiedResult
       return .run { [actionParsing] send in
@@ -1195,6 +1221,11 @@ private extension TranscriptionFeature {
           } else {
             await send(.multiActionIntentsParsed(response.actions))
           }
+          try? await storeTranscriptInHistory(
+            text: modifiedResult, audioURL: audioURL, duration: duration,
+            sourceAppBundleID: sourceAppBundleID, sourceAppName: sourceAppName,
+            mode: .action, transcriptionHistory: transcriptionHistory
+          )
         } catch {
           transcriptionFeatureLogger.error("Action parsing failed: \(error.localizedDescription)")
           await send(.aiProcessingFinished)
@@ -1212,13 +1243,17 @@ private extension TranscriptionFeature {
           } else {
             await send(.actionParsingFailed(modifiedResult))
           }
+          try? FileManager.default.removeItem(at: audioURL)
         }
-        try? FileManager.default.removeItem(at: audioURL)
       }
       .cancellable(id: CancelID.transcription)
     }
 
     // ── Branch 4: Dictate mode (default) ──
+    state.$usageStats.withLock { stats in
+      stats.dictationCount += 1
+      stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
+    }
     return .run { [aiProcessing] send in
       do {
         var finalResult = modifiedResult
@@ -1238,6 +1273,7 @@ private extension TranscriptionFeature {
           sourceAppBundleID: sourceAppBundleID,
           sourceAppName: sourceAppName,
           audioURL: audioURL,
+          mode: .dictate,
           transcriptionHistory: transcriptionHistory
         )
       } catch {
@@ -1315,24 +1351,27 @@ private extension TranscriptionFeature {
     return .none
   }
 
-  /// Move file to permanent location, create a transcript record, paste text, and play sound.
-  func finalizeRecordingAndStoreTranscript(
-    result: String,
+  /// Save transcript to history, handling max-entries pruning and cloud sync.
+  /// Used by all branches — edit, action, and dictate.
+  func storeTranscriptInHistory(
+    text: String,
+    audioURL: URL,
     duration: TimeInterval,
     sourceAppBundleID: String?,
     sourceAppName: String?,
-    audioURL: URL,
+    mode: TranscriptionMode?,
     transcriptionHistory: Shared<TranscriptionHistory>
   ) async throws {
     @Shared(.hexSettings) var hexSettings: HexSettings
 
     if hexSettings.saveTranscriptionHistory {
       let transcript = try await transcriptPersistence.save(
-        result,
+        text,
         audioURL,
         duration,
         sourceAppBundleID,
-        sourceAppName
+        sourceAppName,
+        mode
       )
 
       transcriptionHistory.withLock { history in
@@ -1355,16 +1394,38 @@ private extension TranscriptionFeature {
     if hexSettings.cloudSyncEnabled {
       let transcript = Transcript(
         timestamp: Date(),
-        text: result,
+        text: text,
         audioPath: audioURL,
         duration: duration,
         sourceAppBundleID: sourceAppBundleID,
-        sourceAppName: sourceAppName
+        sourceAppName: sourceAppName,
+        mode: mode
       )
       Task { @MainActor in
         await MacCloudSync.shared.uploadTranscript(transcript)
       }
     }
+  }
+
+  /// Move file to permanent location, create a transcript record, paste text, and play sound.
+  func finalizeRecordingAndStoreTranscript(
+    result: String,
+    duration: TimeInterval,
+    sourceAppBundleID: String?,
+    sourceAppName: String?,
+    audioURL: URL,
+    mode: TranscriptionMode?,
+    transcriptionHistory: Shared<TranscriptionHistory>
+  ) async throws {
+    try await storeTranscriptInHistory(
+      text: result,
+      audioURL: audioURL,
+      duration: duration,
+      sourceAppBundleID: sourceAppBundleID,
+      sourceAppName: sourceAppName,
+      mode: mode,
+      transcriptionHistory: transcriptionHistory
+    )
 
     await pasteboard.paste(result, sourceAppBundleID)
     soundEffect.play(.pasteTranscript)

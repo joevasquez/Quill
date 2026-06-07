@@ -301,6 +301,11 @@ struct TranscriptView: View {
 
 			HStack {
 				HStack(spacing: 6) {
+					// Mode badge
+					TranscriptModeBadge(mode: transcript.mode)
+
+					Text("•")
+
 					// App icon and name
 					if let bundleID = transcript.sourceAppBundleID,
 					   let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
@@ -312,7 +317,7 @@ struct TranscriptView: View {
 						}
 						Text("•")
 					}
-					
+
 					Image(systemName: "clock")
 					Text(transcript.timestamp.relativeFormatted())
 					Text("•")
@@ -412,6 +417,7 @@ struct HistoryView: View {
 	@State private var isDropTargeted = false
 	@State private var searchQuery: String = ""
 	@Shared(.hexSettings) var hexSettings: HexSettings
+	@Shared(.usageStats) var usageStats: UsageStats
 
 	/// Transcripts filtered by the current search query. Matches case-
 	/// insensitively against the transcript text and the source app name
@@ -432,6 +438,9 @@ struct HistoryView: View {
         VStack(spacing: 0) {
           // File transcription drop zone
           FileDropZoneView(store: store, isDropTargeted: $isDropTargeted)
+
+          // Usage stats
+          UsageStatsCardView(stats: usageStats)
 
           if !hexSettings.saveTranscriptionHistory {
             ContentUnavailableView {
@@ -566,5 +575,130 @@ struct FileDropZoneView: View {
 		)
 		.padding(.horizontal)
 		.padding(.top, 8)
+	}
+}
+
+// MARK: - Usage Stats Card
+
+struct UsageStatsCardView: View {
+	let stats: UsageStats
+
+	var body: some View {
+		HStack(spacing: 0) {
+			StatItem(
+				icon: "text.word.spacing",
+				value: Self.formatNumber(stats.totalWordsTranscribed),
+				label: "Words"
+			)
+			StatItem(
+				icon: "mic.fill",
+				value: "\(stats.dictationCount)",
+				label: "Dictations"
+			)
+			StatItem(
+				icon: "pencil",
+				value: "\(stats.editCount)",
+				label: "Edits"
+			)
+			StatItem(
+				icon: "bolt.fill",
+				value: "\(stats.actionCount)",
+				label: "Actions"
+			)
+			StatItem(
+				icon: "clock.arrow.circlepath",
+				value: Self.formatTimeSaved(stats.estimatedMinutesSaved),
+				label: "Saved"
+			)
+		}
+		.padding(.horizontal, 12)
+		.padding(.vertical, 10)
+		.background(
+			RoundedRectangle(cornerRadius: 8)
+				.fill(Color(.windowBackgroundColor).opacity(0.5))
+				.overlay(
+					RoundedRectangle(cornerRadius: 8)
+						.strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
+				)
+		)
+		.padding(.horizontal)
+		.padding(.top, 8)
+	}
+
+	static func formatTimeSaved(_ minutes: Double) -> String {
+		if minutes < 1 { return "<1m" }
+		if minutes < 60 { return "\(Int(minutes))m" }
+		let hours = minutes / 60
+		return String(format: "%.1fh", hours)
+	}
+
+	static func formatNumber(_ n: Int) -> String {
+		if n >= 1_000_000 {
+			return String(format: "%.1fM", Double(n) / 1_000_000)
+		}
+		if n >= 1000 {
+			return String(format: "%.1fk", Double(n) / 1000)
+		}
+		return "\(n)"
+	}
+}
+
+private struct StatItem: View {
+	let icon: String
+	let value: String
+	let label: String
+
+	var body: some View {
+		VStack(spacing: 4) {
+			Image(systemName: icon)
+				.font(.caption)
+				.foregroundStyle(.secondary)
+			Text(value)
+				.font(.headline.monospacedDigit())
+			Text(label)
+				.font(.caption2)
+				.foregroundStyle(.secondary)
+		}
+		.frame(maxWidth: .infinity)
+	}
+}
+
+// MARK: - Mode Badge
+
+private struct TranscriptModeBadge: View {
+	let mode: TranscriptionMode?
+
+	private var resolvedMode: TranscriptionMode { mode ?? .dictate }
+
+	private var icon: String {
+		switch resolvedMode {
+		case .dictate: "mic.fill"
+		case .edit: "pencil"
+		case .action: "bolt.fill"
+		}
+	}
+
+	private var label: String {
+		switch resolvedMode {
+		case .dictate: "Dictation"
+		case .edit: "Edit"
+		case .action: "Action"
+		}
+	}
+
+	private var tint: Color {
+		switch resolvedMode {
+		case .dictate: .blue
+		case .edit: .purple
+		case .action: .teal
+		}
+	}
+
+	var body: some View {
+		HStack(spacing: 3) {
+			Image(systemName: icon)
+			Text(label)
+		}
+		.foregroundStyle(tint)
 	}
 }

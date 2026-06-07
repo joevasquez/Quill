@@ -1,5 +1,9 @@
 import Foundation
 
+public enum TranscriptionMode: String, Codable, Sendable {
+    case dictate, edit, action
+}
+
 public struct Transcript: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var timestamp: Date
@@ -8,7 +12,9 @@ public struct Transcript: Codable, Equatable, Identifiable, Sendable {
     public var duration: TimeInterval
     public var sourceAppBundleID: String?
     public var sourceAppName: String?
-    
+    /// The mode that produced this transcript. `nil` for legacy entries (treated as `.dictate`).
+    public var mode: TranscriptionMode?
+
     public init(
         id: UUID = UUID(),
         timestamp: Date,
@@ -16,7 +22,8 @@ public struct Transcript: Codable, Equatable, Identifiable, Sendable {
         audioPath: URL,
         duration: TimeInterval,
         sourceAppBundleID: String? = nil,
-        sourceAppName: String? = nil
+        sourceAppName: String? = nil,
+        mode: TranscriptionMode? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -25,6 +32,7 @@ public struct Transcript: Codable, Equatable, Identifiable, Sendable {
         self.duration = duration
         self.sourceAppBundleID = sourceAppBundleID
         self.sourceAppName = sourceAppName
+        self.mode = mode
     }
 }
 

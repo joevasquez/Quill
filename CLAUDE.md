@@ -221,6 +221,14 @@ FluidAudio models reside under `Application Support/FluidAudio/Models`.
     - **Mode enum**: `TranscriptionIndicatorView.Mode` gains `.auto` (rawValue "Auto", icon `sparkles`, accentColor `.gray`). `.next` cycles Auto → Dictate → Edit → Action → Auto.
     - **HUD pill**: Shows "Auto · Dictate/Edit/Action" chip with the detected mode's accent colour during recording. At idle shows the sparkles icon with grey accent.
 
+23. **Usage stats & full-history saving (macOS)**: All transcription modes (dictate, edit, action) now save to history, not just dictations. A separate `UsageStats` accumulator tracks all-time counters independently of history (which is pruned by `maxHistoryEntries`).
+    - **Model**: `HexCore/Sources/HexCore/Models/UsageStats.swift` — `totalWordsTranscribed`, `dictationCount`, `editCount`, `actionCount`, plus computed `totalSessions` and `estimatedMinutesSaved` (words / 40 WPM).
+    - **Persistence**: `Hex/Models/AppUsageStats.swift` — `@Shared(.usageStats)` via `FileStorageKey`, stored at `usage_stats.json` alongside other app data. Pattern mirrors `AppHexSettings.swift`.
+    - **Mode field**: `Transcript.mode: TranscriptionMode?` — optional for backward compat (existing history JSON decodes `nil` → treated as dictate). `TranscriptionMode` is `.dictate | .edit | .action`.
+    - **Stats increment timing**: Counters are incremented synchronously in the reducer via `state.$usageStats.withLock { ... }` BEFORE the `.run` effect. This ensures stats count even if the downstream AI call fails — the user spoke words regardless.
+    - **`storeTranscriptInHistory`**: File-scope helper extracted from `finalizeRecordingAndStoreTranscript`. Handles `transcriptPersistence.save()` + insert into `@Shared(.transcriptionHistory)` + `maxHistoryEntries` trim + cloud sync — WITHOUT the paste step. Called by Branches 1-3 (edit/action) inside their `.run` effects.
+    - **UI**: `UsageStatsCardView` at the top of `HistoryView` — horizontal row of 5 `StatItem`s (Words, Dictations, Edits, Actions, Saved). `TranscriptModeBadge` in each history entry's metadata row shows a coloured icon (mic/pencil/bolt) + label.
+
 ## UI
 
 - **Settings tabs (macOS)**: Four tabs in the sidebar — General, Recording, AI Processing, Integrations. Each is a wrapper view in `SettingsTabs.swift` that composes existing section views into a `Form { … }.formStyle(.grouped)`. The "About" section (version, changelog, replay tutorial) and "Transforms" (word remappings) are folded into General and Recording respectively — no standalone tabs. Cloud Sync settings live in the Notes pane, not General.
@@ -380,6 +388,8 @@ The iOS target is a `PBXFileSystemSynchronizedRootGroup` — new files in `Quill
 8. **Auto mode improvements**: Auto mode (see Implementation Detail #22) uses keyword matching. Future improvements: (a) NLU-based classifier instead of keyword lists for better accuracy; (b) confidence thresholds — if the classifier is uncertain, ask the user via the mode badge ("Dictate?") rather than silently committing; (c) per-app Auto overrides (e.g., always Edit in VS Code when text is selected); (d) iOS port — the classifier is cross-platform (in `AutoModeClassifier.swift`) but the iOS UI doesn't have the mode cycle yet.
 
 7. **Keychain migration to `kSecUseDataProtectionKeychain`**: The current `SecItemAdd` / `SecItemCopyMatching` calls use the legacy macOS keychain, which is why the system password dialog appears. Adding `kSecUseDataProtectionKeychain: true` to queries would use the modern Data Protection keychain (no password prompts, syncs better with sandboxed apps). Requires testing that existing items are migrated or re-saved.
+
+9. **Cloud-sync usage stats**: `UsageStats` is designed for future cloud sync (marketing metric). Would need a merge strategy (max of each counter across devices, or per-device counters with server-side aggregation) and a Firestore document at `users/{email}/stats/usage`. iOS would also need a local `UsageStats` accumulator wired into its recording flow.
 
 ## Troubleshooting
 
