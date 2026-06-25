@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.20.0
+
+### Minor Changes
+
+- Add Pro plan with bundled AI Enhancement — Pro users get Anthropic-powered formatting without supplying their own API key (routed through a server-side proxy when signed in with Google)
+
+### Patch Changes
+
+- Add opt-in usage analytics: per-user usage snapshots sync to the cloud so engagement can be reviewed (no transcript content is uploaded)
+- Fix dictation in Citrix (and other VDI) sessions getting hijacked by the inline-edit AI. VDI clients are now identified by vendor bundle-ID fragment (citrix, vmware.horizon, parallels.desktop, microsoft.rdc) so the actual Citrix Viewer session window is recognized regardless of version or rebrand, and the Cmd+C clipboard selection-capture fallback only runs in VDI apps when the user is in explicit Edit mode. Previously, Citrix's networked clipboard produced a false-positive "selection" during plain dictation, routing the transcript through the inline-edit path so the model replied conversationally instead of pasting the dictation.
+
 ## 0.19.0
 
 ### Minor Changes

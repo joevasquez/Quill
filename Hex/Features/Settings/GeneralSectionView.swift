@@ -69,6 +69,47 @@ struct GeneralSectionView: View {
 
 		Section {
 			Label {
+				VStack(alignment: .leading, spacing: 6) {
+					HStack {
+						Text("Quill Pro")
+							.fontWeight(.medium)
+						Spacer()
+						if store.hexSettings.selectedPlan == "pro" {
+							Text("Active")
+								.font(.caption)
+								.foregroundStyle(.white)
+								.padding(.horizontal, 8)
+								.padding(.vertical, 3)
+								.background(Capsule().fill(Color.purple.gradient))
+						}
+					}
+					Toggle(
+						"Enable Pro features",
+						isOn: Binding(
+							get: { store.hexSettings.selectedPlan == "pro" },
+							set: { enabled in
+								store.send(.setSelectedPlan(enabled ? "pro" : nil))
+							}
+						)
+					)
+					if store.hexSettings.selectedPlan == "pro" {
+						Text("AI Enhancement powered by Anthropic Claude — no API key needed. Requires Google sign-in.")
+							.settingsCaption()
+					} else {
+						Text("Enable to use AI features without your own API key")
+							.settingsCaption()
+					}
+				}
+			} icon: {
+				Image(systemName: "crown")
+					.foregroundStyle(store.hexSettings.selectedPlan == "pro" ? .purple : .secondary)
+			}
+		} header: {
+			Text("Plan")
+		}
+
+		Section {
+			Label {
 				Toggle("Send anonymous crash reports", isOn: $crashReportingEnabled)
 					.onChange(of: crashReportingEnabled) { _, _ in
 						// Re-run configure() so SentrySDK starts/stops to

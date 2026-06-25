@@ -476,15 +476,32 @@ public enum InlineEditPrompt {
 
 public enum VDIBundleIdentifiers {
   public static let known: Set<String> = [
-    "com.citrix.receiver.nomas",
-    "com.citrix.XenAppViewer",
+    "com.citrix.receiver.icaviewer.mac", // "Citrix Viewer" — the actual ICA remote-session window (frontmost during a session)
+    "com.citrix.receiver.nomas",         // "Citrix Workspace" — the launcher/storefront
+    "com.citrix.XenAppViewer",           // legacy Citrix Receiver viewer name
     "com.microsoft.rdc.macos",
     "com.vmware.horizon",
     "com.parallels.desktop.console",
   ]
 
+  /// Lowercased bundle-ID fragments that identify a VDI vendor regardless of
+  /// the exact product, version, or enterprise rebrand. AX never exposes a
+  /// real text selection in these remote-session windows, so any match is
+  /// treated as VDI. Kept narrow and vendor-specific on purpose: a false
+  /// positive would suppress clipboard-based inline edit in a genuinely local
+  /// app (e.g. Chrome/Electron, where AX fails but Cmd+C works), so we never
+  /// match generic words like "remote" or "viewer".
+  private static let vendorFragments: [String] = [
+    "citrix",            // every Citrix client/session window is com.citrix.*
+    "vmware.horizon",
+    "parallels.desktop",
+    "microsoft.rdc",     // Microsoft Remote Desktop / "Windows App"
+  ]
+
   public static func isVDI(_ bundleID: String?) -> Bool {
     guard let bundleID else { return false }
-    return known.contains(bundleID)
+    if known.contains(bundleID) { return true }
+    let lower = bundleID.lowercased()
+    return vendorFragments.contains { lower.contains($0) }
   }
 }

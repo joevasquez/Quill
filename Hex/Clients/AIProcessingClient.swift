@@ -5,11 +5,13 @@
 //  Sends transcribed text through a cloud LLM for AI post-processing.
 //
 
+import ComposableArchitecture
 import Dependencies
 import DependenciesMacros
 import Foundation
 import HexCore
 import os
+import Sharing
 
 private let aiLogger = HexLog.aiProcessing
 
@@ -46,30 +48,45 @@ extension AIProcessingClient: DependencyKey {
         guard !basePrompt.isEmpty else { return text }
 
         @Dependency(\.keychain) var keychain
+        @Dependency(\.googleOAuth) var googleOAuth
 
         let enrichedPrompt = buildPrompt(basePrompt: basePrompt, context: context)
 
         let response: String
         do {
-          switch provider {
-          case .openAI:
-            guard let apiKey = await keychain.read(KeychainKey.openAIAPIKey),
-                  !apiKey.isEmpty
-            else {
-              aiLogger.warning("OpenAI API key not configured; skipping AI processing")
+          // Pro mode: route through the server-side proxy (no local API key needed).
+          if isProModeActive() {
+            guard let accessToken = try? await googleOAuth.refreshIfNeeded() else {
+              aiLogger.warning("Pro mode active but Google not signed in; skipping AI processing")
               return text
             }
-            response = try await callOpenAI(text: text, systemPrompt: enrichedPrompt, apiKey: apiKey, skipTranscriptWrapping: skipTranscriptWrapping)
+            response = try await ProAIProxyClient.process(
+              text: text,
+              systemPrompt: enrichedPrompt,
+              accessToken: accessToken,
+              skipTranscriptWrapping: skipTranscriptWrapping
+            )
+          } else {
+            switch provider {
+            case .openAI:
+              guard let apiKey = await keychain.read(KeychainKey.openAIAPIKey),
+                    !apiKey.isEmpty
+              else {
+                aiLogger.warning("OpenAI API key not configured; skipping AI processing")
+                return text
+              }
+              response = try await callOpenAI(text: text, systemPrompt: enrichedPrompt, apiKey: apiKey, skipTranscriptWrapping: skipTranscriptWrapping)
 
-          case .anthropic:
-            guard let apiKey = await keychain.read(KeychainKey.anthropicAPIKey),
-                  !apiKey.isEmpty
-            else {
-              aiLogger.warning("Anthropic API key not configured; skipping AI processing")
-              return text
+            case .anthropic:
+              guard let apiKey = await keychain.read(KeychainKey.anthropicAPIKey),
+                    !apiKey.isEmpty
+              else {
+                aiLogger.warning("Anthropic API key not configured; skipping AI processing")
+                return text
+              }
+              let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+              response = try await callAnthropic(text: text, systemPrompt: enrichedPrompt, apiKey: trimmedKey, skipTranscriptWrapping: skipTranscriptWrapping)
             }
-            let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            response = try await callAnthropic(text: text, systemPrompt: enrichedPrompt, apiKey: trimmedKey, skipTranscriptWrapping: skipTranscriptWrapping)
           }
         } catch {
           // Capture LLM call failures (network / API / decoding) so we
@@ -99,6 +116,14 @@ extension AIProcessingClient: DependencyKey {
       }
     )
   }
+}
+
+/// Checks whether Pro mode is active (selectedPlan == "pro" and Google signed in).
+private func isProModeActive() -> Bool {
+  @Shared(.hexSettings) var hexSettings: HexSettings
+  guard hexSettings.selectedPlan == "pro" else { return false }
+  let email = UserDefaults.standard.string(forKey: GoogleOAuthClient.googleAccountEmailDefaultsKey)
+  return email?.isEmpty == false
 }
 
 private func buildPrompt(basePrompt: String, context: AppContext?) -> String {

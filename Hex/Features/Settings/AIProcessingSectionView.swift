@@ -132,12 +132,69 @@ struct AIProcessingSectionView: View {
     }
   }
 
+  private var isProMode: Bool {
+    store.hexSettings.selectedPlan == "pro"
+  }
+
   // MARK: - Provider
 
   /// Where the AI request actually goes (OpenAI / Anthropic / …) plus
   /// the credential to authenticate it. Kept compact so users with the
   /// key already saved don't see a tall block.
   @ViewBuilder private var providerSection: some View {
+    if isProMode {
+      proProviderSection
+    } else {
+      byokProviderSection
+    }
+  }
+
+  /// Pro users: Anthropic is included, no API key needed.
+  @ViewBuilder private var proProviderSection: some View {
+    Section {
+      Label {
+        VStack(alignment: .leading, spacing: 4) {
+          HStack {
+            Text("Anthropic Claude")
+              .fontWeight(.medium)
+            Spacer()
+            Text("Included with Pro")
+              .font(.caption)
+              .foregroundStyle(.white)
+              .padding(.horizontal, 8)
+              .padding(.vertical, 3)
+              .background(
+                Capsule().fill(Color.purple.gradient)
+              )
+          }
+          Text("AI processing is handled by Quill — no API key required")
+            .settingsCaption()
+        }
+      } icon: {
+        Image(systemName: "sparkles")
+          .foregroundStyle(.purple)
+      }
+
+      if !MacCloudSync.shared.isGoogleAuthorized() {
+        Label {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Sign in with Google to activate Pro AI")
+              .foregroundStyle(.orange)
+            Text("Go to Settings → Integrations → Google to connect your account")
+              .settingsCaption()
+          }
+        } icon: {
+          Image(systemName: "exclamationmark.triangle")
+            .foregroundStyle(.orange)
+        }
+      }
+    } header: {
+      Text("Provider")
+    }
+  }
+
+  /// BYOK (bring your own key) users: standard provider picker + API key field.
+  @ViewBuilder private var byokProviderSection: some View {
     Section {
       Label {
         HStack {

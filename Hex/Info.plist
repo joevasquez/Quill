@@ -13,9 +13,9 @@
 	<key>CFBundleName</key>
 	<string>Quill</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.19.0</string>
+	<string>0.20.0</string>
 	<key>CFBundleVersion</key>
-	<string>104</string>
+	<string>105</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>NSAccessibilityUsageDescription</key>

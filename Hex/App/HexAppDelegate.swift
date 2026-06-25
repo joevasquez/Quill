@@ -63,6 +63,9 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 		// Sync Google integration state from OAuth keychain on launch
 		syncGoogleIntegrationsFromOAuth()
 
+		// Record app open and schedule analytics upload
+		AnalyticsUploader.shared.recordAppOpen()
+
 		// Start long-running app effects (global hotkeys, permissions, etc.)
 		startLifecycleTasksIfNeeded()
 

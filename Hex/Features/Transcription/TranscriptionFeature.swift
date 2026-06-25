@@ -909,7 +909,21 @@ private extension TranscriptionFeature {
     // editClipboardFallbackResult. If transcription finishes first
     // (possible with warm models), the result is stashed and
     // replayed once the clipboard result arrives.
-    if (isEditMode || isAutoMode || state.hexSettings.inlineEditEnabled) && state.inlineEditSelection == nil {
+    //
+    // VDI apps (Citrix, RDP, Horizon) are the exception: their AX layer
+    // never exposes a selection (the window is a remote bitmap), so the
+    // Cmd+C clipboard fallback ALWAYS runs there. With a networked
+    // clipboard, that Cmd+C bumps the local pasteboard with synced/stale
+    // content that looks like a selection even when nothing is selected.
+    // That false positive hijacks plain dictation into the inline-edit AI
+    // path (Branch 1), which is why a dictation in Citrix can come back as
+    // a conversational LLM reply. So for VDI we only attempt the clipboard
+    // fallback in explicit Edit mode, where the user is deliberately
+    // editing a selection; in Dictate/Auto we skip it and paste normally.
+    let allowClipboardFallback = isVDI
+      ? isEditMode
+      : (isEditMode || isAutoMode || state.hexSettings.inlineEditEnabled)
+    if allowClipboardFallback && state.inlineEditSelection == nil {
       let clipboardTimeout: TimeInterval = isVDI ? 0.5 : 0.15
       transcriptionFeatureLogger.info(
         "Edit/Auto capture: AX returned nil at stop (isEditMode=\(isEditMode) isAutoMode=\(isAutoMode) isVDI=\(isVDI)) — trying clipboard fallback (timeout=\(clipboardTimeout)s) in parallel with transcription"
@@ -1102,15 +1116,17 @@ private extension TranscriptionFeature {
         stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
       }
       state.isAIProcessing = true
+      let isPro = state.hexSettings.selectedPlan == "pro"
       return .run { [aiProcessing, inlineEdit, pasteboard, keychain, transcriptPersistence] send in
-        // Fix B: verify API key before calling AI
-        let keychainKey = aiProvider == .openAI ? KeychainKey.openAIAPIKey : KeychainKey.anthropicAPIKey
-        guard let apiKey = await keychain.read(keychainKey), !apiKey.isEmpty else {
-          transcriptionFeatureLogger.warning("Inline edit: no \(aiProvider.displayName) API key — cannot process")
-          await send(.aiProcessingFinished)
-          await send(.editModeNeedsAPIKey)
-          try? FileManager.default.removeItem(at: audioURL)
-          return
+        if !isPro {
+          let keychainKey = aiProvider == .openAI ? KeychainKey.openAIAPIKey : KeychainKey.anthropicAPIKey
+          guard let apiKey = await keychain.read(keychainKey), !apiKey.isEmpty else {
+            transcriptionFeatureLogger.warning("Inline edit: no \(aiProvider.displayName) API key — cannot process")
+            await send(.aiProcessingFinished)
+            await send(.editModeNeedsAPIKey)
+            try? FileManager.default.removeItem(at: audioURL)
+            return
+          }
         }
 
         let userMessage = InlineEditPrompt.userMessage(
@@ -1164,14 +1180,17 @@ private extension TranscriptionFeature {
         stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
       }
       state.isAIProcessing = true
+      let isPro2 = state.hexSettings.selectedPlan == "pro"
       return .run { [aiProcessing, pasteboard, keychain] send in
-        let keychainKey = aiProvider == .openAI ? KeychainKey.openAIAPIKey : KeychainKey.anthropicAPIKey
-        guard let apiKey = await keychain.read(keychainKey), !apiKey.isEmpty else {
-          transcriptionFeatureLogger.warning("Edit mode (no selection): no \(aiProvider.displayName) API key")
-          await send(.aiProcessingFinished)
-          await send(.editModeNeedsAPIKey)
-          try? FileManager.default.removeItem(at: audioURL)
-          return
+        if !isPro2 {
+          let keychainKey = aiProvider == .openAI ? KeychainKey.openAIAPIKey : KeychainKey.anthropicAPIKey
+          guard let apiKey = await keychain.read(keychainKey), !apiKey.isEmpty else {
+            transcriptionFeatureLogger.warning("Edit mode (no selection): no \(aiProvider.displayName) API key")
+            await send(.aiProcessingFinished)
+            await send(.editModeNeedsAPIKey)
+            try? FileManager.default.removeItem(at: audioURL)
+            return
+          }
         }
 
         do {
@@ -1404,6 +1423,10 @@ private extension TranscriptionFeature {
       Task { @MainActor in
         await MacCloudSync.shared.uploadTranscript(transcript)
       }
+    }
+
+    Task { @MainActor in
+      AnalyticsUploader.shared.scheduleUpload()
     }
   }
 

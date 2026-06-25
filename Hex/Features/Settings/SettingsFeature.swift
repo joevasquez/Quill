@@ -176,6 +176,9 @@ struct SettingsFeature {
     /// Import settings from a user-chosen JSON file.
     case importSettings
 
+    // Plan
+    case setSelectedPlan(String?)
+
     // Cloud Sync
     case setCloudSyncEnabled(Bool)
     case syncNow
@@ -902,6 +905,15 @@ struct SettingsFeature {
               HexLog.settings.error("Failed to import settings: \(error.localizedDescription)")
             }
           }
+        }
+
+      case let .setSelectedPlan(plan):
+        state.$hexSettings.withLock { $0.selectedPlan = plan }
+        if plan == "pro" {
+          state.$hexSettings.withLock { $0.aiProcessingEnabled = true }
+        }
+        return .run { _ in
+          await AnalyticsUploader.shared.scheduleUpload()
         }
 
       case let .setCloudSyncEnabled(enabled):
