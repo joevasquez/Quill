@@ -440,7 +440,7 @@ Two release scripts live at `tools/scripts/`. Both are bash, both read prerequis
 
 ### macOS (DMG via GitHub Releases + Sparkle)
 
-> **Repo-naming gotcha (load-bearing).** The GitHub repo was renamed **Hex → Quill**, so the git `origin` remote is `github.com/joevasquez/Quill` and you push/tag/release there. But the app's baked-in Sparkle URLs still use the **old `Hex` name** — `SUFeedURL` = `raw.githubusercontent.com/joevasquez/Hex/main/appcast.xml` and every appcast `enclosure` URL points at `github.com/joevasquez/Hex/releases/download/...`. These work **only because GitHub redirects the old `Hex` paths to `Quill`** (repo-rename redirect, verified: `gh repo view joevasquez/Hex` resolves to `joevasquez/Quill`, and the DMG download 302→200s). Practical rules: (a) push to `origin` and create the release on `joevasquez/Quill`; the `Hex` DMG URL in the appcast resolves via redirect. (b) `release.sh`'s printed "Next steps" say `git push fork main` — there is **no `fork` remote**; use `origin`. (c) If GitHub ever drops the rename redirect, auto-update breaks for all existing users — the real fix is to migrate the in-app URLs to `Quill` (ship one version still on the redirect to carry users across, then flip `SUFeedURL`).
+> **Repo-naming note (Hex → Quill URL migration).** The GitHub repo was renamed **Hex → Quill**; the git `origin` is `github.com/joevasquez/Quill` and you push/tag/release there. As of the 0.20.0 cycle the in-app Sparkle URLs have been **migrated to `Quill`**: `SUFeedURL` = `raw.githubusercontent.com/joevasquez/Quill/main/appcast.xml`, `release.sh` generates `Quill` `enclosure`/download URLs, and `appcast.xml` enclosures point at `Quill`. **Transition window:** builds at **0.20.0 and earlier still have the old `Hex` `SUFeedURL` baked in**, so those already-installed clients keep polling `.../joevasquez/Hex/main/appcast.xml` — which still works **only via GitHub's repo-rename redirect** (`Hex` → `Quill`) until each user updates to a build made *after* this migration (0.20.1+). So keep the redirect intact until telemetry shows ≤0.20.0 installs have drained. New builds depend on no redirect. Two operational rules regardless: push/release to `origin` = `joevasquez/Quill`; `release.sh`'s printed next-steps historically said `git push fork main` — there is no `fork` remote, it's `origin` (fixed in-script this cycle).
 
 #### End-to-end release flow
 
@@ -520,10 +520,10 @@ Output:
 
 #### Sparkle auto-update flow
 
-- `Info.plist` contains `SUFeedURL` pointing to `https://raw.githubusercontent.com/joevasquez/Hex/main/appcast.xml`
+- `Info.plist` contains `SUFeedURL` pointing to `https://raw.githubusercontent.com/joevasquez/Quill/main/appcast.xml` (migrated from `Hex` in the 0.20.0 cycle — see the repo-naming note above; ≤0.20.0 installs still poll the `Hex` URL via redirect)
 - `Info.plist` contains `SUPublicEDKey` (EdDSA public key for signature verification)
 - Sparkle checks the appcast periodically; when `sparkle:version` > installed build number, it offers the update
-- The `enclosure` URL points to the GitHub Release asset: `https://github.com/joevasquez/Hex/releases/download/vX.Y.Z/Hex-latest.dmg`
+- The `enclosure` URL points to the GitHub Release asset: `https://github.com/joevasquez/Quill/releases/download/vX.Y.Z/Hex-latest.dmg`
 - `sparkle:edSignature` in the appcast must match what `bin/sign_update` produced for the exact DMG file uploaded to GitHub — if you re-build or re-notarize, the signature changes and the appcast must be regenerated
 
 #### Appcast maintenance

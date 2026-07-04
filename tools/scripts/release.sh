@@ -167,7 +167,7 @@ fi
 SIGN_UPDATE="$REPO_ROOT/bin/sign_update"
 GENERATE_APPCAST="$REPO_ROOT/bin/generate_appcast"
 APPCAST_PATH="$REPO_ROOT/appcast.xml"
-DOWNLOAD_URL="https://github.com/joevasquez/Hex/releases/download/v${VERSION}/$DMG_NAME"
+DOWNLOAD_URL="https://github.com/joevasquez/Quill/releases/download/v${VERSION}/$DMG_NAME"
 
 if [ -x "$SIGN_UPDATE" ]; then
   echo "→ Signing DMG for Sparkle..."
@@ -197,7 +197,7 @@ if [ -x "$GENERATE_APPCAST" ]; then
   # generate_appcast errors on duplicate versions if it finds both the
   # .zip (used for notarization) and the .dmg. Remove the zip first.
   rm -f "$BUILD_DIR/Quill.zip"
-  "$GENERATE_APPCAST" --download-url-prefix "https://github.com/joevasquez/Hex/releases/download/v${VERSION}/" \
+  "$GENERATE_APPCAST" --download-url-prefix "https://github.com/joevasquez/Quill/releases/download/v${VERSION}/" \
     "$BUILD_DIR" 2>&1 | tail -5 || true
 
   # generate_appcast writes appcast.xml inside the scanned directory
@@ -223,16 +223,16 @@ echo "     git commit -m 'Update appcast for v$VERSION'"
 echo ""
 echo "  2. Tag and push:"
 echo "     git tag v$VERSION"
-echo "     git push fork main v$VERSION"
+echo "     git push origin main v$VERSION"
 echo ""
 echo "  3. Create the GitHub Release:"
-echo "     gh release create v$VERSION --repo joevasquez/Hex \\"
+echo "     gh release create v$VERSION --repo joevasquez/Quill \\"
 echo "       --title 'Quill v$VERSION' \\"
 echo "       --notes-file '$NOTES_PATH' \\"
 echo "       '$DMG_PATH'"
 echo ""
 echo "The download URL on your site stays stable:"
-echo "  https://github.com/joevasquez/Hex/releases/latest/download/$DMG_NAME"
+echo "  https://github.com/joevasquez/Quill/releases/latest/download/$DMG_NAME"
 echo ""
 echo "Sparkle will check for updates at:"
-echo "  https://raw.githubusercontent.com/joevasquez/Hex/main/appcast.xml"
+echo "  https://raw.githubusercontent.com/joevasquez/Quill/main/appcast.xml"
