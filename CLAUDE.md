@@ -440,6 +440,8 @@ Two release scripts live at `tools/scripts/`. Both are bash, both read prerequis
 
 ### macOS (DMG via GitHub Releases + Sparkle)
 
+> **Repo-naming gotcha (load-bearing).** The GitHub repo was renamed **Hex → Quill**, so the git `origin` remote is `github.com/joevasquez/Quill` and you push/tag/release there. But the app's baked-in Sparkle URLs still use the **old `Hex` name** — `SUFeedURL` = `raw.githubusercontent.com/joevasquez/Hex/main/appcast.xml` and every appcast `enclosure` URL points at `github.com/joevasquez/Hex/releases/download/...`. These work **only because GitHub redirects the old `Hex` paths to `Quill`** (repo-rename redirect, verified: `gh repo view joevasquez/Hex` resolves to `joevasquez/Quill`, and the DMG download 302→200s). Practical rules: (a) push to `origin` and create the release on `joevasquez/Quill`; the `Hex` DMG URL in the appcast resolves via redirect. (b) `release.sh`'s printed "Next steps" say `git push fork main` — there is **no `fork` remote**; use `origin`. (c) If GitHub ever drops the rename redirect, auto-update breaks for all existing users — the real fix is to migrate the in-app URLs to `Quill` (ship one version still on the redirect to carry users across, then flip `SUFeedURL`).
+
 #### End-to-end release flow
 
 This is the complete sequence for shipping a new macOS version. The release script handles archive → sign → notarize → DMG → Sparkle signing → appcast generation. Post-script steps (commit, tag, push, GitHub Release upload) are manual.
