@@ -38,6 +38,13 @@ private enum OrbSize {
   static let core: CGFloat = 81
   static let field: CGFloat = 160
   static let fieldWithRing: CGFloat = 220
+  /// Idle is deliberately compact — the orb sits on screen all day, so
+  /// at rest it shrinks to a small, quiet presence and only blooms to
+  /// full size while recording/processing. The content is scaled (not
+  /// re-laid-out) so every sub-view keeps its proportions.
+  static let idleScale: CGFloat = 0.58
+  static let idleField: CGFloat = 96
+  static let idleFieldWithRing: CGFloat = 148
   static let satelliteRingRadius: CGFloat = 90
   static let satelliteTileSize: CGFloat = 32
   static let meterFrame: CGFloat = 130
@@ -191,7 +198,10 @@ struct OrbView: View {
   // MARK: - Orb field (sphere + effects + backdrop)
 
   private var orbField: some View {
-    let fieldSize = isActMode && !actionIntegrations.isEmpty ? OrbSize.fieldWithRing : OrbSize.field
+    let hasRing = isActMode && !actionIntegrations.isEmpty
+    let fieldSize: CGFloat = isLive
+      ? (hasRing ? OrbSize.fieldWithRing : OrbSize.field)
+      : (hasRing ? OrbSize.idleFieldWithRing : OrbSize.idleField)
     return VStack(spacing: 0) {
       ZStack {
         if isActMode, !actionIntegrations.isEmpty {
@@ -209,27 +219,31 @@ struct OrbView: View {
           orbParticles
         }
       }
+      .scaleEffect(isLive ? 1 : OrbSize.idleScale)
       .frame(width: fieldSize, height: fieldSize)
 
       orbCaption
     }
-    .padding(.horizontal, isLive ? 24 : 16)
-    .padding(.vertical, isLive ? 16 : 14)
+    .padding(.horizontal, isLive ? 24 : 10)
+    .padding(.vertical, isLive ? 16 : 8)
     .background(orbBackdrop)
   }
 
   private var orbBackdrop: some View {
-    RoundedRectangle(cornerRadius: 24, style: .continuous)
+    // Quieter at rest: less darkening, softer shadow. The stronger
+    // treatment only appears while live, when contrast matters for the
+    // transcript text.
+    RoundedRectangle(cornerRadius: isLive ? 24 : 18, style: .continuous)
       .fill(.ultraThinMaterial)
       .overlay(
-        RoundedRectangle(cornerRadius: 24, style: .continuous)
-          .fill(.black.opacity(0.45))
+        RoundedRectangle(cornerRadius: isLive ? 24 : 18, style: .continuous)
+          .fill(.black.opacity(isLive ? 0.45 : 0.28))
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 24, style: .continuous)
-          .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+        RoundedRectangle(cornerRadius: isLive ? 24 : 18, style: .continuous)
+          .strokeBorder(.white.opacity(isLive ? 0.12 : 0.08), lineWidth: 1)
       )
-      .shadow(color: .black.opacity(0.4), radius: 20, y: 8)
+      .shadow(color: .black.opacity(isLive ? 0.4 : 0.22), radius: isLive ? 20 : 10, y: isLive ? 8 : 4)
   }
 
   // MARK: Glow
@@ -345,7 +359,7 @@ struct OrbView: View {
       captionText
       statusLine
     }
-    .frame(width: isLive ? 280 : 180)
+    .frame(width: isLive ? 280 : 132)
     .padding(.top, 2)
   }
 
@@ -395,7 +409,8 @@ struct OrbView: View {
             .foregroundStyle(.white.opacity(0.85))
         } else {
           Text(hotkeyHint)
-            .foregroundStyle(.white.opacity(0.6))
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(.white.opacity(0.42))
         }
       case .recording:
         if !partialTranscript.isEmpty {

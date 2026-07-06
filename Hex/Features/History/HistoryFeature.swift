@@ -281,6 +281,29 @@ struct HistoryFeature {
 	}
 }
 
+/// Caches app icons by bundle ID. `NSWorkspace.urlForApplication` +
+/// `icon(forFile:)` are Launch Services round-trips — doing them per row
+/// per render made scrolling a long history burn CPU on icon lookups.
+@MainActor
+enum AppIconCache {
+	private static var icons: [String: NSImage] = [:]
+	/// Bundle IDs that resolved to no app — cached so we don't retry
+	/// the lookup on every render.
+	private static var misses: Set<String> = []
+
+	static func icon(for bundleID: String) -> NSImage? {
+		if let cached = icons[bundleID] { return cached }
+		if misses.contains(bundleID) { return nil }
+		guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+			misses.insert(bundleID)
+			return nil
+		}
+		let icon = NSWorkspace.shared.icon(forFile: appURL.path)
+		icons[bundleID] = icon
+		return icon
+	}
+}
+
 struct TranscriptView: View {
 	let transcript: Transcript
 	let isPlaying: Bool
@@ -288,14 +311,35 @@ struct TranscriptView: View {
 	let onCopy: () -> Void
 	let onDelete: () -> Void
 
+	/// Long dictations used to render in full, making a single row fill
+	/// the window. Collapse past this many lines with a toggle.
+	private static let collapsedLineLimit = 6
+	@State private var isExpanded = false
+
+	private var isLongTranscript: Bool {
+		transcript.text.count > 500 || transcript.text.filter { $0 == "\n" }.count >= Self.collapsedLineLimit
+	}
+
 	var body: some View {
 		VStack(alignment: .leading, spacing: 0) {
-			Text(transcript.text)
-				.font(.body)
-				.lineLimit(nil)
-				.fixedSize(horizontal: false, vertical: true)
-				.padding(.trailing, 40) // Space for buttons
-				.padding(12)
+			VStack(alignment: .leading, spacing: 6) {
+				Text(transcript.text)
+					.font(.body)
+					.lineLimit(isExpanded ? nil : Self.collapsedLineLimit)
+					.fixedSize(horizontal: false, vertical: true)
+					.textSelection(.enabled)
+
+				if isLongTranscript {
+					Button(isExpanded ? "Show less" : "Show more") {
+						withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
+					}
+					.buttonStyle(.plain)
+					.font(.caption.weight(.medium))
+					.foregroundStyle(.tint)
+				}
+			}
+			.padding(.trailing, 40) // Space for buttons
+			.padding(12)
 
 			Divider()
 
@@ -308,8 +352,8 @@ struct TranscriptView: View {
 
 					// App icon and name
 					if let bundleID = transcript.sourceAppBundleID,
-					   let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
-						Image(nsImage: NSWorkspace.shared.icon(forFile: appURL.path))
+					   let icon = AppIconCache.icon(for: bundleID) {
+						Image(nsImage: icon)
 							.resizable()
 							.frame(width: 14, height: 14)
 						if let appName = transcript.sourceAppName {
@@ -416,6 +460,10 @@ struct HistoryView: View {
 	@State private var showingDeleteConfirmation = false
 	@State private var isDropTargeted = false
 	@State private var searchQuery: String = ""
+	/// Search runs against this, not `searchQuery` directly — a 250ms
+	/// debounce so a full-text scan of the history doesn't run on every
+	/// keystroke.
+	@State private var debouncedQuery: String = ""
 	@Shared(.hexSettings) var hexSettings: HexSettings
 	@Shared(.usageStats) var usageStats: UsageStats
 
@@ -423,7 +471,7 @@ struct HistoryView: View {
 	/// insensitively against the transcript text and the source app name
 	/// — so "slack" surfaces every dictation routed into Slack.
 	private var visibleTranscripts: [Transcript] {
-		let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+		let trimmed = debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
 		guard !trimmed.isEmpty else { return store.transcriptionHistory.history }
 		return store.transcriptionHistory.history.filter { transcript in
 			if transcript.text.localizedCaseInsensitiveContains(trimmed) { return true }
@@ -431,6 +479,21 @@ struct HistoryView: View {
 			   app.localizedCaseInsensitiveContains(trimmed) { return true }
 			return false
 		}
+	}
+
+	/// Transcripts grouped by day, preserving newest-first order. The key
+	/// is the relative day label ("Today", "Yesterday", "Monday", …).
+	private var groupedTranscripts: [(label: String, transcripts: [Transcript])] {
+		var groups: [(label: String, transcripts: [Transcript])] = []
+		for transcript in visibleTranscripts {
+			let label = transcript.timestamp.relativeFormatted()
+			if groups.last?.label == label {
+				groups[groups.count - 1].transcripts.append(transcript)
+			} else {
+				groups.append((label: label, transcripts: [transcript]))
+			}
+		}
+		return groups
 	}
 
 	var body: some View {
@@ -462,15 +525,22 @@ struct HistoryView: View {
             ContentUnavailableView.search(text: searchQuery)
           } else {
             ScrollView {
-              LazyVStack(spacing: 12) {
-                ForEach(visibleTranscripts) { transcript in
-                  TranscriptView(
-                    transcript: transcript,
-                    isPlaying: store.playingTranscriptID == transcript.id,
-                    onPlay: { store.send(.playTranscript(transcript.id)) },
-                    onCopy: { store.send(.copyToClipboard(transcript.text)) },
-                    onDelete: { store.send(.deleteTranscript(transcript.id)) }
-                  )
+              LazyVStack(alignment: .leading, spacing: 12) {
+                ForEach(groupedTranscripts, id: \.label) { group in
+                  Text(group.label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .padding(.top, 4)
+                  ForEach(group.transcripts) { transcript in
+                    TranscriptView(
+                      transcript: transcript,
+                      isPlaying: store.playingTranscriptID == transcript.id,
+                      onPlay: { store.send(.playTranscript(transcript.id)) },
+                      onCopy: { store.send(.copyToClipboard(transcript.text)) },
+                      onDelete: { store.send(.deleteTranscript(transcript.id)) }
+                    )
+                  }
                 }
               }
               .padding()
@@ -492,6 +562,16 @@ struct HistoryView: View {
         }
       }
       .searchable(text: $searchQuery, placement: .toolbar, prompt: "Search transcripts")
+      .task(id: searchQuery) {
+        // Debounce: wait for typing to settle before running the
+        // full-text filter. Cancelled + restarted on each keystroke.
+        if searchQuery.isEmpty {
+          debouncedQuery = ""
+          return
+        }
+        try? await Task.sleep(for: .milliseconds(250))
+        debouncedQuery = searchQuery
+      }
       .onDrop(of: [.audio, .movie], isTargeted: $isDropTargeted) { providers in
         handleDrop(providers)
       }
