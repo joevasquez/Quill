@@ -41,10 +41,11 @@ private enum OrbSize {
   /// Idle is deliberately compact — the orb sits on screen all day, so
   /// at rest it shrinks to a small, quiet presence and only blooms to
   /// full size while recording/processing. The content is scaled (not
-  /// re-laid-out) so every sub-view keeps its proportions.
-  static let idleScale: CGFloat = 0.58
-  static let idleField: CGFloat = 96
-  static let idleFieldWithRing: CGFloat = 148
+  /// re-laid-out) so every sub-view keeps its proportions. 0.72 keeps
+  /// the caption and mode legible; an earlier 0.58 was too small to read.
+  static let idleScale: CGFloat = 0.72
+  static let idleField: CGFloat = 118
+  static let idleFieldWithRing: CGFloat = 172
   static let satelliteRingRadius: CGFloat = 90
   static let satelliteTileSize: CGFloat = 32
   static let meterFrame: CGFloat = 130
@@ -224,8 +225,8 @@ struct OrbView: View {
 
       orbCaption
     }
-    .padding(.horizontal, isLive ? 24 : 10)
-    .padding(.vertical, isLive ? 16 : 8)
+    .padding(.horizontal, isLive ? 24 : 12)
+    .padding(.vertical, isLive ? 16 : 10)
     .background(orbBackdrop)
   }
 
@@ -359,7 +360,7 @@ struct OrbView: View {
       captionText
       statusLine
     }
-    .frame(width: isLive ? 280 : 132)
+    .frame(width: isLive ? 280 : 168)
     .padding(.top, 2)
   }
 
@@ -409,8 +410,8 @@ struct OrbView: View {
             .foregroundStyle(.white.opacity(0.85))
         } else {
           Text(hotkeyHint)
-            .font(.system(size: 10.5, weight: .medium))
-            .foregroundStyle(.white.opacity(0.42))
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.white.opacity(0.55))
         }
       case .recording:
         if !partialTranscript.isEmpty {
@@ -465,31 +466,74 @@ struct OrbView: View {
 
   // MARK: - Act-mode satellite ring
 
+  /// Cap the ring at 6 tiles so it stays legible as the integration +
+  /// MCP catalog grows — extras collapse into a "+N" overflow tile. The
+  /// active target (locked or intuited) is always swapped into view.
+  private static let maxVisibleSatellites = 6
+
+  private var visibleSatellites: [Integration.Identifier] {
+    let all = actionIntegrations
+    guard all.count > Self.maxVisibleSatellites + 1 else { return all }
+    var visible = Array(all.prefix(Self.maxVisibleSatellites))
+    if let target = activeTarget, !visible.contains(target), all.contains(target) {
+      visible[visible.count - 1] = target
+    }
+    return visible
+  }
+
+  private var overflowSatelliteCount: Int {
+    max(0, actionIntegrations.count - visibleSatellites.count)
+  }
+
   private var satelliteRing: some View {
-    let integrations = Array(actionIntegrations.prefix(9))
+    let visible = visibleSatellites
+    let overflow = overflowSatelliteCount
+    let total = visible.count + (overflow > 0 ? 1 : 0)
     return ZStack {
-      ForEach(Array(integrations.enumerated()), id: \.element) { index, id in
+      ForEach(Array(visible.enumerated()), id: \.element) { index, id in
         OrbSatelliteTile(
           identifier: id,
           isTarget: activeTarget == id,
           index: index,
-          total: integrations.count,
+          total: total,
           radius: OrbSize.satelliteRingRadius,
           onTap: { onToggleActionIntegration(id) }
         )
+      }
+      if overflow > 0 {
+        let angle = Self.satelliteAngle(index: visible.count, total: total)
+        Text("+\(overflow)")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(.white.opacity(0.6))
+          .frame(width: OrbSize.satelliteTileSize, height: OrbSize.satelliteTileSize)
+          .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+              .fill(Color.white.opacity(0.06))
+          )
+          .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+              .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+          )
+          .offset(
+            x: OrbSize.satelliteRingRadius * cos(angle),
+            y: OrbSize.satelliteRingRadius * sin(angle)
+          )
+          .help("\(overflow) more connected — say the name to target them")
       }
     }
     .transition(.opacity.animation(.easeOut(duration: 0.35)))
   }
 
   private var satelliteTether: some View {
-    let integrations = Array(actionIntegrations.prefix(9))
+    let integrations = visibleSatellites
+    let overflow = overflowSatelliteCount
+    let total = integrations.count + (overflow > 0 ? 1 : 0)
     return Canvas { context, size in
       guard let target = activeTarget,
             let index = integrations.firstIndex(of: target)
       else { return }
       let center = CGPoint(x: size.width / 2, y: size.height / 2)
-      let angle = Self.satelliteAngle(index: index, total: integrations.count)
+      let angle = Self.satelliteAngle(index: index, total: total)
       let dest = CGPoint(
         x: center.x + OrbSize.satelliteRingRadius * cos(angle),
         y: center.y + OrbSize.satelliteRingRadius * sin(angle)
