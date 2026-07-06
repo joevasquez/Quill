@@ -46,8 +46,31 @@ extension ActionParsingClient: DependencyKey {
         return try JSONDecoder().decode(RoutineDraft.self, from: data)
       },
       extractMemory: { transcript, provider in
+        let userMessage = TranscriptWrapper.wrap(transcript)
+
+        // Prefer Apple's on-device model for memory extraction: it's a
+        // background, low-stakes pass and running it locally means the
+        // agent learns for free without the transcript leaving the Mac.
+        // Any failure (unavailable, malformed JSON) falls through to the
+        // cloud path.
+        if let local = await OnDeviceModel.complete(
+          systemPrompt: MemoryExtractionPrompt.prompt,
+          userMessage: userMessage
+        ) {
+          let cleaned = local
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+          if let data = cleaned.data(using: .utf8),
+             let response = try? JSONDecoder().decode(MemoryExtractionResponse.self, from: data) {
+            actionLogger.info("Memory extraction ran on-device (\(response.entities.count, privacy: .public) entities)")
+            return response.entities
+          }
+          actionLogger.warning("On-device memory extraction returned non-JSON; falling back to cloud")
+        }
+
         let json = try await completeJSON(
-          userMessage: TranscriptWrapper.wrap(transcript),
+          userMessage: userMessage,
           systemPrompt: MemoryExtractionPrompt.prompt,
           provider: provider
         )
@@ -67,6 +90,13 @@ private func parseTranscript(_ transcript: String, provider: AIProvider, selecti
   let memories = await MemoryStore.shared.loadAll()
   if let context = MemoryContextBuilder.context(from: memories) {
     systemPrompt += "\n\n" + context
+  }
+
+  // MCP: list the user's connected servers' tools so the LLM can emit
+  // mcpCall actions. No-op when no server has a cached tool catalog.
+  @Shared(.hexSettings) var hexSettings: HexSettings
+  if let mcpContext = await MCPToolCatalog.shared.promptContext(servers: hexSettings.mcpServers) {
+    systemPrompt += "\n\n" + mcpContext
   }
 
   let jsonString = try await completeJSON(

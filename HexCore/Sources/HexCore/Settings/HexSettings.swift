@@ -87,6 +87,10 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	/// The user-chosen name for their personal agent ("Hermes" by default).
 	/// Used in Action-mode copy, the confirmation panel, and Settings.
 	public var agentName: String
+	/// User-connected MCP (Model Context Protocol) servers — each one's
+	/// tools become invocable by the agent in Action mode. Auth tokens
+	/// live in the keychain, not here.
+	public var mcpServers: [MCPServerConfig]
 	/// When on, Action-mode dictations feed a background memory-extraction
 	/// pass so the agent learns people/projects/preferences over time.
 	public var agentMemoryEnabled: Bool
@@ -145,6 +149,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		displayMode: DisplayMode = .hud,
 		appPasteDelays: [AppPasteDelay] = AppPasteDelay.defaults,
 		agentName: String = "Hermes",
+		mcpServers: [MCPServerConfig] = [],
 		agentMemoryEnabled: Bool = true
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
@@ -189,6 +194,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.displayMode = displayMode
 		self.appPasteDelays = appPasteDelays
 		self.agentName = agentName
+		self.mcpServers = mcpServers
 		self.agentMemoryEnabled = agentMemoryEnabled
 		normalizeDoubleTapSettings()
 	}
@@ -256,6 +262,7 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case displayMode
 	case appPasteDelays
 	case agentName
+	case mcpServers
 	case agentMemoryEnabled
 }
 
@@ -415,6 +422,7 @@ private enum HexSettingsSchema {
 		SettingsField(.displayMode, keyPath: \.displayMode, default: defaults.displayMode).eraseToAny(),
 		SettingsField(.appPasteDelays, keyPath: \.appPasteDelays, default: defaults.appPasteDelays).eraseToAny(),
 		SettingsField(.agentName, keyPath: \.agentName, default: defaults.agentName).eraseToAny(),
+		SettingsField(.mcpServers, keyPath: \.mcpServers, default: defaults.mcpServers).eraseToAny(),
 		SettingsField(.agentMemoryEnabled, keyPath: \.agentMemoryEnabled, default: defaults.agentMemoryEnabled).eraseToAny(),
 	]
 }

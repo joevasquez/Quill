@@ -23,6 +23,12 @@ public final class SystemActionQueueExecutor: ActionQueueExecutor {
     @Dependency(\.gmailAdapter) var gmailAdapter
     @Dependency(\.googleCalendarAdapter) var googleCalendarAdapter
 
+    // MCP calls route by server name, not integration.
+    if intent.actionType == .mcpCall {
+      _ = try await MCPActionExecutor.execute(intent)
+      return
+    }
+
     switch intent.targetIntegration {
     case .appleReminders:
       _ = try await reminders.createReminder(intent)

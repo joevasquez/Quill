@@ -66,6 +66,10 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 		// Record app open and schedule analytics upload
 		AnalyticsUploader.shared.recordAppOpen()
 
+		// Warm the MCP tool catalog so Action-mode parsing can offer the
+		// user's connected servers' tools without a blocking fetch.
+		refreshMCPCatalog()
+
 		// Start long-running app effects (global hotkeys, permissions, etc.)
 		startLifecycleTasksIfNeeded()
 
@@ -285,6 +289,24 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 		panel.makeKey()
 		actionPanel = panel
 		HexLog.action.info("Multi-action panel ordered front at frame: \(NSStringFromRect(panel.frame), privacy: .public)")
+	}
+
+	/// Best-effort tools/list against every enabled MCP server. Failures
+	/// are logged and skipped — a dead server just contributes no tools.
+	private func refreshMCPCatalog() {
+		let servers = hexSettings.mcpServers.filter(\.isEnabled)
+		guard !servers.isEmpty else { return }
+		Task {
+			@Dependency(\.keychain) var keychain
+			for server in servers {
+				let token = await keychain.read(server.keychainTokenKey)
+				do {
+					try await MCPToolCatalog.shared.refresh(server: server, authToken: token)
+				} catch {
+					HexLog.app.warning("MCP catalog refresh failed for \(server.name, privacy: .private): \(error.localizedDescription, privacy: .public)")
+				}
+			}
+		}
 	}
 
 	@objc

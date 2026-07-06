@@ -9,6 +9,7 @@
 //  go straight through @Shared(.hexSettings).
 //
 
+import Dependencies
 import HexCore
 import Inject
 import Sharing
@@ -20,16 +21,102 @@ struct AgentSectionView: View {
 
   @State private var routines: [Routine] = []
   @State private var memories: [MemoryEntity] = []
+  @State private var mcpToolCounts: [UUID: Int] = [:]
+  @State private var mcpErrors: [UUID: String] = [:]
+  @State private var showAddMCPServer = false
 
   var body: some View {
     Group {
       heroSection
       identitySection
       routinesSection
+      mcpSection
       memorySection
     }
     .task { await reload() }
+    .sheet(isPresented: $showAddMCPServer) {
+      MCPServerSheet { name, url, token in
+        Task { await addMCPServer(name: name, url: url, token: token) }
+      }
+    }
     .enableInjection()
+  }
+
+  // MARK: - MCP servers
+
+  private var mcpSection: some View {
+    Section {
+      if hexSettings.mcpServers.isEmpty {
+        HStack(spacing: 6) {
+          Image(systemName: "point.3.connected.trianglepath.dotted")
+            .foregroundStyle(.secondary)
+            .font(.caption)
+          Text("No MCP servers connected")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      } else {
+        ForEach(hexSettings.mcpServers) { server in
+          MCPServerRow(
+            server: server,
+            toolCount: mcpToolCounts[server.id],
+            error: mcpErrors[server.id],
+            onToggleEnabled: { enabled in
+              $hexSettings.withLock { settings in
+                if let idx = settings.mcpServers.firstIndex(where: { $0.id == server.id }) {
+                  settings.mcpServers[idx].isEnabled = enabled
+                }
+              }
+              if enabled { Task { await refreshServer(server) } }
+            },
+            onRefresh: { Task { await refreshServer(server) } },
+            onDelete: { Task { await deleteMCPServer(server) } }
+          )
+        }
+      }
+      Button {
+        showAddMCPServer = true
+      } label: {
+        Label("Add MCP Server", systemImage: "plus.circle")
+      }
+      .controlSize(.small)
+    } header: {
+      Text("Tools (MCP)")
+    } footer: {
+      Text("Connect any Model Context Protocol server over HTTP and its tools become things you can ask \(agentName) to do by voice. Auth tokens are stored in the keychain.")
+        .settingsCaption()
+    }
+  }
+
+  private func addMCPServer(name: String, url: String, token: String) async {
+    let server = MCPServerConfig(name: name, url: url)
+    if !token.isEmpty {
+      @Dependency(\.keychain) var keychain
+      try? await keychain.save(server.keychainTokenKey, token)
+    }
+    $hexSettings.withLock { $0.mcpServers.append(server) }
+    await refreshServer(server)
+  }
+
+  private func refreshServer(_ server: MCPServerConfig) async {
+    @Dependency(\.keychain) var keychain
+    let token = await keychain.read(server.keychainTokenKey)
+    do {
+      let tools = try await MCPToolCatalog.shared.refresh(server: server, authToken: token)
+      mcpToolCounts[server.id] = tools.count
+      mcpErrors[server.id] = nil
+    } catch {
+      mcpErrors[server.id] = error.localizedDescription
+    }
+  }
+
+  private func deleteMCPServer(_ server: MCPServerConfig) async {
+    $hexSettings.withLock { settings in
+      settings.mcpServers.removeAll { $0.id == server.id }
+    }
+    await MCPToolCatalog.shared.remove(serverID: server.id)
+    @Dependency(\.keychain) var keychain
+    await keychain.delete(server.keychainTokenKey)
   }
 
   // MARK: - Hero
@@ -90,6 +177,11 @@ struct AgentSectionView: View {
     routines = await RoutineStore.shared.loadAll()
     memories = await MemoryStore.shared.loadAll()
       .sorted { $0.lastSeenAt > $1.lastSeenAt }
+    for server in hexSettings.mcpServers {
+      if let entry = await MCPToolCatalog.shared.cachedTools(for: server.id) {
+        mcpToolCounts[server.id] = entry.tools.count
+      }
+    }
   }
 
   // MARK: - Identity
@@ -314,5 +406,112 @@ private struct MemoryRow: View {
     }
     parts.append(contentsOf: entity.details.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" })
     return parts.joined(separator: " · ")
+  }
+}
+
+// MARK: - MCP server row + add sheet
+
+private struct MCPServerRow: View {
+  let server: MCPServerConfig
+  let toolCount: Int?
+  let error: String?
+  let onToggleEnabled: (Bool) -> Void
+  let onRefresh: () -> Void
+  let onDelete: () -> Void
+
+  var body: some View {
+    HStack(alignment: .center, spacing: 10) {
+      Image(systemName: "point.3.connected.trianglepath.dotted")
+        .foregroundStyle(server.isEnabled ? Color.purple : Color.secondary)
+        .frame(width: 16)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(server.name)
+          .font(.subheadline.weight(.medium))
+        HStack(spacing: 6) {
+          Text(server.url)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+          if let error {
+            Text("· \(error)")
+              .font(.caption)
+              .foregroundStyle(.red)
+              .lineLimit(1)
+          } else if let toolCount {
+            Text("· \(toolCount) tool\(toolCount == 1 ? "" : "s")")
+              .font(.caption)
+              .foregroundStyle(.green)
+          }
+        }
+      }
+      Spacer()
+      Button(action: onRefresh) {
+        Image(systemName: "arrow.clockwise")
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.plain)
+      .help("Refresh tool list")
+      Toggle("", isOn: Binding(get: { server.isEnabled }, set: onToggleEnabled))
+        .toggleStyle(.switch)
+        .controlSize(.mini)
+        .labelsHidden()
+      Button(action: onDelete) {
+        Image(systemName: "trash")
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.plain)
+      .help("Remove server")
+    }
+  }
+}
+
+private struct MCPServerSheet: View {
+  @Environment(\.dismiss) private var dismiss
+  let onAdd: (String, String, String) -> Void
+
+  @State private var name = ""
+  @State private var url = ""
+  @State private var token = ""
+
+  private var isValid: Bool {
+    !name.trimmingCharacters(in: .whitespaces).isEmpty
+      && URL(string: url)?.scheme?.hasPrefix("http") == true
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      Text("Add MCP Server")
+        .font(.headline)
+      Text("Any server speaking Model Context Protocol over HTTP. Its tools become voice-invocable actions.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+
+      TextField("Name (how you'll say it — e.g. linear)", text: $name)
+        .textFieldStyle(.roundedBorder)
+      TextField("URL (https://mcp.example.com/mcp)", text: $url)
+        .textFieldStyle(.roundedBorder)
+        .autocorrectionDisabled()
+      SecureField("Bearer token (optional)", text: $token)
+        .textFieldStyle(.roundedBorder)
+
+      HStack {
+        Spacer()
+        Button("Cancel") { dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button("Add") {
+          onAdd(
+            name.trimmingCharacters(in: .whitespaces),
+            url.trimmingCharacters(in: .whitespaces),
+            token.trimmingCharacters(in: .whitespaces)
+          )
+          dismiss()
+        }
+        .keyboardShortcut(.defaultAction)
+        .disabled(!isValid)
+      }
+    }
+    .padding(20)
+    .frame(width: 420)
   }
 }

@@ -7,6 +7,9 @@ public struct ActionIntent: Codable, Equatable, Sendable {
     case createEvent
     case createDraft
     case sendEmail
+    /// Invoke a tool on a user-connected MCP server. Uses the mcp* fields
+    /// below; `targetIntegration` is ignored for this type.
+    case mcpCall
   }
 
   public var actionType: ActionType
@@ -29,6 +32,12 @@ public struct ActionIntent: Codable, Equatable, Sendable {
   public var recipient: String?
   /// Email subject line, if dictated explicitly.
   public var subject: String?
+  /// MCP call fields (actionType == .mcpCall): the user-assigned server
+  /// name, the tool to invoke, and its arguments. Arguments are stored as
+  /// strings and coerced to the tool's schema types at call time.
+  public var mcpServerName: String?
+  public var mcpTool: String?
+  public var mcpArguments: [String: String]?
 
   public init(
     actionType: ActionType,
@@ -43,7 +52,10 @@ public struct ActionIntent: Codable, Equatable, Sendable {
     startDate: Date? = nil,
     endDate: Date? = nil,
     recipient: String? = nil,
-    subject: String? = nil
+    subject: String? = nil,
+    mcpServerName: String? = nil,
+    mcpTool: String? = nil,
+    mcpArguments: [String: String]? = nil
   ) {
     self.actionType = actionType
     self.targetIntegration = targetIntegration
@@ -58,6 +70,9 @@ public struct ActionIntent: Codable, Equatable, Sendable {
     self.endDate = endDate
     self.recipient = recipient
     self.subject = subject
+    self.mcpServerName = mcpServerName
+    self.mcpTool = mcpTool
+    self.mcpArguments = mcpArguments
   }
 }
 

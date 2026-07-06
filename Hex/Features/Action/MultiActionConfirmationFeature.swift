@@ -70,6 +70,11 @@ struct MultiActionConfirmationFeature {
       }
 
       var displaySubtitle: String {
+        if intent.actionType == .mcpCall {
+          let server = intent.mcpServerName ?? "MCP"
+          let tool = intent.mcpTool ?? "tool"
+          return "\(server) · \(tool)"
+        }
         switch intent.targetIntegration {
         case .calendar, .googleCalendar:
           let formatter = DateFormatter()
@@ -86,6 +91,13 @@ struct MultiActionConfirmationFeature {
 
       func buildFinalIntent() -> ActionIntent {
         var final = intent
+        // MCP calls pass through untouched — their arguments aren't
+        // editable in the panel and the per-integration coercions below
+        // would misapply (e.g. forcing actionType to .createEvent).
+        if intent.actionType == .mcpCall {
+          final.title = editableTitle
+          return final
+        }
         final.title = editableTitle
         final.dueDate = editableDueDate.isEmpty ? nil : editableDueDate
         final.notes = editableNotes.isEmpty ? nil : editableNotes
@@ -206,19 +218,23 @@ struct MultiActionConfirmationFeature {
                 let integration = finalIntent.targetIntegration
                 do {
                   let id: String
-                  switch integration {
-                  case .todoist:
-                    id = try await todoist.createTask(finalIntent)
-                  case .appleReminders:
-                    id = try await reminders.createReminder(finalIntent)
-                  case .calendar:
-                    id = try await calendarAdapter.createEvent(finalIntent)
-                  case .gmail:
-                    id = try await gmailAdapter.createDraft(finalIntent)
-                  case .googleCalendar:
-                    id = try await googleCalendarAdapter.createEvent(finalIntent)
-                  default:
-                    throw ActionConfirmationError.unsupportedIntegration(integration)
+                  if finalIntent.actionType == .mcpCall {
+                    id = try await MCPActionExecutor.execute(finalIntent)
+                  } else {
+                    switch integration {
+                    case .todoist:
+                      id = try await todoist.createTask(finalIntent)
+                    case .appleReminders:
+                      id = try await reminders.createReminder(finalIntent)
+                    case .calendar:
+                      id = try await calendarAdapter.createEvent(finalIntent)
+                    case .gmail:
+                      id = try await gmailAdapter.createDraft(finalIntent)
+                    case .googleCalendar:
+                      id = try await googleCalendarAdapter.createEvent(finalIntent)
+                    default:
+                      throw ActionConfirmationError.unsupportedIntegration(integration)
+                    }
                   }
                   return (item.id, .succeeded(id))
                 } catch {
