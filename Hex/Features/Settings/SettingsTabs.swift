@@ -55,9 +55,30 @@ struct GeneralSettingsTabView: View {
       }
       SoundSectionView(store: store)
       GeneralSectionView(store: store)
-      OfflineQueueSectionView()
       KeyboardShortcutReferenceView(store: store)
       AboutSectionView(store: store)
+    }
+    .formStyle(.grouped)
+    .task { await store.send(.task).finish() }
+    .enableInjection()
+  }
+}
+
+// MARK: - Agent
+
+/// The personal agent hub: identity, learned memory, saved routines,
+/// and the offline action queue (pending agent work). Everything on
+/// this tab is about what the agent knows and does on the user's
+/// behalf — kept separate from General so the flagship feature has a
+/// front door instead of being buried between sound and dock toggles.
+struct AgentSettingsTabView: View {
+  @ObserveInjection var inject
+  @Bindable var store: StoreOf<SettingsFeature>
+
+  var body: some View {
+    Form {
+      AgentSectionView()
+      OfflineQueueSectionView()
     }
     .formStyle(.grouped)
     .task { await store.send(.task).finish() }

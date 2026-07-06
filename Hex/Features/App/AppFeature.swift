@@ -37,6 +37,9 @@ struct AppFeature {
     /// sleep), and history-retention configuration. The "catchall"
     /// landing tab.
     case general
+    /// The personal agent hub: identity (name), saved routines,
+    /// learned memory, and pending offline actions.
+    case agent
     /// Recording-specific settings: Whisper/Parakeet model, output
     /// language, hotkey configuration, microphone selection.
     case recording
@@ -516,10 +519,11 @@ struct AppView: View {
         // pane gets the full window width for the editor.
         if sidebarMode == .settings {
           List(selection: $store.activeTab) {
-            tabRow(.general, label: "General", icon: "gearshape")
-            tabRow(.recording, label: "Recording", icon: "mic.circle")
-            tabRow(.ai, label: "AI Processing", icon: "sparkles")
-            tabRow(.integrations, label: "Integrations", icon: "app.connected.to.app.below.fill")
+            tabRow(.general, label: "General", icon: "gearshape.fill", tint: .gray)
+            tabRow(.agent, label: agentTabLabel, icon: "sparkles", tint: .purple)
+            tabRow(.recording, label: "Recording", icon: "mic.fill", tint: .red)
+            tabRow(.ai, label: "AI Processing", icon: "wand.and.stars", tint: .blue)
+            tabRow(.integrations, label: "Integrations", icon: "app.connected.to.app.below.fill", tint: .teal)
           }
           .listStyle(.sidebar)
         } else if sidebarMode == .notes {
@@ -547,6 +551,9 @@ struct AppView: View {
           inputMonitoringPermission: store.inputMonitoringPermission
         )
         .navigationTitle("General")
+      case .agent:
+        AgentSettingsTabView(store: store.scope(state: \.settings, action: \.settings))
+          .navigationTitle(agentTabLabel)
       case .recording:
         RecordingSettingsTabView(
           store: store.scope(state: \.settings, action: \.settings),
@@ -595,17 +602,35 @@ struct AppView: View {
     .enableInjection()
   }
 
+  /// The agent tab shows the user's chosen agent name so the sidebar
+  /// reads "Hermes" (or whatever they named it), not a generic "Agent".
+  private var agentTabLabel: String {
+    let name = store.hexSettings.agentName.trimmingCharacters(in: .whitespaces)
+    return name.isEmpty ? "Agent" : name
+  }
+
   /// Sidebar row builder. Encodes the consistent button-as-row
   /// pattern used by every entry in the navigation list and keeps
-  /// the call sites readable.
+  /// the call sites readable. Icons render in System Settings-style
+  /// tinted tiles so the list scans by color as well as label.
   @ViewBuilder
-  private func tabRow(_ tab: AppFeature.ActiveTab, label: String, icon: String) -> some View {
+  private func tabRow(_ tab: AppFeature.ActiveTab, label: String, icon: String, tint: Color) -> some View {
     Button {
       store.send(.setActiveTab(tab))
     } label: {
-      Label(label, systemImage: icon)
-        .symbolRenderingMode(.hierarchical)
-        .font(.system(size: 13))
+      Label {
+        Text(label)
+          .font(.system(size: 13))
+      } icon: {
+        Image(systemName: icon)
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(.white)
+          .frame(width: 22, height: 22)
+          .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+              .fill(tint.gradient)
+          )
+      }
     }
     .buttonStyle(.plain)
     .tag(tab)

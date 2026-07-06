@@ -223,21 +223,19 @@ struct NotesView: View {
     VStack(spacing: 24) {
       Spacer()
       if sortedNotes.isEmpty {
-        Image(systemName: "note.text")
-          .font(.system(size: 48))
-          .foregroundStyle(.tertiary)
+        landingGlyph("note.text")
         Text("No notes yet")
-          .font(.title3)
+          .font(.title3.weight(.medium))
+        Text("Create a note here, or dictate one on your iPhone —\nthey sync automatically when Cloud Sync is on.")
+          .font(.callout)
           .foregroundStyle(.secondary)
-        Text("Create a note or sync from your iPhone.")
-          .font(.caption)
-          .foregroundStyle(.tertiary)
+          .multilineTextAlignment(.center)
       } else {
-        Image(systemName: "sidebar.left")
-          .font(.system(size: 36))
-          .foregroundStyle(.tertiary)
+        landingGlyph("square.and.pencil")
         Text("Select a note")
-          .font(.title3)
+          .font(.title3.weight(.medium))
+        Text("Pick a note from the sidebar, or start a new one.")
+          .font(.callout)
           .foregroundStyle(.secondary)
       }
       Spacer()
@@ -250,6 +248,25 @@ struct NotesView: View {
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  private func landingGlyph(_ symbol: String) -> some View {
+    ZStack {
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .fill(
+          LinearGradient(
+            colors: [Color.purple.opacity(0.18), Color.blue.opacity(0.12)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+          )
+        )
+        .frame(width: 76, height: 76)
+      Image(systemName: symbol)
+        .font(.system(size: 32, weight: .medium))
+        .foregroundStyle(
+          LinearGradient(colors: [.purple, .blue], startPoint: .top, endPoint: .bottom)
+        )
+    }
   }
 
   // MARK: - Cloud Sync panel
@@ -416,7 +433,13 @@ private struct NoteEditorView: View {
           photoSegments
           bodyEditor
         }
-        .padding(24)
+        .padding(.horizontal, 32)
+        .padding(.vertical, 28)
+        // Cap the content column so long notes stay readable on wide
+        // windows — the editor tracks a comfortable measure instead of
+        // stretching edge to edge.
+        .frame(maxWidth: 760, alignment: .leading)
+        .frame(maxWidth: .infinity)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -602,6 +625,11 @@ private struct NoteEditorView: View {
 
       Spacer()
 
+      Text(wordCountLabel)
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+        .monospacedDigit()
+
       if isDirty {
         Button {
           onSync()
@@ -624,7 +652,14 @@ private struct NoteEditorView: View {
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 8)
-    .background(Color(nsColor: .windowBackgroundColor))
+    .background(.bar)
+  }
+
+  private var wordCountLabel: String {
+    let words = NoteContent.stripPhotos(from: editingBody)
+      .split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+      .count
+    return words == 1 ? "1 word" : "\(words) words"
   }
 
   // MARK: - Helpers
@@ -671,13 +706,14 @@ private struct MarkdownTextEditor: NSViewRepresentable {
     tv.isRichText = false
     tv.allowsUndo = true
     tv.usesFontPanel = false
-    tv.font = .systemFont(ofSize: NSFont.systemFontSize)
+    tv.font = MarkdownHighlighter.baseFont
     tv.textColor = .labelColor
     tv.backgroundColor = .clear
     tv.isAutomaticQuoteSubstitutionEnabled = false
     tv.isAutomaticDashSubstitutionEnabled = false
     tv.isAutomaticTextReplacementEnabled = false
-    tv.textContainerInset = NSSize(width: 0, height: 4)
+    tv.textContainerInset = NSSize(width: 0, height: 8)
+    tv.defaultParagraphStyle = MarkdownHighlighter.paragraphStyle
 
     // Publish the reference so the toolbar can use it
     DispatchQueue.main.async {
@@ -727,8 +763,18 @@ private struct MarkdownTextEditor: NSViewRepresentable {
 /// italic, strikethrough, monospace). Headings and bullets get
 /// styled at the line level.
 private enum MarkdownHighlighter {
-  static let baseSize = NSFont.systemFontSize
+  /// Slightly larger than the system default — notes are prose, not UI
+  /// chrome, and the extra 2pt plus line spacing reads much better in a
+  /// full-width editor.
+  static let baseSize = NSFont.systemFontSize + 2
   static let baseFont = NSFont.systemFont(ofSize: baseSize)
+
+  static let paragraphStyle: NSParagraphStyle = {
+    let style = NSMutableParagraphStyle()
+    style.lineSpacing = 3
+    style.paragraphSpacing = 4
+    return style
+  }()
 
   static func highlight(_ textView: NSTextView) {
     guard let textStorage = textView.textStorage else { return }
@@ -746,6 +792,7 @@ private enum MarkdownHighlighter {
       .font: baseFont,
       .foregroundColor: NSColor.labelColor,
       .strikethroughStyle: 0,
+      .paragraphStyle: paragraphStyle,
     ]
     textStorage.setAttributes(baseAttrs, range: fullRange)
 
