@@ -20,6 +20,9 @@ enum ActionConfirmationNotification {
   static let intentKey = "actionIntent"
   static let intentsKey = "actionIntents"
   static let rawTranscriptKey = "rawTranscript"
+  /// When true the panel executes immediately on appear — used by routines
+  /// the user has promoted to auto-run on the trust ladder.
+  static let autoExecuteKey = "autoExecute"
 
   static func post(intent: ActionIntent, rawTranscript: String = "") {
     NotificationCenter.default.post(
@@ -32,13 +35,14 @@ enum ActionConfirmationNotification {
     )
   }
 
-  static func postMulti(intents: [ActionIntent], rawTranscript: String = "") {
+  static func postMulti(intents: [ActionIntent], rawTranscript: String = "", autoExecute: Bool = false) {
     NotificationCenter.default.post(
       name: .presentMultiActionConfirmation,
       object: nil,
       userInfo: [
         intentsKey: intents,
         rawTranscriptKey: rawTranscript,
+        autoExecuteKey: autoExecute,
       ]
     )
   }

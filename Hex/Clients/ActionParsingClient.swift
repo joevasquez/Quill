@@ -1,3 +1,4 @@
+import ComposableArchitecture
 import Dependencies
 import DependenciesMacros
 import Foundation
@@ -9,60 +10,73 @@ private let actionLogger = HexLog.action
 @DependencyClient
 struct ActionParsingClient {
   var parse: @Sendable (String, AIProvider) async throws -> ActionIntent
-  var parseMulti: @Sendable (String, AIProvider) async throws -> MultiActionResponse
+  /// The third parameter is optional selected-text context: text the user
+  /// had highlighted in the frontmost app, so "add this to …" resolves.
+  var parseMulti: @Sendable (String, AIProvider, String?) async throws -> MultiActionResponse
+  /// Turns a dictated routine description ("when I say ship it, …") into a
+  /// named trigger + steps draft.
+  var parseRoutine: @Sendable (String, AIProvider) async throws -> RoutineDraft
+  /// Background memory pass: distills durable entities (people, projects,
+  /// preferences) from an Action-mode transcript.
+  var extractMemory: @Sendable (String, AIProvider) async throws -> [MemoryCandidate]
 }
 
 extension ActionParsingClient: DependencyKey {
   static var liveValue: Self {
     .init(
       parse: { transcript, provider in
-        let response = try await parseTranscript(transcript, provider: provider)
+        let response = try await parseTranscript(transcript, provider: provider, selection: nil)
         guard let intent = response.actions.first else {
           throw ActionParsingError.parseFailure("Empty actions array")
         }
         return intent
       },
-      parseMulti: { transcript, provider in
-        try await parseTranscript(transcript, provider: provider)
+      parseMulti: { transcript, provider, selection in
+        try await parseTranscript(transcript, provider: provider, selection: selection)
+      },
+      parseRoutine: { description, provider in
+        let json = try await completeJSON(
+          userMessage: TranscriptWrapper.wrap(description),
+          systemPrompt: RoutineAuthoringPrompt.prompt,
+          provider: provider
+        )
+        guard let data = json.data(using: .utf8) else {
+          throw ActionParsingError.parseFailure(json)
+        }
+        return try JSONDecoder().decode(RoutineDraft.self, from: data)
+      },
+      extractMemory: { transcript, provider in
+        let json = try await completeJSON(
+          userMessage: TranscriptWrapper.wrap(transcript),
+          systemPrompt: MemoryExtractionPrompt.prompt,
+          provider: provider
+        )
+        guard let data = json.data(using: .utf8) else {
+          throw ActionParsingError.parseFailure(json)
+        }
+        return try JSONDecoder().decode(MemoryExtractionResponse.self, from: data).entities
       }
     )
   }
 }
 
-private func parseTranscript(_ transcript: String, provider: AIProvider) async throws -> MultiActionResponse {
-  @Dependency(\.keychain) var keychain
-
-  let apiKey: String
-  switch provider {
-  case .openAI:
-    guard let key = await keychain.read(KeychainKey.openAIAPIKey), !key.isEmpty else {
-      throw ActionParsingError.missingAPIKey(provider)
-    }
-    apiKey = key
-  case .anthropic:
-    guard let key = await keychain.read(KeychainKey.anthropicAPIKey), !key.isEmpty else {
-      throw ActionParsingError.missingAPIKey(provider)
-    }
-    apiKey = key
+private func parseTranscript(_ transcript: String, provider: AIProvider, selection: String?) async throws -> MultiActionResponse {
+  // Agent memory: append known people/projects/preferences so "email Mike"
+  // resolves without clarifying questions. No-op when the store is empty.
+  var systemPrompt = actionSystemPrompt
+  let memories = await MemoryStore.shared.loadAll()
+  if let context = MemoryContextBuilder.context(from: memories) {
+    systemPrompt += "\n\n" + context
   }
 
-  actionLogger.info("Parsing action from \(transcript.count, privacy: .public) chars via \(provider.displayName, privacy: .public)")
+  let jsonString = try await completeJSON(
+    userMessage: TranscriptWrapper.wrapWithSelection(transcript, selection: selection),
+    systemPrompt: systemPrompt,
+    provider: provider
+  )
 
-  let jsonString: String
-  switch provider {
-  case .openAI:
-    jsonString = try await callOpenAI(transcript: transcript, apiKey: apiKey)
-  case .anthropic:
-    jsonString = try await callAnthropic(transcript: transcript, apiKey: apiKey)
-  }
-
-  let cleaned = jsonString
-    .replacingOccurrences(of: "```json", with: "")
-    .replacingOccurrences(of: "```", with: "")
-    .trimmingCharacters(in: .whitespacesAndNewlines)
-
-  guard let data = cleaned.data(using: .utf8) else {
-    throw ActionParsingError.parseFailure(cleaned)
+  guard let data = jsonString.data(using: .utf8) else {
+    throw ActionParsingError.parseFailure(jsonString)
   }
 
   // Try multi-action format first, fall back to single intent wrapped in array
@@ -74,6 +88,55 @@ private func parseTranscript(_ transcript: String, provider: AIProvider) async t
   let intent = try JSONDecoder().decode(ActionIntent.self, from: data)
   actionLogger.info("Parsed action: type=\(intent.actionType.rawValue, privacy: .public) title=\(intent.title, privacy: .private)")
   return MultiActionResponse(actions: [intent])
+}
+
+/// Shared LLM round-trip for all structured-JSON agent calls. Callers pass a
+/// fully-built user message (transcript wrapping + optional selection block
+/// already applied). Pro users route through the server-side proxy (no local
+/// API key needed) — the same policy as `AIProcessingClient.process`; BYOK
+/// users hit the provider directly.
+private func completeJSON(userMessage: String, systemPrompt: String, provider: AIProvider) async throws -> String {
+  actionLogger.info("Agent LLM call: \(userMessage.count, privacy: .public) chars via \(provider.displayName, privacy: .public)")
+
+  let raw: String
+  if isActionProModeActive() {
+    @Dependency(\.googleOAuth) var googleOAuth
+    guard let accessToken = try? await googleOAuth.refreshIfNeeded() else {
+      throw ActionParsingError.missingAPIKey(provider)
+    }
+    raw = try await ProAIProxyClient.process(
+      text: userMessage,
+      systemPrompt: systemPrompt,
+      accessToken: accessToken,
+      skipTranscriptWrapping: true
+    )
+  } else {
+    @Dependency(\.keychain) var keychain
+    let keychainKey = provider == .openAI ? KeychainKey.openAIAPIKey : KeychainKey.anthropicAPIKey
+    guard let key = await keychain.read(keychainKey), !key.isEmpty else {
+      throw ActionParsingError.missingAPIKey(provider)
+    }
+    let apiKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+    switch provider {
+    case .openAI:
+      raw = try await callOpenAI(userMessage: userMessage, systemPrompt: systemPrompt, apiKey: apiKey)
+    case .anthropic:
+      raw = try await callAnthropic(userMessage: userMessage, systemPrompt: systemPrompt, apiKey: apiKey)
+    }
+  }
+
+  return raw
+    .replacingOccurrences(of: "```json", with: "")
+    .replacingOccurrences(of: "```", with: "")
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+/// Mirrors `isProModeActive()` in AIProcessingClient (private there).
+private func isActionProModeActive() -> Bool {
+  @Shared(.hexSettings) var hexSettings: HexSettings
+  guard hexSettings.selectedPlan == "pro" else { return false }
+  let email = UserDefaults.standard.string(forKey: GoogleOAuthClient.googleAccountEmailDefaultsKey)
+  return email?.isEmpty == false
 }
 
 extension DependencyValues {
@@ -89,7 +152,7 @@ private let actionSystemPrompt = ActionSystemPrompt.prompt
 
 // MARK: - OpenAI
 
-private func callOpenAI(transcript: String, apiKey: String) async throws -> String {
+private func callOpenAI(userMessage: String, systemPrompt: String, apiKey: String) async throws -> String {
   let url = URL(string: "https://api.openai.com/v1/chat/completions")!
   var request = URLRequest(url: url)
   request.httpMethod = "POST"
@@ -97,13 +160,11 @@ private func callOpenAI(transcript: String, apiKey: String) async throws -> Stri
   request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
   request.timeoutInterval = 15
 
-  let userMessage = TranscriptWrapper.wrap(transcript)
-
   let body: [String: Any] = [
     "model": AIProvider.openAI.defaultModel,
     "response_format": ["type": "json_object"],
     "messages": [
-      ["role": "system", "content": actionSystemPrompt],
+      ["role": "system", "content": systemPrompt],
       ["role": "user", "content": userMessage],
     ],
     "temperature": 0.1,
@@ -131,7 +192,7 @@ private func callOpenAI(transcript: String, apiKey: String) async throws -> Stri
 
 // MARK: - Anthropic
 
-private func callAnthropic(transcript: String, apiKey: String) async throws -> String {
+private func callAnthropic(userMessage: String, systemPrompt: String, apiKey: String) async throws -> String {
   let url = URL(string: "https://api.anthropic.com/v1/messages")!
   var request = URLRequest(url: url)
   request.httpMethod = "POST"
@@ -140,11 +201,9 @@ private func callAnthropic(transcript: String, apiKey: String) async throws -> S
   request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
   request.timeoutInterval = 15
 
-  let userMessage = TranscriptWrapper.wrap(transcript)
-
   let body: [String: Any] = [
     "model": AIProvider.anthropic.defaultModel,
-    "system": actionSystemPrompt,
+    "system": systemPrompt,
     "messages": [["role": "user", "content": userMessage]],
     "max_tokens": 1024,
   ]

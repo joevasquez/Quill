@@ -25,6 +25,23 @@ public enum TranscriptWrapper {
     </transcript>
     """
   }
+
+  /// Like `wrap`, but appends a `<selection>` block carrying text the user
+  /// had highlighted in the frontmost app when they spoke. Used by Action
+  /// mode so commands like "add this to my Kearney list" can resolve
+  /// "this". A nil/empty selection degrades to plain `wrap`.
+  public static func wrapWithSelection(_ text: String, selection: String?) -> String {
+    guard let selection, !selection.isEmpty else { return wrap(text) }
+    return wrap(text) + """
+
+
+    The user had the following text highlighted in the frontmost app when they spoke:
+
+    <selection>
+    \(selection)
+    </selection>
+    """
+  }
 }
 
 public enum TranscriptRefusalDetector {

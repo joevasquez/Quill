@@ -139,6 +139,13 @@ struct TranscriptionFeature {
     /// No-op if the digit is out of range or Action mode isn't active.
     case actionIntegrationKeyboardToggle(Int)
 
+    // Agent routines
+    /// A dictated trigger phrase matched a saved routine — its stored steps
+    /// go straight to the confirmation panel (no LLM call).
+    case routineTriggered(Routine)
+    /// A "new routine: …" dictation was parsed and persisted.
+    case routineSaved(RoutineDraft)
+
     // Mode error feedback
     case editModeNeedsAPIKey
     case actionModeNeedsAPIKey
@@ -387,6 +394,32 @@ struct TranscriptionFeature {
         state.pendingAction = resolvedIntents.first
         let raw = state.lastActionTranscript
         return .send(.presentMultiActionConfirmation(resolvedIntents, raw))
+
+      case let .routineTriggered(routine):
+        // The user authored these steps explicitly when saving the routine,
+        // so the HUD integration hard-lock does NOT override them.
+        state.pendingAction = routine.steps.first
+        let rawRoutineTranscript = state.lastActionTranscript
+        return .run { _ in
+          await MainActor.run {
+            ActionConfirmationNotification.postMulti(
+              intents: routine.steps,
+              rawTranscript: rawRoutineTranscript,
+              autoExecute: routine.autoRun
+            )
+          }
+        }
+
+      case let .routineSaved(draft):
+        state.editNeedsSelectionMessage = "Routine saved — say \u{201C}\(draft.triggerPhrase)\u{201D}"
+        return .merge(
+          .run { _ in soundEffect.play(.pasteTranscript) },
+          .run { send in
+            try? await Task.sleep(for: .seconds(4))
+            await send(.editNeedsSelectionDismiss)
+          }
+          .cancellable(id: CancelID.editNeedsSelectionTimer, cancelInFlight: true)
+        )
 
       case let .actionParsingFailed(rawText):
         transcriptionFeatureLogger.warning("Action parsing failed; falling back to paste")
@@ -839,18 +872,22 @@ private extension TranscriptionFeature {
     // the user saw when they pressed the hotkey.
     let isEditMode = state.selectedMode == .edit
     let isAutoMode = state.selectedMode == .auto
+    let isActionMode = state.selectedMode == .action
     let isVDI = VDIBundleIdentifiers.isVDI(state.sourceAppBundleID)
 
     // Auto mode always attempts selection capture so we know at
     // transcription-result time whether the user had text selected.
-    if isEditMode || isAutoMode || state.hexSettings.inlineEditEnabled {
+    // Action mode captures too (AX-only, no clipboard fallback) so
+    // commands like "add this to my Kearney list" can resolve "this"
+    // to the highlighted text in the source app.
+    if isEditMode || isAutoMode || isActionMode || state.hexSettings.inlineEditEnabled {
       if let selection = inlineEdit.captureSelectionSync() {
         state.inlineEditSelection = selection
         transcriptionFeatureLogger.info(
           "Edit capture: AX got \(selection.count) chars at stop time (isAutoMode=\(isAutoMode))"
         )
       } else {
-        if !isEditMode && !isAutoMode {
+        if !isEditMode && !isAutoMode && !isActionMode {
           transcriptionFeatureLogger.info(
             "Inline edit enabled but no selection — normal paste path"
           )
@@ -1105,10 +1142,13 @@ private extension TranscriptionFeature {
     // Fires when selection exists AND one of:
     //  - Auto resolved to Edit (selection + edit keywords)
     //  - Explicit Edit mode is active
-    //  - inlineEditEnabled is on (any non-Auto mode)
+    //  - inlineEditEnabled is on (any non-Auto, non-Action mode)
+    // Explicit Action mode is excluded: it now captures a selection too
+    // (as context for "add this to …" commands), and the global inline-
+    // edit toggle must not hijack those dictations into the edit path.
     let shouldInlineEdit = inlineEditSelection != nil && (
       effectiveMode == .edit ||
-      (selectedMode != .auto && _inlineEditEnabled)
+      (selectedMode != .auto && selectedMode != .action && _inlineEditEnabled)
     )
     if shouldInlineEdit, let selection = inlineEditSelection, !modifiedResult.isEmpty {
       state.$usageStats.withLock { stats in
@@ -1231,14 +1271,76 @@ private extension TranscriptionFeature {
       }
       state.isAIProcessing = true
       state.lastActionTranscript = modifiedResult
+      let agentName = state.hexSettings.agentName
+      let memoryEnabled = state.hexSettings.agentMemoryEnabled
+      // Selected-text context captured at stop time (AX-only in Action
+      // mode) — lets "add this to my Kearney list" resolve "this".
+      let selectionContext = state.inlineEditSelection
       return .run { [actionParsing] send in
+        // Routine authoring: "new routine: when I say ship it, …" parses the
+        // description into a trigger + steps and persists it.
+        if let routineDescription = RoutineMatcher.authoringRequest(transcript: modifiedResult, agentName: agentName) {
+          do {
+            let draft = try await actionParsing.parseRoutine(routineDescription, aiProvider)
+            await RoutineStore.shared.add(
+              Routine(name: draft.name, triggerPhrases: [draft.triggerPhrase], steps: draft.actions)
+            )
+            transcriptionFeatureLogger.info("Routine saved: trigger=\(draft.triggerPhrase, privacy: .private) steps=\(draft.actions.count, privacy: .public)")
+            await send(.aiProcessingFinished)
+            await send(.routineSaved(draft))
+            try? await storeTranscriptInHistory(
+              text: modifiedResult, audioURL: audioURL, duration: duration,
+              sourceAppBundleID: sourceAppBundleID, sourceAppName: sourceAppName,
+              mode: .action, transcriptionHistory: transcriptionHistory
+            )
+          } catch {
+            transcriptionFeatureLogger.error("Routine authoring failed: \(error.localizedDescription)")
+            await send(.aiProcessingFinished)
+            if let actionError = error as? ActionParsingError, case .missingAPIKey = actionError {
+              await send(.actionModeNeedsAPIKey)
+            } else {
+              await send(.actionParsingFailed(modifiedResult))
+            }
+            try? FileManager.default.removeItem(at: audioURL)
+          }
+          return
+        }
+
+        // Routine trigger fast-path: a saved phrase match skips the LLM
+        // entirely — instant, free, works offline.
+        let routines = await RoutineStore.shared.loadAll()
+        if let routine = RoutineMatcher.match(transcript: modifiedResult, routines: routines) {
+          transcriptionFeatureLogger.info("Routine triggered: \(routine.name, privacy: .private)")
+          await RoutineStore.shared.recordRun(id: routine.id)
+          await send(.aiProcessingFinished)
+          await send(.routineTriggered(routine))
+          try? await storeTranscriptInHistory(
+            text: modifiedResult, audioURL: audioURL, duration: duration,
+            sourceAppBundleID: sourceAppBundleID, sourceAppName: sourceAppName,
+            mode: .action, transcriptionHistory: transcriptionHistory
+          )
+          return
+        }
+
         do {
-          let response = try await actionParsing.parseMulti(modifiedResult, aiProvider)
+          let response = try await actionParsing.parseMulti(modifiedResult, aiProvider, selectionContext)
           await send(.aiProcessingFinished)
           if response.isSingleAction, let intent = response.actions.first {
             await send(.actionIntentParsed(intent))
           } else {
             await send(.multiActionIntentsParsed(response.actions))
+          }
+          // Background memory pass: fire-and-forget so it never delays the
+          // confirmation panel and survives the next recording cancelling
+          // this effect.
+          if memoryEnabled {
+            Task {
+              if let candidates = try? await actionParsing.extractMemory(modifiedResult, aiProvider),
+                 !candidates.isEmpty {
+                await MemoryStore.shared.upsert(candidates)
+                transcriptionFeatureLogger.info("Agent memory: merged \(candidates.count, privacy: .public) candidate(s)")
+              }
+            }
           }
           try? await storeTranscriptInHistory(
             text: modifiedResult, audioURL: audioURL, duration: duration,

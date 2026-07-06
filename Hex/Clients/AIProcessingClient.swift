@@ -5,13 +5,18 @@
 //  Sends transcribed text through a cloud LLM for AI post-processing.
 //
 
-import ComposableArchitecture
 import Dependencies
 import DependenciesMacros
 import Foundation
 import HexCore
 import os
+// Pro-plan routing reads @Shared(.hexSettings) and GoogleOAuthClient — both
+// macOS-only. iOS includes this file (for shared types) but ships without
+// TCA/Sharing, so the Pro path is compiled out below.
+#if os(macOS)
+import ComposableArchitecture
 import Sharing
+#endif
 
 private let aiLogger = HexLog.aiProcessing
 
@@ -48,14 +53,21 @@ extension AIProcessingClient: DependencyKey {
         guard !basePrompt.isEmpty else { return text }
 
         @Dependency(\.keychain) var keychain
-        @Dependency(\.googleOAuth) var googleOAuth
 
         let enrichedPrompt = buildPrompt(basePrompt: basePrompt, context: context)
+
+        #if os(macOS)
+        let useProProxy = isProModeActive()
+        #else
+        let useProProxy = false
+        #endif
 
         let response: String
         do {
           // Pro mode: route through the server-side proxy (no local API key needed).
-          if isProModeActive() {
+          if useProProxy {
+            #if os(macOS)
+            @Dependency(\.googleOAuth) var googleOAuth
             guard let accessToken = try? await googleOAuth.refreshIfNeeded() else {
               aiLogger.warning("Pro mode active but Google not signed in; skipping AI processing")
               return text
@@ -66,6 +78,9 @@ extension AIProcessingClient: DependencyKey {
               accessToken: accessToken,
               skipTranscriptWrapping: skipTranscriptWrapping
             )
+            #else
+            response = text // unreachable — useProProxy is constant false on iOS
+            #endif
           } else {
             switch provider {
             case .openAI:
@@ -118,6 +133,7 @@ extension AIProcessingClient: DependencyKey {
   }
 }
 
+#if os(macOS)
 /// Checks whether Pro mode is active (selectedPlan == "pro" and Google signed in).
 private func isProModeActive() -> Bool {
   @Shared(.hexSettings) var hexSettings: HexSettings
@@ -125,6 +141,7 @@ private func isProModeActive() -> Bool {
   let email = UserDefaults.standard.string(forKey: GoogleOAuthClient.googleAccountEmailDefaultsKey)
   return email?.isEmpty == false
 }
+#endif
 
 private func buildPrompt(basePrompt: String, context: AppContext?) -> String {
   var prompt = basePrompt

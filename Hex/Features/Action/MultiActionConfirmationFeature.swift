@@ -14,6 +14,9 @@ struct MultiActionConfirmationFeature {
     var isExecuting: Bool = false
     var results: [UUID: ItemResult] = [:]
     var completion: Completion?
+    /// Routine trust ladder: when true (auto-run routine), execution starts
+    /// on appear — the panel becomes a progress display instead of a prompt.
+    var autoExecute: Bool = false
 
     struct ActionItemState: Equatable, Identifiable {
       let id: UUID
@@ -120,9 +123,10 @@ struct MultiActionConfirmationFeature {
       let queued: Int
     }
 
-    init(intents: [ActionIntent], rawTranscript: String) {
+    init(intents: [ActionIntent], rawTranscript: String, autoExecute: Bool = false) {
       self.rawTranscript = rawTranscript
       self.items = IdentifiedArrayOf(uniqueElements: intents.map { ActionItemState(intent: $0) })
+      self.autoExecute = autoExecute
     }
   }
 
@@ -155,7 +159,8 @@ struct MultiActionConfirmationFeature {
         return .none
 
       case .onAppear:
-        return .run { [googleOAuth, keychain] send in
+        let shouldAutoExecute = state.autoExecute && !state.isExecuting && state.results.isEmpty
+        let loadIntegrations: Effect<Action> = .run { [googleOAuth, keychain] send in
           let connected = IntegrationConnectionStore.decode(
             UserDefaults.standard.data(forKey: IntegrationConnectionStore.userDefaultsKey)
           )
@@ -171,6 +176,7 @@ struct MultiActionConfirmationFeature {
           }
           await send(.integrationsLoaded(available))
         }
+        return shouldAutoExecute ? .merge(loadIntegrations, .send(.executeAll)) : loadIntegrations
 
       case let .integrationsLoaded(integrations):
         state.availableIntegrations = integrations

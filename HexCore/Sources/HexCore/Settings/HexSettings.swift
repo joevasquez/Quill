@@ -84,6 +84,12 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var hudPinnedToTop: Bool
 	public var displayMode: DisplayMode
 	public var appPasteDelays: [AppPasteDelay]
+	/// The user-chosen name for their personal agent ("Hermes" by default).
+	/// Used in Action-mode copy, the confirmation panel, and Settings.
+	public var agentName: String
+	/// When on, Action-mode dictations feed a background memory-extraction
+	/// pass so the agent learns people/projects/preferences over time.
+	public var agentMemoryEnabled: Bool
 
 	private mutating func normalizeDoubleTapSettings() {
 		if !doubleTapLockEnabled {
@@ -137,7 +143,9 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		cloudSyncEnabled: Bool = false,
 		hudPinnedToTop: Bool = false,
 		displayMode: DisplayMode = .hud,
-		appPasteDelays: [AppPasteDelay] = AppPasteDelay.defaults
+		appPasteDelays: [AppPasteDelay] = AppPasteDelay.defaults,
+		agentName: String = "Hermes",
+		agentMemoryEnabled: Bool = true
 	) {
 		self.soundEffectsEnabled = soundEffectsEnabled
 		self.soundEffectsVolume = soundEffectsVolume
@@ -180,6 +188,8 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.hudPinnedToTop = hudPinnedToTop
 		self.displayMode = displayMode
 		self.appPasteDelays = appPasteDelays
+		self.agentName = agentName
+		self.agentMemoryEnabled = agentMemoryEnabled
 		normalizeDoubleTapSettings()
 	}
 
@@ -245,6 +255,8 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case hudPinnedToTop
 	case displayMode
 	case appPasteDelays
+	case agentName
+	case agentMemoryEnabled
 }
 
 private struct SettingsField<Value: Codable & Sendable> {
@@ -402,6 +414,8 @@ private enum HexSettingsSchema {
 		SettingsField(.hudPinnedToTop, keyPath: \.hudPinnedToTop, default: defaults.hudPinnedToTop).eraseToAny(),
 		SettingsField(.displayMode, keyPath: \.displayMode, default: defaults.displayMode).eraseToAny(),
 		SettingsField(.appPasteDelays, keyPath: \.appPasteDelays, default: defaults.appPasteDelays).eraseToAny(),
+		SettingsField(.agentName, keyPath: \.agentName, default: defaults.agentName).eraseToAny(),
+		SettingsField(.agentMemoryEnabled, keyPath: \.agentMemoryEnabled, default: defaults.agentMemoryEnabled).eraseToAny(),
 	]
 }
 

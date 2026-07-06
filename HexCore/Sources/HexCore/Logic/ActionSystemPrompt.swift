@@ -54,6 +54,20 @@ Calendar-specific rules:
 - attendees is ONLY for createEvent. Extract names/emails of people mentioned: "meeting with John" → try to infer email if context available, otherwise just use the name. If no attendees mentioned, set to null.
 - listName is the calendar name if specified: "on my Work calendar" → listName: "Work".
 
+Selected-text context:
+- The user message may include a <selection>...</selection> block: text the user had highlighted in the frontmost app when they spoke.
+- When the command refers to "this", "that", "the selection", "the highlighted text", or similar, it means the selection content.
+- Selection content goes in the notes field (task/reminder details, or the email body for createDraft/sendEmail) — NEVER in the title. The title stays a short description of the action; when the command gives no other content ("add this to my list"), derive the title as a 3-6 word summary of the selection.
+- If a selection block is present but the command neither references it nor plausibly concerns it, ignore it — a stale highlight must not leak into an unrelated action.
+
+  Example with selection — Input:
+    <transcript>add this to my Kearney project in Todoist</transcript> followed by <selection>Follow up with procurement on the revised SOW before the Aug 15 renewal deadline.</selection>
+  Output: {"actions":[{"actionType":"createTask","targetIntegration":"todoist","title":"Follow up on revised SOW","dueDate":null,"notes":"Follow up with procurement on the revised SOW before the Aug 15 renewal deadline.","listName":"Kearney","priority":null,"duration":null,"attendees":null,"recipient":null,"subject":null}]}
+
+  Example with selection — Input:
+    <transcript>email this to Mike</transcript> followed by <selection>Draft agenda: 1. Q3 numbers 2. Hiring plan</selection>
+  Output: {"actions":[{"actionType":"createDraft","targetIntegration":"gmail","title":"Draft agenda","dueDate":null,"notes":"Draft agenda: 1. Q3 numbers 2. Hiring plan","listName":null,"priority":null,"duration":null,"attendees":null,"recipient":"Mike","subject":null}]}
+
 Other rules:
 - title should be a clean, concise description — not the full transcript.
 - Extract dates from phrases like "on Friday", "by tomorrow", "next Tuesday", "in two weeks".
