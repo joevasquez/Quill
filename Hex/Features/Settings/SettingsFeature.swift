@@ -953,7 +953,10 @@ private func validateAPIKey(_ key: String, provider: AIProvider) async -> Bool {
     request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
     request.timeoutInterval = 10
     let body: [String: Any] = [
-      "model": "claude-sonnet-4-20250514",
+      // Same model the app uses for real calls. A hardcoded
+      // "claude-sonnet-4-20250514" here started 404ing when that model
+      // retired (June 2026), which read as "invalid key" for every user.
+      "model": AIProvider.anthropic.defaultModel,
       "messages": [["role": "user", "content": "hi"]],
       "max_tokens": 1,
     ]
@@ -961,7 +964,10 @@ private func validateAPIKey(_ key: String, provider: AIProvider) async -> Bool {
     guard let (_, response) = try? await URLSession.shared.data(for: request),
           let http = response as? HTTPURLResponse
     else { return false }
-    return http.statusCode == 200
+    // Only auth failures prove the key is bad. Anything else (404 for a
+    // retired model, 429 rate limit, 5xx) means the key authenticated —
+    // or at least isn't proven invalid — so don't lock the user out.
+    return http.statusCode != 401 && http.statusCode != 403
 
   case .openAI:
     // GET /v1/models is free and confirms the key.
