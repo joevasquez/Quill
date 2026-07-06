@@ -1,0 +1,12 @@
+{
+  "name": "quill-ai-proxy",
+  "version": "1.0.0",
+  "description": "Cloud Function proxy for Quill Pro AI — validates Google OAuth tokens and forwards requests to Anthropic",
+  "main": "index.js",
+  "scripts": {
+    "start": "npx @google-cloud/functions-framework --target=quill-ai-proxy"
+  },
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.0.0"
+  }
+}
