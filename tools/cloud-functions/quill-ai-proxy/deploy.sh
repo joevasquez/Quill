@@ -22,7 +22,7 @@ set -euo pipefail
 PROJECT_ID="quill-495210"
 REGION="us-central1"
 FUNCTION_NAME="quill-ai-proxy"
-RUNTIME="nodejs20"
+RUNTIME="nodejs22"
 
 if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   echo "Error: ANTHROPIC_API_KEY environment variable is required"
@@ -33,12 +33,15 @@ if [ -z "${ALLOWED_EMAILS:-}" ]; then
   exit 1
 fi
 
-ENV_VARS="ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY},ALLOWED_EMAILS=${ALLOWED_EMAILS}"
+# gcloud splits --set-env-vars on commas, but ALLOWED_EMAILS and
+# QUILL_OAUTH_CLIENT_IDS are comma-separated lists — use gcloud's
+# alternate-delimiter syntax (^:::^) so commas pass through as values.
+ENV_VARS="^:::^ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}:::ALLOWED_EMAILS=${ALLOWED_EMAILS}"
 if [ -n "${QUILL_OAUTH_CLIENT_IDS:-}" ]; then
-  ENV_VARS="${ENV_VARS},QUILL_OAUTH_CLIENT_IDS=${QUILL_OAUTH_CLIENT_IDS}"
+  ENV_VARS="${ENV_VARS}:::QUILL_OAUTH_CLIENT_IDS=${QUILL_OAUTH_CLIENT_IDS}"
 fi
 if [ -n "${DAILY_REQUEST_LIMIT:-}" ]; then
-  ENV_VARS="${ENV_VARS},DAILY_REQUEST_LIMIT=${DAILY_REQUEST_LIMIT}"
+  ENV_VARS="${ENV_VARS}:::DAILY_REQUEST_LIMIT=${DAILY_REQUEST_LIMIT}"
 fi
 if [ -n "${ANTHROPIC_MODEL:-}" ]; then
   ENV_VARS="${ENV_VARS},ANTHROPIC_MODEL=${ANTHROPIC_MODEL}"
