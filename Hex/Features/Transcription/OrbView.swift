@@ -13,7 +13,10 @@ import SwiftUI
 
 // MARK: - Orb colour constants
 
-private enum OrbHue {
+// Shared by OrbView and ChipMorphView. The hue numbers double as the
+// design spec's OKLCH mode hues (Dictate 248 / Edit 305 / Act 188 /
+// Resolved 150) so both orb-based display modes read identically.
+enum OrbHue {
   static let auto: Double = 220
   static let dictate: Double = 248
   static let edit: Double = 305
@@ -21,7 +24,7 @@ private enum OrbHue {
   static let success: Double = 150
 }
 
-private extension TranscriptionIndicatorView.Mode {
+extension TranscriptionIndicatorView.Mode {
   var orbHue: Double {
     switch self {
     case .auto:    return OrbHue.auto

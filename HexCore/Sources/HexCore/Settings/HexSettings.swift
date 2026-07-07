@@ -10,6 +10,10 @@ public enum RecordingAudioBehavior: String, Codable, CaseIterable, Equatable, Se
 public enum DisplayMode: String, Codable, CaseIterable, Equatable, Sendable {
 	case hud
 	case orb
+	/// "Chip + Morph" — a compact frosted chip that shows the Quill
+	/// feather at rest and morphs into a mode-hued orb while capturing,
+	/// with a Corner Bloom transcript card. Designed to be minimal/quiet.
+	case chip
 }
 
 /// User-configurable settings saved to disk.

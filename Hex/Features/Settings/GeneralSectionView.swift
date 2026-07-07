@@ -58,6 +58,7 @@ struct GeneralSectionView: View {
 				)) {
 					Text("Standard HUD").tag(DisplayMode.hud)
 					Text("Orb").tag(DisplayMode.orb)
+					Text("Chip").tag(DisplayMode.chip)
 				}
 				.pickerStyle(.segmented)
 			} icon: {

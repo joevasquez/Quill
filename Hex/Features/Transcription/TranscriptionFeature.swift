@@ -1649,7 +1649,26 @@ struct TranscriptionView: View {
 
   var body: some View {
     Group {
-      if store.hexSettings.displayMode == .orb {
+      if store.hexSettings.displayMode == .chip {
+        ChipMorphView(
+          status: status,
+          mode: store.selectedMode,
+          meter: store.meter,
+          recordingStartTime: store.recordingStartTime,
+          hotkeyHint: hotkeyHint,
+          editMessage: store.editNeedsSelectionMessage,
+          pendingEditResult: store.pendingEditResult,
+          partialTranscript: store.partialTranscript,
+          actionIntegrations: store.availableActionIntegrations,
+          lockedActionIntegration: store.lockedActionIntegration,
+          autoDetectedMode: store.autoDetectedMode,
+          isPinnedToTop: store.hexSettings.hudPinnedToTop,
+          onCycleMode: { store.send(.cycleMode) },
+          onEditAccept: { store.send(.inlineEditAccept) },
+          onEditUndo: { store.send(.inlineEditUndo) },
+          onToggleActionIntegration: { id in store.send(.toggleActionIntegrationLock(id)) }
+        )
+      } else if store.hexSettings.displayMode == .orb {
         OrbView(
           status: status,
           mode: store.selectedMode,
