@@ -419,29 +419,37 @@ private struct NoteEditorView: View {
   @State private var hasInitialized = false
   @State private var textViewRef: NSTextView?
   @FocusState private var bodyFocused: Bool
+  @StateObject private var dictation = NoteDictationController()
+  /// AI cleanup for note dictations (.notes mode: structured bullets).
+  /// Persisted — it's a working style, not a per-recording choice.
+  @AppStorage("quill.noteDictationCleanup") private var cleanupDictation = true
 
   var body: some View {
     VStack(spacing: 0) {
       editorToolbar
       Divider()
 
-      ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
+      // The markdown text view is the ONE scroller — no outer ScrollView.
+      // The old nested-scroll arrangement (SwiftUI ScrollView wrapping the
+      // NSTextView's own NSScrollView) fought over wheel events and pinned
+      // the editor to its minHeight instead of filling the window. Title
+      // and metadata stay fixed above; the editor takes all remaining
+      // space and scales with the window. The column width adapts to the
+      // window — proportional, clamped to a readable measure.
+      GeometryReader { proxy in
+        let column = min(max(proxy.size.width * 0.88, 520), 980)
+        VStack(alignment: .leading, spacing: 12) {
           titleField
           metadataRow
-          Divider()
           photoSegments
+          Divider()
           bodyEditor
         }
-        .padding(.horizontal, 32)
-        .padding(.vertical, 28)
-        // Cap the content column so long notes stay readable on wide
-        // windows — the editor tracks a comfortable measure instead of
-        // stretching edge to edge.
-        .frame(maxWidth: 760, alignment: .leading)
+        .padding(.horizontal, 28)
+        .padding(.top, 22)
+        .frame(width: column, alignment: .leading)
         .frame(maxWidth: .infinity)
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
     .onAppear { loadFields() }
     .onChange(of: note.id) { loadFields() }
@@ -535,11 +543,20 @@ private struct NoteEditorView: View {
 
   @ViewBuilder
   private var bodyEditor: some View {
-    MarkdownTextEditor(
-      text: $editingBody,
-      textView: $textViewRef
-    )
-    .frame(minHeight: 300, maxHeight: .infinity)
+    ZStack(alignment: .topLeading) {
+      MarkdownTextEditor(
+        text: $editingBody,
+        textView: $textViewRef
+      )
+      if editingBody.isEmpty {
+        Text("Start writing — or hit the mic to dictate into this note.\nMarkdown works: **bold**, _italic_, # headings, - lists.")
+          .font(.system(size: NSFont.systemFontSize + 2))
+          .foregroundStyle(.tertiary)
+          .padding(.top, 8)
+          .allowsHitTesting(false)
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
     .onChange(of: editingBody) {
       guard hasInitialized else { return }
       note.body = editingBody
@@ -620,10 +637,62 @@ private struct NoteEditorView: View {
           Image(systemName: "list.bullet")
         }
         .help("Bullet List")
+
+        Button { insertAtLineStart("1. ") } label: {
+          Image(systemName: "list.number")
+        }
+        .help("Numbered List")
+
+        Button { insertAtLineStart("> ") } label: {
+          Image(systemName: "text.quote")
+        }
+        .help("Quote")
       }
       .buttonStyle(.borderless)
 
       Spacer()
+
+      // ── Dictation ──
+      if let error = dictation.errorMessage {
+        Text(error)
+          .font(.caption)
+          .foregroundStyle(.red)
+      }
+      if dictation.isProcessing {
+        ProgressView()
+          .controlSize(.small)
+      }
+      if let start = dictation.startTime {
+        TimelineView(.periodic(from: start, by: 1)) { ctx in
+          let elapsed = max(0, Int(ctx.date.timeIntervalSince(start)))
+          Text(String(format: "%d:%02d", elapsed / 60, elapsed % 60))
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.red)
+        }
+      }
+      Toggle(isOn: $cleanupDictation) {
+        Image(systemName: "sparkles")
+      }
+      .toggleStyle(.button)
+      .buttonStyle(.borderless)
+      .help(cleanupDictation
+        ? "AI cleanup on: dictations are structured into tidy notes before inserting"
+        : "AI cleanup off: raw transcript is inserted as spoken")
+
+      Button {
+        dictation.toggle(cleanup: cleanupDictation) { text in
+          insertDictation(text)
+        }
+      } label: {
+        Image(systemName: dictation.isRecording ? "stop.circle.fill" : "mic.fill")
+          .foregroundStyle(dictation.isRecording ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+          .symbolEffect(.pulse, isActive: dictation.isRecording)
+      }
+      .buttonStyle(.borderless)
+      .keyboardShortcut("d", modifiers: [.command, .shift])
+      .help(dictation.isRecording ? "Stop and insert (⌘⇧D)" : "Dictate into this note (⌘⇧D)")
+
+      Divider().frame(height: 16)
 
       Text(wordCountLabel)
         .font(.caption)
@@ -653,6 +722,29 @@ private struct NoteEditorView: View {
     .padding(.horizontal, 16)
     .padding(.vertical, 8)
     .background(.bar)
+  }
+
+  /// Inserts a finished dictation at the caret (or appends when the text
+  /// view isn't available), with sensible separation from surrounding text.
+  private func insertDictation(_ text: String) {
+    if let tv = textViewRef {
+      let ns = tv.string as NSString
+      let sel = tv.selectedRange()
+      var payload = text
+      if sel.location > 0 {
+        let prevChar = Character(UnicodeScalar(ns.character(at: sel.location - 1)) ?? " ")
+        if prevChar.isNewline {
+          // At a fresh line — no separator needed.
+        } else if sel.location == ns.length {
+          payload = "\n\n" + payload
+        } else if !prevChar.isWhitespace {
+          payload = " " + payload
+        }
+      }
+      tv.insertText(payload, replacementRange: sel)
+    } else {
+      editingBody = editingBody.isEmpty ? text : editingBody + "\n\n" + text
+    }
   }
 
   private var wordCountLabel: String {
@@ -750,6 +842,43 @@ private struct MarkdownTextEditor: NSViewRepresentable {
       guard let tv = notification.object as? NSTextView else { return }
       parent.text = tv.string
       MarkdownHighlighter.highlight(tv)
+    }
+
+    /// Auto-continue markdown lists on Enter: "- ", "1. ", and "> "
+    /// carry to the next line (numbered lists increment); pressing Enter
+    /// on an EMPTY item deletes the marker and exits the list.
+    func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+      guard commandSelector == #selector(NSResponder.insertNewline(_:)) else { return false }
+      let ns = textView.string as NSString
+      let sel = textView.selectedRange()
+      guard sel.length == 0, sel.location <= ns.length else { return false }
+
+      let lineRange = ns.lineRange(for: NSRange(location: sel.location, length: 0))
+      let headRange = NSRange(location: lineRange.location, length: sel.location - lineRange.location)
+      let head = ns.substring(with: headRange)
+      let indent = String(head.prefix(while: { $0 == " " || $0 == "\t" }))
+      let trimmed = head.trimmingCharacters(in: .whitespaces)
+
+      // Empty item + Enter = exit the list (clear the marker, stay put).
+      let emptyMarkers = ["-", ">", "- [ ]", "- [x]"]
+      if emptyMarkers.contains(trimmed) || trimmed.range(of: #"^\d+\.$"#, options: .regularExpression) != nil {
+        textView.insertText("", replacementRange: headRange)
+        return true
+      }
+
+      let continuation: String
+      if trimmed.hasPrefix("- ") {
+        continuation = "\n\(indent)- "
+      } else if trimmed.hasPrefix("> ") {
+        continuation = "\n\(indent)> "
+      } else if trimmed.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil {
+        let number = Int(trimmed.prefix(while: \.isNumber)) ?? 0
+        continuation = "\n\(indent)\(number + 1). "
+      } else {
+        return false
+      }
+      textView.insertText(continuation, replacementRange: sel)
+      return true
     }
   }
 }
@@ -863,6 +992,31 @@ private enum MarkdownHighlighter {
       textStorage.addAttributes([
         .foregroundColor: NSColor.tertiaryLabelColor,
       ], range: dashRange)
+    }
+
+    // 8. Numbered lists: "1. " at line start — marker de-emphasized
+    applyLinePattern(
+      pattern: #"^(\d+\.)\s+(.+)$"#,
+      storage: textStorage, string: string
+    ) { match in
+      textStorage.addAttributes([
+        .foregroundColor: NSColor.tertiaryLabelColor,
+      ], range: match.range(at: 1))
+    }
+
+    // 9. Blockquotes: "> " at line start — faded marker, italic content
+    applyLinePattern(
+      pattern: #"^(>)\s?(.*)$"#,
+      storage: textStorage, string: string
+    ) { match in
+      textStorage.addAttributes(markerAttrs, range: match.range(at: 1))
+      let contentRange = match.range(at: 2)
+      if contentRange.length > 0 {
+        textStorage.addAttributes([
+          .font: NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask),
+          .foregroundColor: NSColor.secondaryLabelColor,
+        ], range: contentRange)
+      }
     }
 
     textStorage.endEditing()

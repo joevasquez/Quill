@@ -405,6 +405,10 @@ struct TranscriptView: View {
 					.help("Delete transcript")
 				}
 				.font(.subheadline)
+				// Quieter rows: actions only appear on hover (or while
+				// active), so the list reads as content, not chrome.
+				.opacity(isHovering || isPlaying || showCopied ? 1 : 0)
+				.animation(.easeOut(duration: 0.12), value: isHovering)
 			}
 			.frame(height: 20)
 			.padding(.horizontal, 12)
@@ -412,12 +416,13 @@ struct TranscriptView: View {
 		}
 		.background(
 			RoundedRectangle(cornerRadius: 8)
-				.fill(Color(.windowBackgroundColor).opacity(0.5))
+				.fill(Color(.windowBackgroundColor).opacity(isHovering ? 0.8 : 0.5))
 				.overlay(
 					RoundedRectangle(cornerRadius: 8)
-						.strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
+						.strokeBorder(Color.secondary.opacity(isHovering ? 0.3 : 0.2), lineWidth: 1)
 				)
 		)
+		.onHover { isHovering = $0 }
 		.onDisappear {
 			// Clean up any running task when view disappears
 			copyTask?.cancel()
@@ -426,6 +431,7 @@ struct TranscriptView: View {
 
 	@State private var showCopied = false
 	@State private var copyTask: Task<Void, Error>?
+	@State private var isHovering = false
 
 	private func showCopyAnimation() {
 		copyTask?.cancel()
@@ -668,27 +674,32 @@ struct UsageStatsCardView: View {
 			StatItem(
 				icon: "text.word.spacing",
 				value: Self.formatNumber(stats.totalWordsTranscribed),
-				label: "Words"
+				label: "Words",
+				tint: .secondary
 			)
 			StatItem(
 				icon: "mic.fill",
 				value: "\(stats.dictationCount)",
-				label: "Dictations"
+				label: "Dictations",
+				tint: .blue
 			)
 			StatItem(
 				icon: "pencil",
 				value: "\(stats.editCount)",
-				label: "Edits"
+				label: "Edits",
+				tint: .purple
 			)
 			StatItem(
 				icon: "bolt.fill",
 				value: "\(stats.actionCount)",
-				label: "Actions"
+				label: "Actions",
+				tint: .teal
 			)
 			StatItem(
 				icon: "clock.arrow.circlepath",
 				value: Self.formatTimeSaved(stats.estimatedMinutesSaved),
-				label: "Saved"
+				label: "Saved",
+				tint: .green
 			)
 		}
 		.padding(.horizontal, 12)
@@ -727,12 +738,13 @@ private struct StatItem: View {
 	let icon: String
 	let value: String
 	let label: String
+	var tint: Color = .secondary
 
 	var body: some View {
 		VStack(spacing: 4) {
 			Image(systemName: icon)
 				.font(.caption)
-				.foregroundStyle(.secondary)
+				.foregroundStyle(tint)
 			Text(value)
 				.font(.headline.monospacedDigit())
 			Text(label)
@@ -777,8 +789,13 @@ private struct TranscriptModeBadge: View {
 	var body: some View {
 		HStack(spacing: 3) {
 			Image(systemName: icon)
+				.font(.caption2)
 			Text(label)
+				.font(.caption)
 		}
 		.foregroundStyle(tint)
+		.padding(.horizontal, 7)
+		.padding(.vertical, 2)
+		.background(tint.opacity(0.12), in: Capsule())
 	}
 }

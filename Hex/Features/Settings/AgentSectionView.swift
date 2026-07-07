@@ -193,7 +193,7 @@ struct AgentSectionView: View {
           Text("Agent Name")
           Spacer()
           TextField(
-            "Hermes",
+            "",
             text: Binding(
               get: { hexSettings.agentName },
               set: { newValue in $hexSettings.withLock { $0.agentName = newValue } }
