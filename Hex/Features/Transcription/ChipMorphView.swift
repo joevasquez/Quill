@@ -248,7 +248,7 @@ struct MenuBarChipView: View {
 /// by construction, rather than a fixed height that could differ per Mac.
 enum ChipSpec {
   static let orb: CGFloat = 16
-  static let feather = CGSize(width: 19, height: 19)
+  static let feather = CGSize(width: 21, height: 21)
   /// Fixed slot the orb/feather/meter render in (widest glyph state).
   static let glyphSlot: CGFloat = 22
   static let chipHPad: CGFloat = 9
