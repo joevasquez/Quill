@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.22.0
+
+### Minor Changes
+
+- 913cc2e: Ask a question via an MCP tool and get the answer, not raw JSON: after a lookup like "find Joe in Dex and output his email address," the Action panel extracts the specific value you asked for and shows it in an Answer card with Copy and Paste — Paste drops it right where your cursor was
+- 0e0e68f: Action mode can now open websites and launch apps by voice — "open LinkedIn in Chrome", "launch Spotify", "go to nytimes.com" — with an editable URL/app in the confirmation panel. Multi-step actions also show a correct icon for every step, including MCP tool steps (a distinct tool icon) and the new Open action (a globe), instead of a misleading placeholder
+- 8f7c274: Chained Action steps: say "find Joe in Dex and then draft him a birthday email in Gmail" — a step can now consume an earlier step's result. The agent runs the lookup first, then a small resolve pass uses what it found to both fill the link (the recipient's email) and personalize the draft (greet Joe by name), so the previous step's output dynamically shapes the next
+
+### Patch Changes
+
+- b7e9270: MCP tool results in the Action confirmation panel are now formatted for readability — a contact lookup shows a clean name + title + location instead of a raw one-line JSON blob (works for any MCP server, drops ids/avatars/counts)
+- de83152: Chained Action commands now show what happened: the confirmation panel lists each step's outcome — the contact that was looked up (name, title, email) and the email that was drafted (To, Subject, Body) — instead of a bare "2 created" that auto-dismissed before you could read it
+
 ## 0.21.0
 
 ### Minor Changes
