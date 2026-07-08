@@ -34,6 +34,9 @@ struct MultiActionConfirmationFeature {
       var editableEndDate: Date
       var availableLists: [String] = []
       var isExpanded: Bool = false
+      /// For chained steps: the id of the sibling item this step depends on
+      /// (resolved from `intent.dependsOn` in `State.init`). nil → independent.
+      var dependsOnID: UUID?
 
       init(intent: ActionIntent) {
         self.id = UUID()
@@ -148,7 +151,15 @@ struct MultiActionConfirmationFeature {
 
     init(intents: [ActionIntent], rawTranscript: String, autoExecute: Bool = false) {
       self.rawTranscript = rawTranscript
-      self.items = IdentifiedArrayOf(uniqueElements: intents.map { ActionItemState(intent: $0) })
+      var built = intents.map { ActionItemState(intent: $0) }
+      // Resolve each step's `dependsOn` index into the depended-on item's id,
+      // so chaining survives panel reordering/removal.
+      for (i, intent) in intents.enumerated() {
+        if let dep = intent.dependsOn, dep >= 0, dep < built.count, dep != i {
+          built[i].dependsOnID = built[dep].id
+        }
+      }
+      self.items = IdentifiedArrayOf(uniqueElements: built)
       self.autoExecute = autoExecute
     }
   }
@@ -175,6 +186,7 @@ struct MultiActionConfirmationFeature {
   @Dependency(\.keychain) var keychain
   @Dependency(\.soundEffects) var soundEffect
   @Dependency(\.pasteboard) var pasteboard
+  @Dependency(\.actionParsing) var actionParsing
 
   var body: some ReducerOf<Self> {
     BindingReducer()
@@ -223,45 +235,76 @@ struct MultiActionConfirmationFeature {
       case .executeAll:
         state.isExecuting = true
         let itemsSnapshot = state.items.elements
-        return .run { [todoist, reminders, calendarAdapter, gmailAdapter, googleCalendarAdapter] send in
-          await withTaskGroup(of: (UUID, State.ItemResult).self) { group in
-            for item in itemsSnapshot {
-              group.addTask {
-                let finalIntent = item.buildFinalIntent()
-                let integration = finalIntent.targetIntegration
-                do {
-                  let id: String
-                  if finalIntent.actionType == .mcpCall {
-                    id = try await MCPActionExecutor.execute(finalIntent)
-                  } else {
-                    switch integration {
-                    case .todoist:
-                      id = try await todoist.createTask(finalIntent)
-                    case .appleReminders:
-                      id = try await reminders.createReminder(finalIntent)
-                    case .calendar:
-                      id = try await calendarAdapter.createEvent(finalIntent)
-                    case .gmail:
-                      id = try await gmailAdapter.createDraft(finalIntent)
-                    case .googleCalendar:
-                      id = try await googleCalendarAdapter.createEvent(finalIntent)
-                    default:
-                      throw ActionConfirmationError.unsupportedIntegration(integration)
-                    }
-                  }
-                  return (item.id, .succeeded(id))
-                } catch {
-                  if QueueableErrorClassifier.isQueueable(error) {
-                    await ActionQueueManager.shared.enqueue(finalIntent, lastError: error.localizedDescription)
-                    return (item.id, .queued)
-                  }
-                  return (item.id, .failed(error.localizedDescription))
+        @Shared(.hexSettings) var hexSettings: HexSettings
+        let provider = hexSettings.aiProvider
+        return .run { [todoist, reminders, calendarAdapter, gmailAdapter, googleCalendarAdapter, actionParsing] send in
+          // Runs one already-final intent, returning both the panel result and
+          // the raw text output (MCP tool result / created-item id) so a
+          // dependent step can consume it.
+          @Sendable func execute(_ finalIntent: ActionIntent) async -> (State.ItemResult, String) {
+            let integration = finalIntent.targetIntegration
+            do {
+              let id: String
+              if finalIntent.actionType == .mcpCall {
+                id = try await MCPActionExecutor.execute(finalIntent)
+              } else {
+                switch integration {
+                case .todoist:
+                  id = try await todoist.createTask(finalIntent)
+                case .appleReminders:
+                  id = try await reminders.createReminder(finalIntent)
+                case .calendar:
+                  id = try await calendarAdapter.createEvent(finalIntent)
+                case .gmail:
+                  id = try await gmailAdapter.createDraft(finalIntent)
+                case .googleCalendar:
+                  id = try await googleCalendarAdapter.createEvent(finalIntent)
+                default:
+                  throw ActionConfirmationError.unsupportedIntegration(integration)
                 }
               }
+              return (.succeeded(id), id)
+            } catch {
+              if QueueableErrorClassifier.isQueueable(error) {
+                await ActionQueueManager.shared.enqueue(finalIntent, lastError: error.localizedDescription)
+                return (.queued, "")
+              }
+              return (.failed(error.localizedDescription), "")
             }
-            for await (itemID, result) in group {
+          }
+
+          // Each item's raw text output, keyed by id — feeds dependent steps.
+          var outputs: [UUID: String] = [:]
+
+          // Phase 1 — independent steps run concurrently, as before.
+          await withTaskGroup(of: (UUID, State.ItemResult, String).self) { group in
+            for item in itemsSnapshot where item.dependsOnID == nil {
+              group.addTask { let (r, text) = await execute(item.buildFinalIntent()); return (item.id, r, text) }
+            }
+            for await (itemID, result, text) in group {
+              outputs[itemID] = text
               await send(.itemResult(itemID, result))
             }
+          }
+
+          // Phase 2 — dependent steps, in panel order, one at a time. Each
+          // runs an LLM resolve pass over its dependency's output before
+          // executing (e.g. fill the email recipient from a lookup result).
+          for item in itemsSnapshot where item.dependsOnID != nil {
+            let priorText = item.dependsOnID.flatMap { outputs[$0] } ?? ""
+            guard !priorText.isEmpty else {
+              // The step it depends on failed or was queued — don't run a
+              // half-filled action (e.g. a draft with no recipient).
+              await send(.itemResult(item.id, .failed("Skipped — a step it depends on didn't complete")))
+              continue
+            }
+            var intent = item.buildFinalIntent()
+            if intent.resolveInstruction != nil {
+              intent = (try? await actionParsing.resolveStep(intent, priorText, provider)) ?? intent
+            }
+            let (result, text) = await execute(intent)
+            outputs[item.id] = text
+            await send(.itemResult(item.id, result))
           }
         }
 

@@ -13,6 +13,12 @@ struct ActionParsingClient {
   /// The third parameter is optional selected-text context: text the user
   /// had highlighted in the frontmost app, so "add this to …" resolves.
   var parseMulti: @Sendable (String, AIProvider, String?) async throws -> MultiActionResponse
+  /// Between-steps resolve pass for chained actions: given a dependent
+  /// `ActionIntent`, the raw text result of the step it depends on, and the
+  /// provider, fills the field(s) named by the intent's `resolveInstruction`
+  /// (e.g. an email address extracted from an MCP lookup result) and returns
+  /// the updated intent.
+  var resolveStep: @Sendable (ActionIntent, String, AIProvider) async throws -> ActionIntent
   /// Turns a dictated routine description ("when I say ship it, …") into a
   /// named trigger + steps draft.
   var parseRoutine: @Sendable (String, AIProvider) async throws -> RoutineDraft
@@ -33,6 +39,35 @@ extension ActionParsingClient: DependencyKey {
       },
       parseMulti: { transcript, provider, selection in
         try await parseTranscript(transcript, provider: provider, selection: selection)
+      },
+      resolveStep: { intent, priorResult, provider in
+        guard let instruction = intent.resolveInstruction, !instruction.isEmpty else {
+          return intent
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let actionData = try? encoder.encode(intent),
+              let actionJSON = String(data: actionData, encoding: .utf8) else {
+          return intent
+        }
+        let userMessage = StepResolvePrompt.userMessage(
+          actionJSON: actionJSON,
+          priorResult: priorResult,
+          instruction: instruction
+        )
+        let json = try await completeJSON(
+          userMessage: userMessage,
+          systemPrompt: StepResolvePrompt.prompt,
+          provider: provider
+        )
+        guard let data = json.data(using: .utf8),
+              let resolved = try? JSONDecoder().decode(ActionIntent.self, from: data) else {
+          // Resolve failed to produce a valid intent — fall back to the
+          // unresolved one so the step still runs with whatever it had.
+          actionLogger.warning("Step resolve returned non-decodable JSON; using unresolved intent")
+          return intent
+        }
+        return resolved
       },
       parseRoutine: { description, provider in
         let json = try await completeJSON(

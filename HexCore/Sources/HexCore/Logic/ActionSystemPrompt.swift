@@ -22,7 +22,9 @@ Schema:
       "duration": integer minutes for calendar events (e.g. 30, 60, 90), or null,
       "attendees": ["email@example.com"] array of attendee emails for calendar events, or null,
       "recipient": "Name or email of the person to email, or null",
-      "subject": "Email subject line if explicitly dictated, or null"
+      "subject": "Email subject line if explicitly dictated, or null",
+      "dependsOn": "Zero-based index of an EARLIER action in this array whose result this action needs, or null (see Dependent steps below)",
+      "resolveInstruction": "If dependsOn is set: a short instruction naming what to pull from that earlier step's result and which field to fill, or null"
     }
   ]
 }
@@ -67,6 +69,19 @@ Selected-text context:
   Example with selection — Input:
     <transcript>email this to Mike</transcript> followed by <selection>Draft agenda: 1. Q3 numbers 2. Hiring plan</selection>
   Output: {"actions":[{"actionType":"createDraft","targetIntegration":"gmail","title":"Draft agenda","dueDate":null,"notes":"Draft agenda: 1. Q3 numbers 2. Hiring plan","listName":null,"priority":null,"duration":null,"attendees":null,"recipient":"Mike","subject":null}]}
+
+Dependent steps (chained actions):
+- Sometimes a later action needs a value produced by an earlier one — most often an MCP/lookup step that returns data ("look up Joe's email in Dex") followed by an action that consumes it ("then draft him an email").
+- When that happens, emit BOTH actions in order (the producer first), and on the CONSUMER set:
+  - "dependsOn": the zero-based index of the producer action in this array.
+  - "resolveInstruction": a short instruction naming what to extract and which field to fill, e.g. "Set recipient to the email address from the lookup result".
+- Leave the consumer's dependent field empty/null in your output (e.g. recipient: null) — it gets filled after the producer runs. Fill every field you CAN from the transcript (subject, body/notes, title) as normal.
+- Only use dependsOn when a step genuinely needs another step's OUTPUT. Independent actions ("email Mike AND schedule a meeting") do NOT use dependsOn.
+- Producers are usually MCP tools (mcpCall) or lookups; a step can depend on at most one earlier step.
+
+  Example — dependent steps (MCP lookup feeding an email draft), assuming a Dex MCP server named "Dex" with a "search_contacts" tool:
+    Input: <transcript>look up Joe Vasquez's email address in Dex and then draft him a happy birthday email in Gmail</transcript>
+    Output: {"actions":[{"actionType":"mcpCall","targetIntegration":"appleReminders","title":"Look up Joe Vasquez in Dex","dueDate":null,"notes":null,"listName":null,"priority":null,"duration":null,"attendees":null,"recipient":null,"subject":null,"mcpServerName":"Dex","mcpTool":"search_contacts","mcpArguments":{"query":"Joe Vasquez"},"dependsOn":null,"resolveInstruction":null},{"actionType":"createDraft","targetIntegration":"gmail","title":"Happy Birthday","dueDate":null,"notes":"Wishing you a very happy birthday!","listName":null,"priority":null,"duration":null,"attendees":null,"recipient":null,"subject":null,"dependsOn":0,"resolveInstruction":"Set recipient to Joe Vasquez's email address from the lookup result"}]}
 
 Other rules:
 - title should be a clean, concise description — not the full transcript.

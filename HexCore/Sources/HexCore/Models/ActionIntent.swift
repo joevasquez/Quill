@@ -38,6 +38,16 @@ public struct ActionIntent: Codable, Equatable, Sendable {
   public var mcpServerName: String?
   public var mcpTool: String?
   public var mcpArguments: [String: String]?
+  /// Chained steps: the zero-based index (within the same `actions` array) of
+  /// an earlier step whose text result feeds this one. nil → independent step.
+  /// The executor runs dependent steps after their dependency, passing the
+  /// dependency's output through an LLM resolve pass before executing.
+  public var dependsOn: Int?
+  /// Natural-language instruction for the resolve pass telling it what to pull
+  /// from the dependency's result and which field to fill (e.g. "Set recipient
+  /// to the email address from the lookup result"). Only used when `dependsOn`
+  /// is set.
+  public var resolveInstruction: String?
 
   public init(
     actionType: ActionType,
@@ -55,7 +65,9 @@ public struct ActionIntent: Codable, Equatable, Sendable {
     subject: String? = nil,
     mcpServerName: String? = nil,
     mcpTool: String? = nil,
-    mcpArguments: [String: String]? = nil
+    mcpArguments: [String: String]? = nil,
+    dependsOn: Int? = nil,
+    resolveInstruction: String? = nil
   ) {
     self.actionType = actionType
     self.targetIntegration = targetIntegration
@@ -73,6 +85,8 @@ public struct ActionIntent: Codable, Equatable, Sendable {
     self.mcpServerName = mcpServerName
     self.mcpTool = mcpTool
     self.mcpArguments = mcpArguments
+    self.dependsOn = dependsOn
+    self.resolveInstruction = resolveInstruction
   }
 }
 
