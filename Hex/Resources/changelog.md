@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.21.0
+
+### Minor Changes
+
+- f3e9a77: New Chip display mode (Settings → General → Display Mode → Chip): a compact frosted chip showing the Quill feather at rest that morphs into a mode-hued orb while capturing, with a 4-bar listening meter and a Corner Bloom transcript card — a minimal, less-obtrusive alternative to the Orb
+- fe72cd2: Agent memory extraction now runs on-device via Apple's Foundation Models when available (macOS 26+, Apple Intelligence) — learning from dictations is free and the transcript never leaves the Mac; falls back to the cloud provider otherwise
+- 4cba3e8: Hermes agent layer: voice-authored routines with instant trigger phrases, on-device agent memory that learns people/projects/preferences from dictations, agent naming, and auto-run trust ladder
+- 0c4478d: MCP servers that require a browser sign-in (OAuth) now work — Quill runs the full MCP auth flow (discovery, dynamic client registration, PKCE browser login, token refresh), so servers like Dex, Notion, and Linear can be connected, not just static-token servers
+- 4cba3e8: Selection-aware Action mode: highlight text in any app and say "add this to my list" or "email this to Mike" — the agent resolves "this" to the highlighted text and files it as notes or email body
+- d40c2c5: Chip display mode now lives in the menu bar per the design spec: the status item shows the Quill feather at rest and morphs into a mode-hued orb while capturing (mic meter while listening, green flash on completion), with the Corner Bloom transcript card dropping from the menu bar; the app menu gains a mode header, paste preview with shortcut, and a Mode submenu
+- 423b5dc: Notes editor overhaul: dictate directly into a note (mic in the toolbar, ⌘⇧D) with an AI clean-up toggle; the editor now fills and scales with the window (no more nested scrolling, adaptive readable column); markdown lists auto-continue on Enter; numbered-list and quote formatting; placeholder for empty notes
+- 6971a51: New Agent tab in Settings (agent identity, routines, learned memory, offline queue) with tinted sidebar icons; polished Notes editor (readable column width, larger type with line spacing, word count) and warmer empty states
+- fe72cd2: MCP client: connect any Model Context Protocol server (Settings → Agent → Tools) and its tools become voice-invocable — Hermes lists them to the planner, shows the call on the confirmation card, and executes over Streamable HTTP with keychain-stored tokens
+
+### Patch Changes
+
+- ef0aa24: Fix Anthropic API key validation rejecting valid keys: the validator pinged a retired model (claude-sonnet-4-20250514) and treated the 404 as an invalid key; it now uses the app's current default model and only treats 401/403 as invalid
+- b063f10: Harden Pro AI proxy: pin OAuth token audience to Quill's client ID, fail closed without an email allowlist, add per-user daily request cap and input size limit
+- 35a5d4b: MCP servers in Settings → Agent → Tools can now be edited (name, URL, token), not just added and deleted — a pencil button on each row opens an edit sheet; the stored token is preserved unless you replace or remove it
+- c53c943: Chip menu-bar mode: fix the feather rendering dark/invisible and pulsing to transparent on some displays (now a solid white feather on a consistent dark chip), and size the pill to fill the menu bar so it matches the system mic pill height
+- 48dca74: Chip menu-bar mode: use the original brand feather, make the mode-name label white, and size the chip to match the system mic pill height
+- 423b5dc: History polish: row actions reveal on hover, colored capsule mode badges, tinted stat icons
+- 779254b: Make MCP tool calls reliable across servers: the planner now always gets each tool's argument names, types, and required flags (parsed from its schema) instead of dropping large schemas, so tools like Dex's contact search get their required 'query' argument
+- d76b341: Surface why an action failed in the confirmation panel (instead of a silent auto-dismiss), and make MCP authentication failures explain that the server needs a token / that OAuth servers aren't supported yet
+- 8f73fcf: Show the result of read/query MCP tools: the confirmation panel now displays what the tool returned (selectable) and copies it to the clipboard, instead of just showing 'Done' with no output
+- b90a414: Orb display mode is far less obtrusive at rest: compact idle size with a quieter, smaller backdrop card that blooms to full size only while recording
+- fec4379: Orb: cap the Action-mode satellite ring at 6 tiles with a +N overflow indicator, and ease the compact idle size back up for readability
+- 80938c7: Chip display mode now shows the mode name (Dictate/Edit/Action/Auto) in the menu-bar chip for ~1.6s when you switch modes with the hotkey, so you always know which mode you're in
+- 18f2edf: MCP tool output in the confirmation panel now has an explicit Copy button instead of auto-copying to the clipboard
+- 4cba3e8: Fix iOS build broken by macOS-only Pro-plan imports in shared AIProcessingClient; route Action-mode parsing through the Pro proxy for Pro users
+- b90a414: History: date-grouped transcript list, collapsible long transcripts with text selection, debounced search, and cached app icons for smooth scrolling
+- 46d55d2: Fix the Chip menu-bar pill not filling the menu-bar height (it was hugging the glyph's intrinsic size); the pill now fills the bar like the system mic pill and ChipSpec.chipVMargin controls its height
+- f1c90e5: Stop the macOS keychain password prompts on rebuild: secrets now use the Data Protection keychain (no prompts) with a transparent one-time migration from the legacy keychain, so existing API keys and tokens are preserved
+
 ## 0.20.0
 
 ### Minor Changes
