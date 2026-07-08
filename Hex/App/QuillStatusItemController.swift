@@ -94,6 +94,11 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
           }
         ))
         host.translatesAutoresizingMaskIntoConstraints = false
+        // Fill the pinned frame instead of hugging the SwiftUI content's
+        // intrinsic size. Without this the hosting view sizes to the ~18px
+        // glyph, so the chip pill can never fill the menu-bar height (and
+        // `chipVMargin` appears to do nothing).
+        host.sizingOptions = []
         button.addSubview(host)
         NSLayoutConstraint.activate([
           host.leadingAnchor.constraint(equalTo: button.leadingAnchor),
