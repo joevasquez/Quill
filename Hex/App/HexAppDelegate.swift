@@ -252,8 +252,9 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 		}
 		let rawTranscript = (notification.userInfo?[ActionConfirmationNotification.rawTranscriptKey] as? String) ?? ""
 		let autoExecute = (notification.userInfo?[ActionConfirmationNotification.autoExecuteKey] as? Bool) ?? false
+		let sourceAppBundleID = notification.userInfo?[ActionConfirmationNotification.sourceAppBundleIDKey] as? String
 		Task { @MainActor [weak self] in
-			self?.presentMultiActionConfirmation(intents: intents, rawTranscript: rawTranscript, autoExecute: autoExecute)
+			self?.presentMultiActionConfirmation(intents: intents, rawTranscript: rawTranscript, autoExecute: autoExecute, sourceAppBundleID: sourceAppBundleID)
 		}
 	}
 
@@ -279,12 +280,12 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 	}
 
 	@MainActor
-	func presentMultiActionConfirmation(intents: [ActionIntent], rawTranscript: String = "", autoExecute: Bool = false) {
+	func presentMultiActionConfirmation(intents: [ActionIntent], rawTranscript: String = "", autoExecute: Bool = false, sourceAppBundleID: String? = nil) {
 		HexLog.action.info("Presenting multi-action confirmation panel: \(intents.count, privacy: .public) actions")
 		dismissActionPanel()
 
 		let multiStore = Store(
-			initialState: MultiActionConfirmationFeature.State(intents: intents, rawTranscript: rawTranscript, autoExecute: autoExecute)
+			initialState: MultiActionConfirmationFeature.State(intents: intents, rawTranscript: rawTranscript, autoExecute: autoExecute, sourceAppBundleID: sourceAppBundleID)
 		) {
 			MultiActionConfirmationFeature()
 		}

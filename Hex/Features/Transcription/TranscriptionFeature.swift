@@ -405,12 +405,14 @@ struct TranscriptionFeature {
         // so the HUD integration hard-lock does NOT override them.
         state.pendingAction = routine.steps.first
         let rawRoutineTranscript = state.lastActionTranscript
+        let routineBundleID = state.sourceAppBundleID
         return .run { _ in
           await MainActor.run {
             ActionConfirmationNotification.postMulti(
               intents: routine.steps,
               rawTranscript: rawRoutineTranscript,
-              autoExecute: routine.autoRun
+              autoExecute: routine.autoRun,
+              sourceAppBundleID: routineBundleID
             )
           }
         }
@@ -506,9 +508,10 @@ struct TranscriptionFeature {
 
       case let .presentMultiActionConfirmation(intents, rawTranscript):
         transcriptionFeatureLogger.info("Posting multi-action confirmation notification for \(intents.count, privacy: .public) intents")
+        let multiBundleID = state.sourceAppBundleID
         return .run { _ in
           await MainActor.run {
-            ActionConfirmationNotification.postMulti(intents: intents, rawTranscript: rawTranscript)
+            ActionConfirmationNotification.postMulti(intents: intents, rawTranscript: rawTranscript, sourceAppBundleID: multiBundleID)
           }
         }
 

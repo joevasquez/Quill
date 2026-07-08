@@ -20,6 +20,11 @@ struct ActionParsingClient {
   /// address from an MCP lookup) AND personalizes the action's text (greet the
   /// contact by the looked-up name) using facts from the prior result.
   var resolveStep: @Sendable (ActionIntent, String, String, AIProvider) async throws -> ActionIntent
+  /// "Answer from tool result" pass: given the user's original request and a
+  /// standalone MCP read/query result, extracts the specific answer they asked
+  /// for (an email, a phone number, a one-line fact) — or "" if the result
+  /// doesn't contain it / the request wasn't a question.
+  var extractAnswer: @Sendable (String, String, AIProvider) async throws -> String
   /// Turns a dictated routine description ("when I say ship it, …") into a
   /// named trigger + steps draft.
   var parseRoutine: @Sendable (String, AIProvider) async throws -> RoutineDraft
@@ -70,6 +75,18 @@ extension ActionParsingClient: DependencyKey {
           return intent
         }
         return resolved
+      },
+      extractAnswer: { request, result, provider in
+        let json = try await completeJSON(
+          userMessage: AnswerExtractionPrompt.userMessage(request: request, result: result),
+          systemPrompt: AnswerExtractionPrompt.prompt,
+          provider: provider
+        )
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONDecoder().decode([String: String].self, from: data) else {
+          return ""
+        }
+        return obj["answer"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       },
       parseRoutine: { description, provider in
         let json = try await completeJSON(

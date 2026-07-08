@@ -70,4 +70,23 @@ final class DependentStepTests: XCTestCase {
     XCTAssertTrue(p.contains("personalize"))
     XCTAssertTrue(p.contains("never invent"))
   }
+
+  func testAnswerExtractionUserMessageHasRequestAndResult() {
+    let msg = AnswerExtractionPrompt.userMessage(
+      request: "look up Joe's email in Dex and output his email address",
+      result: #"{"items":[{"first_name":"Joe","email":"joe@example.com"}]}"#
+    )
+    XCTAssertTrue(msg.contains("REQUEST:"))
+    XCTAssertTrue(msg.contains("output his email address"))
+    XCTAssertTrue(msg.contains("RESULT:"))
+    XCTAssertTrue(msg.contains("joe@example.com"))
+  }
+
+  /// The answer prompt must force a JSON {"answer": …} shape and forbid
+  /// inventing values — the panel decodes [String:String].
+  func testAnswerExtractionPromptShapeAndGuard() {
+    let p = AnswerExtractionPrompt.prompt
+    XCTAssertTrue(p.contains(#"{"answer":"#))
+    XCTAssertTrue(p.lowercased().contains("never invent"))
+  }
 }

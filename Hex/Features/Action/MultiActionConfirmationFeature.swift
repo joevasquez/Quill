@@ -14,6 +14,8 @@ struct MultiActionConfirmationFeature {
     var isExecuting: Bool = false
     var results: [UUID: ItemResult] = [:]
     var completion: Completion?
+    /// App frontmost at record-start; target for pasting an extracted answer.
+    var sourceAppBundleID: String?
     /// Routine trust ladder: when true (auto-run routine), execution starts
     /// on appear — the panel becomes a progress display instead of a prompt.
     var autoExecute: Bool = false
@@ -144,13 +146,25 @@ struct MultiActionConfirmationFeature {
       var outputs: [Output] = []
 
       struct Output: Equatable {
+        let itemID: UUID
         let title: String
         let text: String
+        /// The specific answer extracted from `text` when the request was a
+        /// question ("look up Joe's email" → the email). Filled asynchronously
+        /// after the panel appears; nil until then / when there's no answer.
+        var answer: String?
+      }
+
+      /// The extracted answers across all outputs, joined — the value the user
+      /// actually asked for. Empty when nothing was extracted.
+      var combinedAnswer: String {
+        outputs.compactMap(\.answer).filter { !$0.isEmpty }.joined(separator: "\n")
       }
     }
 
-    init(intents: [ActionIntent], rawTranscript: String, autoExecute: Bool = false) {
+    init(intents: [ActionIntent], rawTranscript: String, autoExecute: Bool = false, sourceAppBundleID: String? = nil) {
       self.rawTranscript = rawTranscript
+      self.sourceAppBundleID = sourceAppBundleID
       var built = intents.map { ActionItemState(intent: $0) }
       // Resolve each step's `dependsOn` index into the depended-on item's id,
       // so chaining survives panel reordering/removal.
@@ -172,6 +186,9 @@ struct MultiActionConfirmationFeature {
     case removeItem(UUID)
     case executeAll
     case copyOutput
+    case copyAnswer
+    case pasteAnswer
+    case answerExtracted(UUID, String)
     case itemResult(UUID, State.ItemResult)
     case completionDismissed
     case cancel
@@ -316,10 +333,15 @@ struct MultiActionConfirmationFeature {
           let succeeded = state.results.values.filter { if case .succeeded = $0 { return true }; return false }.count
           let failed = state.results.values.filter { if case .failed = $0 { return true }; return false }.count
           let queued = state.results.values.filter { if case .queued = $0 { return true }; return false }.count
-          // Collect distinct failure reasons + MCP read/query outputs,
-          // preserving item order.
+          // Producers whose output was consumed by a dependent step — their
+          // raw result isn't shown (the dependent already used it).
+          let consumed = Set(state.items.compactMap(\.dependsOnID))
+          // Collect distinct failure reasons + standalone MCP read/query
+          // outputs, preserving item order. `toExtract` holds the RAW result
+          // (not the formatted one) for the answer-extraction pass.
           var reasons: [String] = []
           var outputs: [State.Completion.Output] = []
+          var toExtract: [(UUID, String)] = []
           for item in state.items {
             switch state.results[item.id] {
             case let .failed(msg):
@@ -329,8 +351,10 @@ struct MultiActionConfirmationFeature {
               // adapters return an item id, which isn't worth showing.
               // Format the (usually-JSON) result for readability — the raw
               // result still fed the resolve pass, this is display/copy only.
-              if item.intent.actionType == .mcpCall, !text.isEmpty, text != "Done" {
-                outputs.append(.init(title: item.displayTitle, text: MCPResultFormatter.format(text)))
+              if item.intent.actionType == .mcpCall, !text.isEmpty, text != "Done",
+                 !consumed.contains(item.id) {
+                outputs.append(.init(itemID: item.id, title: item.displayTitle, text: MCPResultFormatter.format(text)))
+                toExtract.append((item.id, text))
               }
             default:
               break
@@ -344,15 +368,49 @@ struct MultiActionConfirmationFeature {
           actionLogger.info("Multi-action complete: \(succeeded) succeeded, \(failed) failed, \(queued) queued, \(outputs.count) output(s)")
 
           // Auto-dismiss only when there's nothing to read (no failures and
-          // no output). Otherwise keep the panel up until the user dismisses
-          // (the output has an explicit Copy button).
-          guard failed == 0, outputs.isEmpty else { return .none }
-          return .run { send in
-            try? await Task.sleep(for: .milliseconds(1800))
-            await send(.completionDismissed)
+          // no output). Otherwise keep the panel up until the user dismisses.
+          if failed == 0, outputs.isEmpty {
+            return .run { send in
+              try? await Task.sleep(for: .milliseconds(1800))
+              await send(.completionDismissed)
+            }
+          }
+          // Panel stays open. Extract the specific answer the user asked for
+          // from each standalone MCP result (best-effort, in the background).
+          guard !toExtract.isEmpty else { return .none }
+          let request = state.rawTranscript
+          @Shared(.hexSettings) var hexSettings: HexSettings
+          let provider = hexSettings.aiProvider
+          return .run { [actionParsing] send in
+            for (id, raw) in toExtract {
+              if let answer = try? await actionParsing.extractAnswer(request, raw, provider),
+                 !answer.isEmpty {
+                await send(.answerExtracted(id, answer))
+              }
+            }
           }
         }
         return .none
+
+      case let .answerExtracted(id, answer):
+        if let index = state.completion?.outputs.firstIndex(where: { $0.itemID == id }) {
+          state.completion?.outputs[index].answer = answer
+        }
+        return .none
+
+      case .copyAnswer:
+        let answer = state.completion?.combinedAnswer ?? ""
+        guard !answer.isEmpty else { return .none }
+        return .run { [pasteboard] _ in await pasteboard.copy(answer) }
+
+      case .pasteAnswer:
+        let answer = state.completion?.combinedAnswer ?? ""
+        guard !answer.isEmpty else { return .none }
+        let bundleID = state.sourceAppBundleID
+        return .run { [pasteboard] send in
+          await pasteboard.paste(answer, bundleID)
+          await send(.completionDismissed)
+        }
 
       case .copyOutput:
         let text = (state.completion?.outputs ?? []).map(\.text).joined(separator: "\n\n")

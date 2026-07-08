@@ -26,6 +26,9 @@ enum ActionConfirmationNotification {
   /// When true the panel executes immediately on appear — used by routines
   /// the user has promoted to auto-run on the trust ladder.
   static let autoExecuteKey = "autoExecute"
+  /// Bundle ID of the app frontmost at record-start, so the panel can paste an
+  /// extracted answer back where the user was typing.
+  static let sourceAppBundleIDKey = "sourceAppBundleID"
 
   static func post(intent: ActionIntent, rawTranscript: String = "") {
     NotificationCenter.default.post(
@@ -38,7 +41,7 @@ enum ActionConfirmationNotification {
     )
   }
 
-  static func postMulti(intents: [ActionIntent], rawTranscript: String = "", autoExecute: Bool = false) {
+  static func postMulti(intents: [ActionIntent], rawTranscript: String = "", autoExecute: Bool = false, sourceAppBundleID: String? = nil) {
     NotificationCenter.default.post(
       name: .presentMultiActionConfirmation,
       object: nil,
@@ -46,6 +49,7 @@ enum ActionConfirmationNotification {
         intentsKey: intents,
         rawTranscriptKey: rawTranscript,
         autoExecuteKey: autoExecute,
+        sourceAppBundleIDKey: sourceAppBundleID as Any,
       ]
     )
   }

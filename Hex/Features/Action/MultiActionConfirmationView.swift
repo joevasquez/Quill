@@ -7,6 +7,7 @@ struct MultiActionConfirmationView: View {
   @Bindable var store: StoreOf<MultiActionConfirmationFeature>
   @ObserveInjection var inject
   @State private var didCopyOutput = false
+  @State private var didCopyAnswer = false
 
   var body: some View {
     ZStack {
@@ -286,6 +287,55 @@ struct MultiActionConfirmationView: View {
           .font(.system(size: 12))
           .foregroundStyle(.white.opacity(0.7))
           .multilineTextAlignment(.center)
+      }
+
+      // Extracted answer (the specific value the user asked for), shown
+      // prominently with Copy + Paste — appears once extraction returns.
+      if !completion.combinedAnswer.isEmpty {
+        VStack(alignment: .leading, spacing: 10) {
+          Text("Answer")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.6))
+          Text(completion.combinedAnswer)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(.white)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+          HStack(spacing: 8) {
+            Button {
+              store.send(.copyAnswer)
+              didCopyAnswer = true
+              Task { try? await Task.sleep(for: .seconds(1.4)); didCopyAnswer = false }
+            } label: {
+              Label(didCopyAnswer ? "Copied" : "Copy", systemImage: didCopyAnswer ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(didCopyAnswer ? .green : .white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.white.opacity(0.14)))
+            }
+            .buttonStyle(.plain)
+
+            if store.sourceAppBundleID != nil {
+              Button { store.send(.pasteAnswer) } label: {
+                Label("Paste", systemImage: "text.cursor")
+                  .font(.system(size: 12, weight: .medium))
+                  .foregroundStyle(.white)
+                  .padding(.horizontal, 12)
+                  .padding(.vertical, 6)
+                  .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.accentColor.opacity(0.55)))
+              }
+              .buttonStyle(.plain)
+            }
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(.white.opacity(0.10))
+        )
       }
 
       // Result output (e.g. what an MCP read/query tool returned).
