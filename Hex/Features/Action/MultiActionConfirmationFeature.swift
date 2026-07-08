@@ -136,6 +136,14 @@ struct MultiActionConfirmationFeature {
       /// Distinct error messages for the failed items, shown on the badge
       /// so the user sees *why* something failed (e.g. MCP auth).
       var failureReasons: [String] = []
+      /// Text results worth showing the user — e.g. what an MCP read/query
+      /// tool returned. Also copied to the clipboard.
+      var outputs: [Output] = []
+
+      struct Output: Equatable {
+        let title: String
+        let text: String
+      }
     }
 
     init(intents: [ActionIntent], rawTranscript: String, autoExecute: Bool = false) {
@@ -165,6 +173,7 @@ struct MultiActionConfirmationFeature {
   @Dependency(\.googleOAuth) var googleOAuth
   @Dependency(\.keychain) var keychain
   @Dependency(\.soundEffects) var soundEffect
+  @Dependency(\.pasteboard) var pasteboard
 
   var body: some ReducerOf<Self> {
     BindingReducer()
@@ -262,23 +271,46 @@ struct MultiActionConfirmationFeature {
           let succeeded = state.results.values.filter { if case .succeeded = $0 { return true }; return false }.count
           let failed = state.results.values.filter { if case .failed = $0 { return true }; return false }.count
           let queued = state.results.values.filter { if case .queued = $0 { return true }; return false }.count
-          // Collect distinct failure reasons, preserving item order.
+          // Collect distinct failure reasons + MCP read/query outputs,
+          // preserving item order.
           var reasons: [String] = []
+          var outputs: [State.Completion.Output] = []
           for item in state.items {
-            if case let .failed(msg) = state.results[item.id], !reasons.contains(msg) {
-              reasons.append(msg)
+            switch state.results[item.id] {
+            case let .failed(msg):
+              if !reasons.contains(msg) { reasons.append(msg) }
+            case let .succeeded(text):
+              // MCP tools return meaningful text (a query answer); native
+              // adapters return an item id, which isn't worth showing.
+              if item.intent.actionType == .mcpCall, !text.isEmpty, text != "Done" {
+                outputs.append(.init(title: item.displayTitle, text: text))
+              }
+            default:
+              break
             }
           }
           soundEffect.play(failed > 0 ? .cancel : .pasteTranscript)
-          state.completion = .init(succeeded: succeeded, failed: failed, queued: queued, failureReasons: reasons)
-          actionLogger.info("Multi-action complete: \(succeeded) succeeded, \(failed) failed, \(queued) queued")
-          // Only auto-dismiss when nothing failed. On failure, keep the
-          // panel up so the user can read the reason and dismiss manually.
-          guard failed == 0 else { return .none }
-          return .run { send in
-            try? await Task.sleep(for: .milliseconds(1800))
-            await send(.completionDismissed)
+          state.completion = .init(
+            succeeded: succeeded, failed: failed, queued: queued,
+            failureReasons: reasons, outputs: outputs
+          )
+          actionLogger.info("Multi-action complete: \(succeeded) succeeded, \(failed) failed, \(queued) queued, \(outputs.count) output(s)")
+
+          // Copy any output to the clipboard so the user can paste it.
+          let clipboard = outputs.map(\.text).joined(separator: "\n\n")
+          let copyEffect: Effect<Action> = clipboard.isEmpty ? .none : .run { [pasteboard] _ in
+            await pasteboard.copy(clipboard)
           }
+          // Auto-dismiss only when there's nothing to read (no failures and
+          // no output). Otherwise keep the panel up until the user dismisses.
+          guard failed == 0, outputs.isEmpty else { return copyEffect }
+          return .merge(
+            copyEffect,
+            .run { send in
+              try? await Task.sleep(for: .milliseconds(1800))
+              await send(.completionDismissed)
+            }
+          )
         }
         return .none
 

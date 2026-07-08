@@ -287,8 +287,38 @@ struct MultiActionConfirmationView: View {
           .multilineTextAlignment(.center)
       }
 
-      // Show *why* it failed, and require a manual dismiss (the panel no
-      // longer auto-closes when something failed).
+      // Result output (e.g. what an MCP read/query tool returned).
+      if !completion.outputs.isEmpty {
+        VStack(alignment: .leading, spacing: 8) {
+          ForEach(Array(completion.outputs.enumerated()), id: \.offset) { _, output in
+            VStack(alignment: .leading, spacing: 4) {
+              Text(output.title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.6))
+              ScrollView(.vertical, showsIndicators: true) {
+                Text(output.text)
+                  .font(.system(size: 12.5, design: .monospaced))
+                  .foregroundStyle(.white.opacity(0.9))
+                  .textSelection(.enabled)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
+              .frame(maxHeight: 180)
+            }
+          }
+          Label("Copied to clipboard", systemImage: "doc.on.clipboard")
+            .font(.system(size: 11))
+            .foregroundStyle(.green)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(.white.opacity(0.06))
+        )
+      }
+
+      // Show *why* it failed.
       if !completion.failureReasons.isEmpty {
         VStack(alignment: .leading, spacing: 6) {
           ForEach(completion.failureReasons, id: \.self) { reason in
@@ -310,7 +340,11 @@ struct MultiActionConfirmationView: View {
           RoundedRectangle(cornerRadius: 10, style: .continuous)
             .fill(Color.orange.opacity(0.12))
         )
+      }
 
+      // Manual dismiss whenever the panel isn't auto-closing (failure or
+      // output to read).
+      if !completion.failureReasons.isEmpty || !completion.outputs.isEmpty {
         Button { store.send(.completionDismissed) } label: {
           Text("Dismiss")
             .font(.system(size: 13, weight: .semibold))
@@ -332,7 +366,7 @@ struct MultiActionConfirmationView: View {
   }
 
   private func completionTitle(_ c: MultiActionConfirmationFeature.State.Completion) -> String {
-    if c.failed == 0 { return "Done" }
+    if c.failed == 0 { return c.outputs.isEmpty ? "Done" : "Result" }
     if c.succeeded > 0 || c.queued > 0 { return "Partial success" }
     return c.failed == 1 ? "Action failed" : "Actions failed"
   }

@@ -60,7 +60,9 @@ enum MCPActionExecutor {
     let client = try MCPClient(url: server.url, authToken: token)
     try await client.connect()
     let result = try await client.callTool(name: toolName, arguments: arguments)
-    return result.isEmpty ? "Done" : String(result.prefix(500))
+    // Read/query tools return content the user wants to see (shown + copied
+    // by the confirmation panel), so keep a generous slice.
+    return result.isEmpty ? "Done" : String(result.prefix(4000))
   }
 
   /// property name → declared JSON Schema type ("integer", "number",
