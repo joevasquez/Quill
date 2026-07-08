@@ -127,7 +127,7 @@ struct MenuBarChipView: View {
       if let reveal = revealMode {
         Text(reveal.rawValue)
           .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(revealColor(reveal))
+          .foregroundStyle(.white)
           .fixedSize()
           .lineLimit(1)
           .transition(.asymmetric(
@@ -175,9 +175,13 @@ struct MenuBarChipView: View {
         .opacity(live && !isListening ? 1 : 0)
         .scaleEffect(live ? 1 : 0.30)
 
-      // Feather — idle, with the 4.8s breath.
-      FeatherShape()
-        .stroke(palette.fg, style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
+      // Feather — the original brand feather (asset), tinted to the chip
+      // foreground; idle, with the 4.8s breath.
+      Image(nsImage: HexApp.menuBarIcon)
+        .resizable()
+        .renderingMode(.template)
+        .aspectRatio(contentMode: .fit)
+        .foregroundStyle(palette.fg)
         .frame(width: ChipSpec.feather.width, height: ChipSpec.feather.height)
         .opacity(live ? 0 : (breathe ? 1.0 : 0.8))
         .scaleEffect(live ? 0.42 : (breathe ? 1.07 : 1.0))
@@ -202,10 +206,6 @@ struct MenuBarChipView: View {
       value: live
     )
     .animation(.easeInOut(duration: 0.3), value: hue)
-  }
-
-  private func revealColor(_ mode: TranscriptionIndicatorView.Mode) -> Color {
-    Color(hue: mode.orbHue / 360.0, saturation: 0.72, brightness: 0.96)
   }
 
   // MARK: Mode-name reveal
@@ -250,46 +250,21 @@ struct MenuBarChipView: View {
   }
 }
 
-/// Spec geometry at true menu-bar scale.
+/// Menu-bar geometry. Sized so the chip pill matches the height of the
+/// system dictation mic pill (~22pt) rather than the 18px design spec.
 enum ChipSpec {
-  static let chipHeight: CGFloat = 18
-  static let orb: CGFloat = 12
-  static let feather = CGSize(width: 13, height: 14)
+  static let chipHeight: CGFloat = 22
+  static let orb: CGFloat = 15
+  static let feather = CGSize(width: 17, height: 17)
   /// Fixed slot the orb/feather/meter render in (widest glyph state).
-  static let glyphSlot: CGFloat = 14
-  static let chipHPad: CGFloat = 6
+  static let glyphSlot: CGFloat = 17
+  static let chipHPad: CGFloat = 8
   /// Gap between the glyph and the transient mode label.
   static let labelGap: CGFloat = 5
-  static let itemLength: CGFloat = 34  // NSStatusItem length at rest (chip + breathing room)
+  static let itemLength: CGFloat = 40  // NSStatusItem length at rest (chip + breathing room)
   /// Extra room around the chip within the status-item slot during a reveal.
   static let slotSlack: CGFloat = 8
   static let bloomWidth: CGFloat = 232
-}
-
-// MARK: - Feather glyph
-
-/// The Quill 3-stroke feather, ported from the handoff SVG
-/// (`M20 4C11 6 7 11 6 20  M20 4c-2 7-6 10-14 12  M20 4l-2 7-5 2`,
-/// 24×24 viewBox). Drawn as three subpaths, scaled to the frame.
-struct FeatherShape: Shape {
-  func path(in rect: CGRect) -> Path {
-    let s = min(rect.width, rect.height) / 24.0
-    func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-      CGPoint(x: rect.minX + x * s, y: rect.minY + y * s)
-    }
-    var path = Path()
-    // 1. Spine
-    path.move(to: p(20, 4))
-    path.addCurve(to: p(6, 20), control1: p(11, 6), control2: p(7, 11))
-    // 2. Barb
-    path.move(to: p(20, 4))
-    path.addCurve(to: p(6, 16), control1: p(18, 11), control2: p(14, 14))
-    // 3. Stem
-    path.move(to: p(20, 4))
-    path.addLine(to: p(18, 11))
-    path.addLine(to: p(13, 13))
-    return path
-  }
 }
 
 // MARK: - Listening meter (4 bars, 2×12, gap 1.5)
