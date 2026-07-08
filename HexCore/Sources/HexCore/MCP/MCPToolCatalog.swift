@@ -62,10 +62,14 @@ public actor MCPToolCatalog {
       for tool in entry.tools {
         var line = "- server: \(server.name), tool: \(tool.name)"
         if let description = tool.description, !description.isEmpty {
-          line += " — \(description.prefix(200))"
+          line += " — \(description.prefix(240))"
         }
-        if let schema = tool.inputSchemaJSON, schema.count < 600 {
-          line += " (arguments schema: \(schema))"
+        // Argument names/types/required flags (parsed from the schema) so the
+        // model fills the right keys. Reliable regardless of schema size.
+        if let args = tool.argumentSummary {
+          line += " | arguments: \(args)"
+        } else {
+          line += " | arguments: none"
         }
         lines.append(line)
       }
@@ -81,7 +85,7 @@ public actor MCPToolCatalog {
     - "targetIntegration": "appleReminders" (required by the schema; ignored for MCP calls)
     - "mcpServerName": the server name exactly as listed above
     - "mcpTool": the tool name exactly as listed above
-    - "mcpArguments": an object of argument name → value (strings, numbers, booleans as strings are acceptable) matching the tool's schema; omit optional arguments the user didn't mention
+    - "mcpArguments": an object of argument name → value. Use the EXACT argument names listed for the tool (in "arguments:" above), and ALWAYS include every argument marked "required" — infer a sensible value from the request when the user didn't state one explicitly (e.g. for a search tool's required "query", use the name or terms the user mentioned). Values are strings; numbers/booleans as strings are acceptable. Omit optional arguments the user didn't mention.
     - "title": a short human-readable description of what this call does (shown on the confirmation card)
     Prefer a native integration (todoist, appleReminders, calendar, gmail) when one fits; use MCP tools when the user names the server/tool or the request clearly maps to one.
     """

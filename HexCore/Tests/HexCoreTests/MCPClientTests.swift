@@ -58,3 +58,26 @@ final class MCPClientTests: XCTestCase {
     XCTAssertEqual(decoded.mcpArguments?["priority"], "2")
   }
 }
+
+final class MCPToolArgumentSummaryTests: XCTestCase {
+  func testRequiredArgsFirstWithTypes() {
+    let schema = """
+    {"type":"object","properties":{"limit":{"type":"integer"},"query":{"type":"string"}},"required":["query"]}
+    """
+    let tool = MCPTool(name: "search", inputSchemaJSON: schema)
+    XCTAssertEqual(tool.argumentSummary, "query (string, required), limit (integer)")
+  }
+
+  func testEnumValuesIncluded() {
+    let schema = """
+    {"type":"object","properties":{"status":{"type":"string","enum":["open","closed"]}}}
+    """
+    let tool = MCPTool(name: "filter", inputSchemaJSON: schema)
+    XCTAssertEqual(tool.argumentSummary, "status (string) one of: open|closed")
+  }
+
+  func testNoPropertiesReturnsNil() {
+    XCTAssertNil(MCPTool(name: "ping", inputSchemaJSON: #"{"type":"object"}"#).argumentSummary)
+    XCTAssertNil(MCPTool(name: "ping").argumentSummary)
+  }
+}

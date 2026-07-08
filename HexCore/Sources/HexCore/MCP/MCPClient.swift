@@ -53,6 +53,40 @@ public struct MCPTool: Codable, Equatable, Sendable {
     self.description = description
     self.inputSchemaJSON = inputSchemaJSON
   }
+
+  /// A compact, LLM-friendly summary of the tool's arguments parsed from the
+  /// JSON Schema — e.g. `query (string, required), limit (integer)`. This is
+  /// what goes in the planner prompt instead of the raw schema JSON: it's far
+  /// smaller and reliably conveys the exact argument names, types, and which
+  /// are required, so the model fills them correctly for any server. Returns
+  /// nil when the schema declares no properties (tool takes no arguments).
+  public var argumentSummary: String? {
+    guard let json = inputSchemaJSON,
+          let data = json.data(using: .utf8),
+          let schema = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let properties = schema["properties"] as? [String: Any],
+          !properties.isEmpty
+    else { return nil }
+
+    let required = Set((schema["required"] as? [String]) ?? [])
+    // Required args first, then alphabetical — stable and puts the essentials
+    // up front.
+    let names = properties.keys.sorted { a, b in
+      let ra = required.contains(a), rb = required.contains(b)
+      if ra != rb { return ra }
+      return a < b
+    }
+    let parts = names.map { name -> String in
+      let spec = properties[name] as? [String: Any]
+      let type = (spec?["type"] as? String) ?? "string"
+      var s = "\(name) (\(type)\(required.contains(name) ? ", required" : ""))"
+      if let enumVals = spec?["enum"] as? [Any], enumVals.count <= 8 {
+        s += " one of: " + enumVals.map { "\($0)" }.joined(separator: "|")
+      }
+      return s
+    }
+    return parts.joined(separator: ", ")
+  }
 }
 
 public enum MCPError: LocalizedError {
