@@ -28,6 +28,11 @@ public final class SystemActionQueueExecutor: ActionQueueExecutor {
       _ = try await MCPActionExecutor.execute(intent)
       return
     }
+    // Open actions are macOS-native (NSWorkspace), not integration-routed.
+    if intent.actionType == .open {
+      _ = try await OpenActionExecutor.execute(intent)
+      return
+    }
 
     switch intent.targetIntegration {
     case .appleReminders:

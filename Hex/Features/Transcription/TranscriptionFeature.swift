@@ -1333,10 +1333,10 @@ private extension TranscriptionFeature {
         do {
           let response = try await actionParsing.parseMulti(modifiedResult, aiProvider, selectionContext)
           await send(.aiProcessingFinished)
-          // MCP calls always go through the multi-action panel — the
+          // MCP + open actions always go through the multi-action panel — the
           // single-action panel's per-integration editors don't apply.
           if response.isSingleAction, let intent = response.actions.first,
-             intent.actionType != .mcpCall {
+             intent.actionType != .mcpCall, intent.actionType != .open {
             await send(.actionIntentParsed(intent))
           } else {
             await send(.multiActionIntentsParsed(response.actions))

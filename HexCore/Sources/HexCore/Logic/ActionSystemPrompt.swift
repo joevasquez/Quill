@@ -12,7 +12,7 @@ Schema:
 {
   "actions": [
     {
-      "actionType": "createReminder" | "createTask" | "createEvent" | "createDraft" | "sendEmail",
+      "actionType": "createReminder" | "createTask" | "createEvent" | "createDraft" | "sendEmail" | "open",
       "targetIntegration": "appleReminders" | "todoist" | "calendar" | "googleCalendar" | "gmail",
       "title": "Short title extracted from the command",
       "dueDate": "Natural language date/time if mentioned (e.g. 'Friday', 'tomorrow', 'June 3rd at 2pm'), or null",
@@ -23,6 +23,8 @@ Schema:
       "attendees": ["email@example.com"] array of attendee emails for calendar events, or null,
       "recipient": "Name or email of the person to email, or null",
       "subject": "Email subject line if explicitly dictated, or null",
+      "urlString": "For actionType 'open': the full URL to open (resolve site names to URLs, e.g. LinkedIn → https://www.linkedin.com), or null",
+      "appName": "For actionType 'open': the macOS app to open the URL with (a browser) or the app to launch, e.g. 'Google Chrome', 'Safari', 'Spotify', or null",
       "dependsOn": "Zero-based index of an EARLIER action in this array whose result this action needs, or null (see Dependent steps below)",
       "resolveInstruction": "If dependsOn is set: a short instruction naming what to pull from that earlier step's result and which field to fill, or null"
     }
@@ -35,6 +37,7 @@ Integration detection (most important rule):
 - If the user says "to my calendar", "on my calendar", "schedule", "meeting", "event", "block time", "calendar event" → targetIntegration: "calendar", actionType: "createEvent"
 - If the user says "Google Calendar", "on my Google Calendar", "to my Google Calendar" → targetIntegration: "googleCalendar", actionType: "createEvent"
 - If the user says "email", "draft an email", "compose an email", "send an email", "write an email", "message" (in email context) → targetIntegration: "gmail", actionType: "createDraft"
+- If the user says "open", "launch", "go to", "pull up", "bring up" a website or app (e.g. "open LinkedIn in Chrome", "launch Spotify", "go to nytimes.com") → actionType: "open" (targetIntegration is ignored — set it to "appleReminders" as a placeholder). Put the resolved URL in urlString and the app/browser name in appName. For a website, resolve the common name to a URL (LinkedIn → https://www.linkedin.com, Gmail → https://mail.google.com, Twitter/X → https://x.com). For an app launch with no website ("open Spotify"), set appName only and leave urlString null. If a browser is named ("in Chrome"), put it in appName; if none named, leave appName null (uses the default browser).
 - If unspecified, default to "appleReminders" / "createReminder"
 - ALWAYS strip the integration phrase from the title — "Add to Todoist write email to Mike" → title: "Write email to Mike", NOT "Add to Todoist write email to Mike"
 
@@ -130,6 +133,15 @@ Examples:
 
   Input: <transcript>send John an email letting him know the contract is ready for signature</transcript>
   Output: {"actions":[{"actionType":"sendEmail","targetIntegration":"gmail","title":"Contract ready for signature","dueDate":null,"notes":null,"listName":null,"priority":null,"duration":null,"attendees":null,"recipient":"John","subject":null}]}
+
+  Input: <transcript>open LinkedIn in Google Chrome</transcript>
+  Output: {"actions":[{"actionType":"open","targetIntegration":"appleReminders","title":"Open LinkedIn in Chrome","dueDate":null,"notes":null,"listName":null,"priority":null,"duration":null,"attendees":null,"recipient":null,"subject":null,"urlString":"https://www.linkedin.com","appName":"Google Chrome"}]}
+
+  Input: <transcript>launch Spotify</transcript>
+  Output: {"actions":[{"actionType":"open","targetIntegration":"appleReminders","title":"Launch Spotify","dueDate":null,"notes":null,"listName":null,"priority":null,"duration":null,"attendees":null,"recipient":null,"subject":null,"urlString":null,"appName":"Spotify"}]}
+
+  Input: <transcript>go to nytimes.com</transcript>
+  Output: {"actions":[{"actionType":"open","targetIntegration":"appleReminders","title":"Open nytimes.com","dueDate":null,"notes":null,"listName":null,"priority":null,"duration":null,"attendees":null,"recipient":null,"subject":null,"urlString":"https://www.nytimes.com","appName":null}]}
 
   Input: <transcript>remind me to buy milk and add a Todoist task to meal prep for Friday</transcript>
   Output: {"actions":[{"actionType":"createReminder","targetIntegration":"appleReminders","title":"Buy milk","dueDate":null,"notes":null,"listName":null,"priority":null,"duration":null,"attendees":null,"recipient":null,"subject":null},{"actionType":"createTask","targetIntegration":"todoist","title":"Meal prep","dueDate":"Friday","notes":null,"listName":null,"priority":null,"duration":null,"attendees":null,"recipient":null,"subject":null}]}

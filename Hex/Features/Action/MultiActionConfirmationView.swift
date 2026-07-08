@@ -108,7 +108,7 @@ struct MultiActionConfirmationView: View {
   private func actionCard(_ item: MultiActionConfirmationFeature.State.ActionItemState) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(alignment: .center, spacing: 10) {
-        integrationTile(for: item.intent.targetIntegration, size: 28, cornerRadius: 6)
+        stepTile(for: item, size: 28, cornerRadius: 6)
         VStack(alignment: .leading, spacing: 2) {
           Text(item.displayTitle)
             .font(.system(size: 13, weight: .semibold))
@@ -157,7 +157,20 @@ struct MultiActionConfirmationView: View {
   private func expandedFields(_ item: MultiActionConfirmationFeature.State.ActionItemState) -> some View {
     if let index = store.items.index(id: item.id) {
       VStack(spacing: 0) {
-        if item.intent.targetIntegration == .gmail {
+        if item.intent.actionType == .open {
+          MultiEditableRow(icon: "link", label: "URL") {
+            TextField("e.g. https://www.linkedin.com", text: $store.items[index].editableURL)
+              .textFieldStyle(.plain)
+              .font(.system(size: 13))
+              .foregroundStyle(.white)
+          }
+          MultiEditableRow(icon: "app", label: "Open with") {
+            TextField("Default browser", text: $store.items[index].editableAppName)
+              .textFieldStyle(.plain)
+              .font(.system(size: 13))
+              .foregroundStyle(.white)
+          }
+        } else if item.intent.targetIntegration == .gmail {
           MultiEditableRow(icon: "person", label: "To") {
             TextField("e.g. mike@acme.com", text: $store.items[index].editableRecipient)
               .textFieldStyle(.plain)
@@ -477,6 +490,36 @@ struct MultiActionConfirmationView: View {
   private func integrationTint(_ id: Integration.Identifier) -> Color {
     let hex = Integration.all.first { $0.identifier == id }?.tintHex
     return Color(hex: hex ?? "") ?? .orange
+  }
+
+  // Step-aware icon tile: MCP steps and the Open action aren't in the
+  // integrations catalog (their `targetIntegration` is a placeholder), so
+  // key the icon off the action type instead of showing the wrong tile.
+  private func stepTile(for item: MultiActionConfirmationFeature.State.ActionItemState, size: CGFloat, cornerRadius: CGFloat) -> some View {
+    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+      .fill(stepTint(item))
+      .frame(width: size, height: size)
+      .overlay(
+        Image(systemName: stepIcon(item))
+          .font(.system(size: size * 0.5, weight: .semibold))
+          .foregroundStyle(.white)
+      )
+  }
+
+  private func stepIcon(_ item: MultiActionConfirmationFeature.State.ActionItemState) -> String {
+    switch item.intent.actionType {
+    case .mcpCall: return "puzzlepiece.extension.fill"
+    case .open: return "globe"
+    default: return integrationIcon(item.intent.targetIntegration)
+    }
+  }
+
+  private func stepTint(_ item: MultiActionConfirmationFeature.State.ActionItemState) -> Color {
+    switch item.intent.actionType {
+    case .mcpCall: return Color(hex: "8E8E93") ?? .gray
+    case .open: return Color(hex: "0A84FF") ?? .blue
+    default: return integrationTint(item.intent.targetIntegration)
+    }
   }
 }
 

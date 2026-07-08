@@ -10,6 +10,9 @@ public struct ActionIntent: Codable, Equatable, Sendable {
     /// Invoke a tool on a user-connected MCP server. Uses the mcp* fields
     /// below; `targetIntegration` is ignored for this type.
     case mcpCall
+    /// Open a website and/or launch an app (macOS). Uses `urlString` /
+    /// `appName`; `targetIntegration` is ignored for this type.
+    case open
   }
 
   public var actionType: ActionType
@@ -38,6 +41,12 @@ public struct ActionIntent: Codable, Equatable, Sendable {
   public var mcpServerName: String?
   public var mcpTool: String?
   public var mcpArguments: [String: String]?
+  /// Open action (actionType == .open): a URL to open and/or an app to open
+  /// it with / launch. If `urlString` is set, open it (in `appName`'s browser
+  /// when given, else the default browser); if only `appName` is set, launch
+  /// that app. macOS only.
+  public var urlString: String?
+  public var appName: String?
   /// Chained steps: the zero-based index (within the same `actions` array) of
   /// an earlier step whose text result feeds this one. nil → independent step.
   /// The executor runs dependent steps after their dependency, passing the
@@ -66,6 +75,8 @@ public struct ActionIntent: Codable, Equatable, Sendable {
     mcpServerName: String? = nil,
     mcpTool: String? = nil,
     mcpArguments: [String: String]? = nil,
+    urlString: String? = nil,
+    appName: String? = nil,
     dependsOn: Int? = nil,
     resolveInstruction: String? = nil
   ) {
@@ -85,6 +96,8 @@ public struct ActionIntent: Codable, Equatable, Sendable {
     self.mcpServerName = mcpServerName
     self.mcpTool = mcpTool
     self.mcpArguments = mcpArguments
+    self.urlString = urlString
+    self.appName = appName
     self.dependsOn = dependsOn
     self.resolveInstruction = resolveInstruction
   }

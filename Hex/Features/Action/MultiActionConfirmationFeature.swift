@@ -34,6 +34,8 @@ struct MultiActionConfirmationFeature {
       var editableAttendees: String
       var editableStartDate: Date
       var editableEndDate: Date
+      var editableURL: String
+      var editableAppName: String
       var availableLists: [String] = []
       var isExpanded: Bool = false
       /// For chained steps: the id of the sibling item this step depends on
@@ -52,6 +54,8 @@ struct MultiActionConfirmationFeature {
         self.editableSubject = intent.subject ?? intent.title
         self.editableBody = intent.notes ?? ""
         self.editableAttendees = intent.attendees?.joined(separator: ", ") ?? ""
+        self.editableURL = intent.urlString ?? ""
+        self.editableAppName = intent.appName ?? ""
 
         let parsedStart = (intent.dueDate.flatMap { parseDateAndTime($0) }) ?? Self.defaultEventStart()
         let minutes = intent.duration ?? 60
@@ -80,6 +84,12 @@ struct MultiActionConfirmationFeature {
           let tool = intent.mcpTool ?? "tool"
           return "\(server) · \(tool)"
         }
+        if intent.actionType == .open {
+          if !editableURL.isEmpty {
+            return editableAppName.isEmpty ? editableURL : "\(editableURL) in \(editableAppName)"
+          }
+          return editableAppName.isEmpty ? "Open" : "Launch \(editableAppName)"
+        }
         switch intent.targetIntegration {
         case .calendar, .googleCalendar:
           let formatter = DateFormatter()
@@ -101,6 +111,12 @@ struct MultiActionConfirmationFeature {
         // would misapply (e.g. forcing actionType to .createEvent).
         if intent.actionType == .mcpCall {
           final.title = editableTitle
+          return final
+        }
+        if intent.actionType == .open {
+          final.title = editableTitle
+          final.urlString = editableURL.isEmpty ? nil : editableURL
+          final.appName = editableAppName.isEmpty ? nil : editableAppName
           return final
         }
         final.title = editableTitle
@@ -131,6 +147,12 @@ struct MultiActionConfirmationFeature {
       /// built from the item's current (possibly resolve-filled) fields — the
       /// email that was drafted, the reminder that was added, etc.
       var completionDetail: String {
+        if intent.actionType == .open {
+          if !editableURL.isEmpty {
+            return editableAppName.isEmpty ? editableURL : "\(editableURL)\nin \(editableAppName)"
+          }
+          return editableAppName.isEmpty ? "" : "Launch \(editableAppName)"
+        }
         switch intent.targetIntegration {
         case .gmail:
           var lines: [String] = []
@@ -316,6 +338,8 @@ struct MultiActionConfirmationFeature {
               let id: String
               if finalIntent.actionType == .mcpCall {
                 id = try await MCPActionExecutor.execute(finalIntent)
+              } else if finalIntent.actionType == .open {
+                id = try await OpenActionExecutor.execute(finalIntent)
               } else {
                 switch integration {
                 case .todoist:
