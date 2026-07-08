@@ -126,6 +126,35 @@ struct MultiActionConfirmationFeature {
         }
         return final
       }
+
+      /// Human-readable summary of what a *created* (non-MCP) step produced,
+      /// built from the item's current (possibly resolve-filled) fields — the
+      /// email that was drafted, the reminder that was added, etc.
+      var completionDetail: String {
+        switch intent.targetIntegration {
+        case .gmail:
+          var lines: [String] = []
+          lines.append("To: \(editableRecipient.isEmpty ? "—" : editableRecipient)")
+          let subject = editableSubject.isEmpty ? editableTitle : editableSubject
+          if !subject.isEmpty { lines.append("Subject: \(subject)") }
+          if !editableBody.isEmpty { lines.append("\n\(editableBody)") }
+          return lines.joined(separator: "\n")
+        case .calendar, .googleCalendar:
+          let f = DateFormatter()
+          f.dateStyle = .medium
+          f.timeStyle = .short
+          var lines = ["\(f.string(from: editableStartDate)) – \(f.string(from: editableEndDate))"]
+          if !editableAttendees.isEmpty { lines.append("With: \(editableAttendees)") }
+          if !editableNotes.isEmpty { lines.append(editableNotes) }
+          return lines.joined(separator: "\n")
+        default:
+          var lines: [String] = []
+          if !editableDueDate.isEmpty { lines.append("Due: \(editableDueDate)") }
+          if !selectedList.isEmpty { lines.append("List: \(selectedList)") }
+          if !editableNotes.isEmpty { lines.append(editableNotes) }
+          return lines.joined(separator: "\n")
+        }
+      }
     }
 
     enum ItemResult: Equatable {
@@ -160,6 +189,27 @@ struct MultiActionConfirmationFeature {
       var combinedAnswer: String {
         outputs.compactMap(\.answer).filter { !$0.isEmpty }.joined(separator: "\n")
       }
+
+      /// Per-step outcome shown in the panel so the user sees what each step
+      /// found or created — the Dex contact that was looked up, the email that
+      /// was drafted (To/Subject/Body), etc. — not just "2 created".
+      var steps: [StepOutcome] = []
+
+      struct StepOutcome: Equatable, Identifiable {
+        enum Status: Equatable { case succeeded, failed, queued }
+        let id: UUID
+        let title: String
+        let status: Status
+        /// Human-readable detail: a formatted lookup result, a created item's
+        /// key fields, or a failure reason.
+        let detail: String
+        /// Whether this outcome is worth keeping the panel open for (a lookup
+        /// result, an email draft, or a failure) vs. a plain created reminder.
+        let reviewable: Bool
+      }
+
+      /// Keep the panel up (don't auto-dismiss) when any step is worth reading.
+      var hasReviewableStep: Bool { steps.contains { $0.reviewable } }
     }
 
     init(intents: [ActionIntent], rawTranscript: String, autoExecute: Bool = false, sourceAppBundleID: String? = nil) {
@@ -189,6 +239,7 @@ struct MultiActionConfirmationFeature {
     case copyAnswer
     case pasteAnswer
     case answerExtracted(UUID, String)
+    case dependentResolved(UUID, ActionIntent)
     case itemResult(UUID, State.ItemResult)
     case completionDismissed
     case cancel
@@ -319,6 +370,9 @@ struct MultiActionConfirmationFeature {
             var intent = item.buildFinalIntent()
             if intent.resolveInstruction != nil {
               intent = (try? await actionParsing.resolveStep(intent, priorText, request, provider)) ?? intent
+              // Reflect the resolved values (filled recipient, personalized
+              // body) back into the item so the completion summary is accurate.
+              await send(.dependentResolved(item.id, intent))
             }
             let (result, text) = await execute(intent)
             outputs[item.id] = text
@@ -334,42 +388,57 @@ struct MultiActionConfirmationFeature {
           let failed = state.results.values.filter { if case .failed = $0 { return true }; return false }.count
           let queued = state.results.values.filter { if case .queued = $0 { return true }; return false }.count
           // Producers whose output was consumed by a dependent step — their
-          // raw result isn't shown (the dependent already used it).
+          // raw result doesn't get a standalone answer card (the dependent
+          // already used it), but it IS still shown in the step list so the
+          // user sees what was found.
           let consumed = Set(state.items.compactMap(\.dependsOnID))
-          // Collect distinct failure reasons + standalone MCP read/query
-          // outputs, preserving item order. `toExtract` holds the RAW result
-          // (not the formatted one) for the answer-extraction pass.
+          // Collect distinct failure reasons, standalone MCP outputs (for the
+          // answer card), and a per-step outcome list (for display). `toExtract`
+          // holds the RAW result for the answer-extraction pass.
           var reasons: [String] = []
           var outputs: [State.Completion.Output] = []
           var toExtract: [(UUID, String)] = []
+          var steps: [State.Completion.StepOutcome] = []
           for item in state.items {
             switch state.results[item.id] {
             case let .failed(msg):
               if !reasons.contains(msg) { reasons.append(msg) }
+              steps.append(.init(id: item.id, title: item.displayTitle, status: .failed, detail: msg, reviewable: true))
+            case .queued:
+              steps.append(.init(id: item.id, title: item.displayTitle, status: .queued,
+                                 detail: "Saved — will retry when you're back online", reviewable: true))
             case let .succeeded(text):
-              // MCP tools return meaningful text (a query answer); native
-              // adapters return an item id, which isn't worth showing.
-              // Format the (usually-JSON) result for readability — the raw
-              // result still fed the resolve pass, this is display/copy only.
-              if item.intent.actionType == .mcpCall, !text.isEmpty, text != "Done",
-                 !consumed.contains(item.id) {
-                outputs.append(.init(itemID: item.id, title: item.displayTitle, text: MCPResultFormatter.format(text)))
-                toExtract.append((item.id, text))
+              if item.intent.actionType == .mcpCall {
+                // Lookup/query: show the formatted result ("what was found").
+                let formatted = (!text.isEmpty && text != "Done") ? MCPResultFormatter.format(text) : "Done"
+                steps.append(.init(id: item.id, title: item.displayTitle, status: .succeeded, detail: formatted, reviewable: true))
+                // Only a standalone (non-consumed) read gets an answer card.
+                if !text.isEmpty, text != "Done", !consumed.contains(item.id) {
+                  outputs.append(.init(itemID: item.id, title: item.displayTitle, text: formatted))
+                  toExtract.append((item.id, text))
+                }
+              } else {
+                // Created item: summarize what was created (email To/Subject/
+                // Body, reminder date/list). Email drafts are worth reviewing.
+                let isEmail = item.intent.targetIntegration == .gmail
+                steps.append(.init(id: item.id, title: item.displayTitle, status: .succeeded,
+                                   detail: item.completionDetail, reviewable: isEmail))
               }
-            default:
+            case .none:
               break
             }
           }
           soundEffect.play(failed > 0 ? .cancel : .pasteTranscript)
           state.completion = .init(
             succeeded: succeeded, failed: failed, queued: queued,
-            failureReasons: reasons, outputs: outputs
+            failureReasons: reasons, outputs: outputs, steps: steps
           )
           actionLogger.info("Multi-action complete: \(succeeded) succeeded, \(failed) failed, \(queued) queued, \(outputs.count) output(s)")
 
-          // Auto-dismiss only when there's nothing to read (no failures and
-          // no output). Otherwise keep the panel up until the user dismisses.
-          if failed == 0, outputs.isEmpty {
+          // Auto-dismiss only for trivial done-and-gone results (plain
+          // reminders/tasks). Anything worth reading — a lookup result, an
+          // email draft, a failure — keeps the panel up.
+          if failed == 0, !(state.completion?.hasReviewableStep ?? false) {
             return .run { send in
               try? await Task.sleep(for: .milliseconds(1800))
               await send(.completionDismissed)
@@ -398,6 +467,19 @@ struct MultiActionConfirmationFeature {
         }
         return .none
 
+      case let .dependentResolved(id, intent):
+        // Reflect a resolve pass's filled/personalized fields back into the
+        // item so the completion summary shows the real drafted content.
+        guard var item = state.items[id: id] else { return .none }
+        item.intent = intent
+        item.editableTitle = intent.title
+        item.editableRecipient = intent.recipient ?? item.editableRecipient
+        item.editableSubject = intent.subject ?? item.editableSubject
+        item.editableBody = intent.notes ?? item.editableBody
+        item.editableNotes = intent.notes ?? item.editableNotes
+        state.items[id: id] = item
+        return .none
+
       case .copyAnswer:
         let answer = state.completion?.combinedAnswer ?? ""
         guard !answer.isEmpty else { return .none }
@@ -413,7 +495,9 @@ struct MultiActionConfirmationFeature {
         }
 
       case .copyOutput:
-        let text = (state.completion?.outputs ?? []).map(\.text).joined(separator: "\n\n")
+        let text = (state.completion?.steps ?? [])
+          .map { $0.detail.isEmpty ? $0.title : "\($0.title)\n\($0.detail)" }
+          .joined(separator: "\n\n")
         guard !text.isEmpty else { return .none }
         return .run { [pasteboard] _ in await pasteboard.copy(text) }
 

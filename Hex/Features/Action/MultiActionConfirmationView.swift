@@ -338,24 +338,13 @@ struct MultiActionConfirmationView: View {
         )
       }
 
-      // Result output (e.g. what an MCP read/query tool returned).
-      if !completion.outputs.isEmpty {
-        VStack(alignment: .leading, spacing: 8) {
-          ForEach(Array(completion.outputs.enumerated()), id: \.offset) { _, output in
-            VStack(alignment: .leading, spacing: 4) {
-              Text(output.title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.6))
-              ScrollView(.vertical, showsIndicators: true) {
-                Text(output.text)
-                  .font(.system(size: 12.5, design: .monospaced))
-                  .foregroundStyle(.white.opacity(0.9))
-                  .textSelection(.enabled)
-                  .frame(maxWidth: .infinity, alignment: .leading)
-                  .fixedSize(horizontal: false, vertical: true)
-              }
-              .frame(maxHeight: 180)
-            }
+      // Per-step outcome: what each step found or created, so a chained
+      // command (look up X → draft email) shows both the lookup result and
+      // the drafted email — not just "2 created".
+      if !completion.steps.isEmpty {
+        VStack(alignment: .leading, spacing: 10) {
+          ForEach(completion.steps) { step in
+            stepOutcomeRow(step)
           }
           Button {
             store.send(.copyOutput)
@@ -382,33 +371,8 @@ struct MultiActionConfirmationView: View {
         )
       }
 
-      // Show *why* it failed.
-      if !completion.failureReasons.isEmpty {
-        VStack(alignment: .leading, spacing: 6) {
-          ForEach(completion.failureReasons, id: \.self) { reason in
-            HStack(alignment: .top, spacing: 7) {
-              Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(.orange)
-                .padding(.top, 1)
-              Text(reason)
-                .font(.system(size: 12))
-                .foregroundStyle(.white.opacity(0.85))
-                .fixedSize(horizontal: false, vertical: true)
-            }
-          }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(Color.orange.opacity(0.12))
-        )
-      }
-
-      // Manual dismiss whenever the panel isn't auto-closing (failure or
-      // output to read).
-      if !completion.failureReasons.isEmpty || !completion.outputs.isEmpty {
+      // Manual dismiss whenever the panel isn't auto-closing.
+      if !completion.steps.isEmpty {
         Button { store.send(.completionDismissed) } label: {
           Text("Dismiss")
             .font(.system(size: 13, weight: .semibold))
@@ -429,8 +393,43 @@ struct MultiActionConfirmationView: View {
     .frame(maxWidth: .infinity)
   }
 
+  @ViewBuilder
+  private func stepOutcomeRow(_ step: MultiActionConfirmationFeature.State.Completion.StepOutcome) -> some View {
+    let (icon, tint): (String, Color) = {
+      switch step.status {
+      case .succeeded: return ("checkmark.circle.fill", .green)
+      case .failed: return ("exclamationmark.circle.fill", .orange)
+      case .queued: return ("clock.fill", .yellow)
+      }
+    }()
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(spacing: 7) {
+        Image(systemName: icon)
+          .font(.system(size: 12))
+          .foregroundStyle(tint)
+        Text(step.title)
+          .font(.system(size: 12.5, weight: .semibold))
+          .foregroundStyle(.white)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      if !step.detail.isEmpty {
+        ScrollView(.vertical, showsIndicators: true) {
+          Text(step.detail)
+            .font(.system(size: 12, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.85))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxHeight: 160)
+        .padding(.leading, 19)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
   private func completionTitle(_ c: MultiActionConfirmationFeature.State.Completion) -> String {
-    if c.failed == 0 { return c.outputs.isEmpty ? "Done" : "Result" }
+    if c.failed == 0 { return c.steps.count > 1 ? "Done" : (c.outputs.isEmpty ? "Done" : "Result") }
     if c.succeeded > 0 || c.queued > 0 { return "Partial success" }
     return c.failed == 1 ? "Action failed" : "Actions failed"
   }
@@ -443,7 +442,9 @@ struct MultiActionConfirmationView: View {
 
   private func completionSubhead(_ c: MultiActionConfirmationFeature.State.Completion) -> String {
     var parts: [String] = []
-    if c.succeeded > 0 { parts.append("\(c.succeeded) created") }
+    // "completed" reads correctly for a mix of lookups + creations; "created"
+    // would be wrong for a step that just looked something up.
+    if c.succeeded > 0 { parts.append("\(c.succeeded) \(c.succeeded == 1 ? "step" : "steps") completed") }
     if c.queued > 0 { parts.append("\(c.queued) queued offline") }
     if c.failed > 0 { parts.append("\(c.failed) failed") }
     return parts.joined(separator: ", ")
