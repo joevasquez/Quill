@@ -14,11 +14,12 @@ struct ActionParsingClient {
   /// had highlighted in the frontmost app, so "add this to …" resolves.
   var parseMulti: @Sendable (String, AIProvider, String?) async throws -> MultiActionResponse
   /// Between-steps resolve pass for chained actions: given a dependent
-  /// `ActionIntent`, the raw text result of the step it depends on, and the
-  /// provider, fills the field(s) named by the intent's `resolveInstruction`
-  /// (e.g. an email address extracted from an MCP lookup result) and returns
-  /// the updated intent.
-  var resolveStep: @Sendable (ActionIntent, String, AIProvider) async throws -> ActionIntent
+  /// `ActionIntent`, the raw text result of the step it depends on, the user's
+  /// original request (for context), and the provider, fills the linking
+  /// field(s) named by the intent's `resolveInstruction` (e.g. an email
+  /// address from an MCP lookup) AND personalizes the action's text (greet the
+  /// contact by the looked-up name) using facts from the prior result.
+  var resolveStep: @Sendable (ActionIntent, String, String, AIProvider) async throws -> ActionIntent
   /// Turns a dictated routine description ("when I say ship it, …") into a
   /// named trigger + steps draft.
   var parseRoutine: @Sendable (String, AIProvider) async throws -> RoutineDraft
@@ -40,7 +41,7 @@ extension ActionParsingClient: DependencyKey {
       parseMulti: { transcript, provider, selection in
         try await parseTranscript(transcript, provider: provider, selection: selection)
       },
-      resolveStep: { intent, priorResult, provider in
+      resolveStep: { intent, priorResult, request, provider in
         guard let instruction = intent.resolveInstruction, !instruction.isEmpty else {
           return intent
         }
@@ -53,7 +54,8 @@ extension ActionParsingClient: DependencyKey {
         let userMessage = StepResolvePrompt.userMessage(
           actionJSON: actionJSON,
           priorResult: priorResult,
-          instruction: instruction
+          instruction: instruction,
+          request: request
         )
         let json = try await completeJSON(
           userMessage: userMessage,

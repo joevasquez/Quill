@@ -46,16 +46,28 @@ final class DependentStepTests: XCTestCase {
     XCTAssertEqual(response.actions[1].targetIntegration, .gmail)
   }
 
-  func testResolvePromptUserMessageIncludesAllThreeSections() {
+  func testResolvePromptUserMessageIncludesAllSections() {
     let msg = StepResolvePrompt.userMessage(
       actionJSON: #"{"recipient":null}"#,
       priorResult: "Joe Vasquez <joe@example.com>",
-      instruction: "Set recipient to the email address"
+      instruction: "Set recipient to the email address",
+      request: "find Joe in Dex then draft him a birthday email"
     )
+    XCTAssertTrue(msg.contains("REQUEST:"))
+    XCTAssertTrue(msg.contains("find Joe in Dex then draft him a birthday email"))
     XCTAssertTrue(msg.contains("PRIOR RESULT:"))
     XCTAssertTrue(msg.contains("Joe Vasquez <joe@example.com>"))
     XCTAssertTrue(msg.contains("INSTRUCTION:"))
     XCTAssertTrue(msg.contains("ACTION:"))
     XCTAssertTrue(msg.contains(#"{"recipient":null}"#))
+  }
+
+  /// The resolve system prompt must license personalization (rewriting the
+  /// body with the looked-up name), not just filling the linking field — this
+  /// is what makes the prior step's output dynamically inform the next.
+  func testResolvePromptLicensesPersonalization() {
+    let p = StepResolvePrompt.prompt.lowercased()
+    XCTAssertTrue(p.contains("personalize"))
+    XCTAssertTrue(p.contains("never invent"))
   }
 }

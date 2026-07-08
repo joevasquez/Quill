@@ -235,6 +235,7 @@ struct MultiActionConfirmationFeature {
       case .executeAll:
         state.isExecuting = true
         let itemsSnapshot = state.items.elements
+        let request = state.rawTranscript
         @Shared(.hexSettings) var hexSettings: HexSettings
         let provider = hexSettings.aiProvider
         return .run { [todoist, reminders, calendarAdapter, gmailAdapter, googleCalendarAdapter, actionParsing] send in
@@ -300,7 +301,7 @@ struct MultiActionConfirmationFeature {
             }
             var intent = item.buildFinalIntent()
             if intent.resolveInstruction != nil {
-              intent = (try? await actionParsing.resolveStep(intent, priorText, provider)) ?? intent
+              intent = (try? await actionParsing.resolveStep(intent, priorText, request, provider)) ?? intent
             }
             let (result, text) = await execute(intent)
             outputs[item.id] = text
