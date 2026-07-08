@@ -54,63 +54,108 @@ enum KeychainKey {
 
 // MARK: - Live Implementation
 
+/// Reads/writes prefer the modern **Data Protection keychain**
+/// (`kSecUseDataProtectionKeychain: true`), which — unlike the legacy
+/// file-based keychain — does NOT trigger the system password dialog on
+/// every access in sandboxed debug builds. Existing secrets live in the
+/// legacy keychain, so `read` transparently migrates them: it checks the
+/// DP keychain first, falls back to legacy, and on a legacy hit re-saves
+/// into the DP keychain so subsequent launches read silently. If the app
+/// isn't entitled for the DP keychain (no `application-identifier`), every
+/// path degrades cleanly to the legacy behavior — never a hard failure and
+/// never lost data.
+///
+/// One-time cost: the first launch after upgrading still prompts once per
+/// stored secret (the migration reads from legacy); after that, DP reads
+/// are silent.
 private struct KeychainClientLive {
   private let service = "com.joevasquez.Quill"
 
-  /// Lookup attributes (class + service + account) used for read, delete,
-  /// and as the base for save. `kSecAttrAccessible` is *deliberately* NOT
-  /// included here: on iOS, passing it to `SecItemCopyMatching` can cause
-  /// the query to miss items that were saved with the same attribute
-  /// (the system doesn't always treat it as an equality filter). Keep
-  /// accessible as a save-only attribute.
+  /// Base lookup attributes (class + service + account). `kSecAttrAccessible`
+  /// is *deliberately* NOT included here: on iOS, passing it to
+  /// `SecItemCopyMatching` can cause the query to miss items that were saved
+  /// with the same attribute. Keep accessible as a save-only attribute.
   ///
   /// Uses the standard `[String: Any] as CFDictionary` bridge — the Swift
-  /// runtime wraps values in a toll-free bridge that correctly retains
-  /// them for the lifetime of the dictionary. (An earlier version of this
-  /// file used `CFDictionaryCreateMutable` with `nil` retain callbacks to
-  /// "avoid bridging edge cases"; that was the wrong call — `nil`
-  /// callbacks mean the dictionary does NOT retain its values, so the
-  /// `CFData` for `kSecValueData` was being deallocated before
-  /// `SecItemAdd` read it, which crashed inside `CFGetTypeID`.)
-  private func lookupQuery(account: String) -> [String: Any] {
-    [
+  /// runtime toll-free-bridges and retains values for the dictionary's
+  /// lifetime. (A past version used `CFDictionaryCreateMutable` with `nil`
+  /// retain callbacks; that failed to retain `kSecValueData`, deallocating
+  /// the `CFData` before `SecItemAdd` read it and crashing in `CFGetTypeID`.)
+  private func baseQuery(account: String, dataProtection: Bool) -> [String: Any] {
+    var query: [String: Any] = [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,
       kSecAttrAccount as String: account,
     ]
+    if dataProtection {
+      query[kSecUseDataProtectionKeychain as String] = kCFBooleanTrue
+    }
+    return query
   }
 
   func save(key: String, value: String) throws {
     guard !key.isEmpty else { return }
     guard let data = value.data(using: .utf8) else { return }
 
-    // Delete any existing item first so SecItemAdd doesn't collide.
-    delete(key: key)
+    let dpStatus = performSave(account: key, data: data, dataProtection: true)
+    if dpStatus == errSecSuccess { return }
 
-    var query = lookupQuery(account: key)
-    query[kSecValueData as String] = data
-    // Required on iOS (sets the item's protection class); a safe hint on
-    // macOS. "WhenUnlockedThisDeviceOnly" = readable only while the device
-    // is unlocked, and never synced to iCloud or included in backups —
-    // appropriate for API keys.
-    query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-
-    let status = SecItemAdd(query as CFDictionary, nil)
-    guard status == errSecSuccess else {
-      throw KeychainError.saveFailed(status)
+    // DP keychain unavailable (typically `errSecMissingEntitlement` when the
+    // app lacks a keychain access group) — fall back to legacy so saving
+    // never hard-fails. Report the primary failure if legacy also fails.
+    let legacyStatus = performSave(account: key, data: data, dataProtection: false)
+    guard legacyStatus == errSecSuccess else {
+      throw KeychainError.saveFailed(dpStatus)
     }
   }
 
   func read(key: String) -> String? {
     guard !key.isEmpty else { return nil }
 
-    var query = lookupQuery(account: key)
+    // 1. Data Protection keychain — silent.
+    if let value = performRead(account: key, dataProtection: true) {
+      return value
+    }
+    // 2. Legacy keychain — one-time prompt in debug. On a hit, migrate into
+    //    the DP keychain (best-effort) so future launches read silently.
+    if let value = performRead(account: key, dataProtection: false) {
+      if let data = value.data(using: .utf8) {
+        _ = performSave(account: key, data: data, dataProtection: true)
+      }
+      return value
+    }
+    return nil
+  }
+
+  func delete(key: String) {
+    guard !key.isEmpty else { return }
+    // Remove from both keychains so a delete is authoritative.
+    SecItemDelete(baseQuery(account: key, dataProtection: true) as CFDictionary)
+    SecItemDelete(baseQuery(account: key, dataProtection: false) as CFDictionary)
+  }
+
+  // MARK: Primitives
+
+  private func performSave(account: String, data: Data, dataProtection: Bool) -> OSStatus {
+    // Delete any existing item in the same keychain first so Add doesn't
+    // collide. (Within-keychain delete doesn't prompt.)
+    SecItemDelete(baseQuery(account: account, dataProtection: dataProtection) as CFDictionary)
+
+    var query = baseQuery(account: account, dataProtection: dataProtection)
+    query[kSecValueData as String] = data
+    // "WhenUnlockedThisDeviceOnly" = readable only while unlocked, never
+    // synced to iCloud or included in backups — appropriate for API keys.
+    query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+    return SecItemAdd(query as CFDictionary, nil)
+  }
+
+  private func performRead(account: String, dataProtection: Bool) -> String? {
+    var query = baseQuery(account: account, dataProtection: dataProtection)
     query[kSecReturnData as String] = kCFBooleanTrue
     query[kSecMatchLimit as String] = kSecMatchLimitOne
 
     var result: AnyObject?
     let status = SecItemCopyMatching(query as CFDictionary, &result)
-
     guard status == errSecSuccess,
           let data = result as? Data,
           let string = String(data: data, encoding: .utf8)
@@ -118,11 +163,6 @@ private struct KeychainClientLive {
       return nil
     }
     return string
-  }
-
-  func delete(key: String) {
-    guard !key.isEmpty else { return }
-    SecItemDelete(lookupQuery(account: key) as CFDictionary)
   }
 }
 
