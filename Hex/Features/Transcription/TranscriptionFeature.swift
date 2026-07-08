@@ -107,6 +107,9 @@ struct TranscriptionFeature {
 
     // Mode cycling
     case cycleMode
+    /// Direct mode selection (menu-bar Mode submenu). `cycleMode` funnels
+    /// through this so both paths share the reset/refresh side effects.
+    case setMode(TranscriptionIndicatorView.Mode)
 
     // Edit mode
     case editNeedsSelectionDismiss
@@ -283,9 +286,11 @@ struct TranscriptionFeature {
         return .none
 
       case .cycleMode:
-        state.selectedMode = state.selectedMode.next
-        let modeName = state.selectedMode.rawValue
-        transcriptionFeatureLogger.info("Mode cycled to \(modeName)")
+        return .send(.setMode(state.selectedMode.next))
+
+      case let .setMode(newMode):
+        state.selectedMode = newMode
+        transcriptionFeatureLogger.info("Mode set to \(newMode.rawValue)")
         // Reset auto-detected mode when entering Auto.
         if state.selectedMode == .auto {
           state.autoDetectedMode = .dictate
@@ -1650,24 +1655,11 @@ struct TranscriptionView: View {
   var body: some View {
     Group {
       if store.hexSettings.displayMode == .chip {
-        ChipMorphView(
-          status: status,
-          mode: store.selectedMode,
-          meter: store.meter,
-          recordingStartTime: store.recordingStartTime,
-          hotkeyHint: hotkeyHint,
-          editMessage: store.editNeedsSelectionMessage,
-          pendingEditResult: store.pendingEditResult,
-          partialTranscript: store.partialTranscript,
-          actionIntegrations: store.availableActionIntegrations,
-          lockedActionIntegration: store.lockedActionIntegration,
-          autoDetectedMode: store.autoDetectedMode,
-          isPinnedToTop: store.hexSettings.hudPinnedToTop,
-          onCycleMode: { store.send(.cycleMode) },
-          onEditAccept: { store.send(.inlineEditAccept) },
-          onEditUndo: { store.send(.inlineEditUndo) },
-          onToggleActionIntegration: { id in store.send(.toggleActionIntegrationLock(id)) }
-        )
+        // Chip mode lives in the menu bar (QuillStatusItemController owns
+        // the NSStatusItem chip + Corner Bloom panel). The HUD panel shows
+        // nothing — but this view must stay alive: its `.task` below runs
+        // the feature's long-lived effects (hotkeys, meters).
+        Color.clear.frame(width: 1, height: 1)
       } else if store.hexSettings.displayMode == .orb {
         OrbView(
           status: status,

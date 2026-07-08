@@ -45,43 +45,12 @@ struct HexApp: App {
 	@NSApplicationDelegateAdaptor(HexAppDelegate.self) var appDelegate
   
     var body: some Scene {
-        MenuBarExtra {
-            CheckForUpdatesView()
-
-            // Copy last transcript to clipboard
-            MenuBarCopyLastTranscriptButton()
-
-            // Hidden unless the offline queue has items waiting. When
-            // shown, tapping opens Settings → General which contains
-            // the OfflineQueueSectionView for inspection / retry.
-            MenuBarPendingActionsButton {
-                appDelegate.presentSettingsView()
-            }
-
-            Button("Settings...") {
-                appDelegate.presentSettingsView()
-            }.keyboardShortcut(",")
-			
-			Divider()
-			
-			Button("Quit") {
-				NSApplication.shared.terminate(nil)
-			}.keyboardShortcut("q")
-		} label: {
-			// Quill nib in the menu bar. Uses `Image(nsImage:)` with an
-			// explicitly template-marked `NSImage` — SwiftUI's
-			// MenuBarExtra label doesn't reliably honor the asset-
-			// catalog `template-rendering-intent` for custom image
-			// assets (often renders as a blank slot), and
-			// `Image(systemName: "feather")` doesn't work because
-			// Apple's SF Symbols catalog has no symbol by that name.
-			// Constructing the NSImage ourselves and forcing
-			// `isTemplate = true` lets AppKit do the menu-bar tinting
-			// that used to "just work" with an SF Symbol.
-			Image(nsImage: HexApp.menuBarIcon)
-		}
-
-
+		// The menu-bar presence (status item, app menu, and the Chip+Morph
+		// live label) is AppKit-managed by QuillStatusItemController —
+		// installed from HexAppDelegate. It replaced the SwiftUI
+		// MenuBarExtra so the label can be a real animated view (the
+		// feather↔orb morph) and so the Corner Bloom panel can anchor to
+		// the status item's screen frame.
 		WindowGroup {}.defaultLaunchBehavior(.suppressed)
 			.commands {
 				CommandGroup(after: .appInfo) {

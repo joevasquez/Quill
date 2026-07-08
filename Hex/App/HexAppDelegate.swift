@@ -9,7 +9,9 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 	var hudPanel: HUDPanel?
 	var actionPanel: ActionConfirmationPanel?
 	var settingsWindow: NSWindow?
-	var statusItem: NSStatusItem!
+	/// Menu-bar presence: status item (feather icon, or the live Chip+Morph
+	/// view in chip display mode), the app menu, and the Corner Bloom panel.
+	var statusItemController: QuillStatusItemController?
 	private var launchedAtLogin = false
 
 	@Dependency(\.soundEffects) var soundEffect
@@ -51,6 +53,12 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 
 		// Set activation policy first
 		updateAppMode()
+
+		// Install the menu-bar status item (feather icon / live chip).
+		statusItemController = QuillStatusItemController(
+			store: HexApp.appStore,
+			onOpenSettings: { [weak self] in self?.presentSettingsView() }
+		)
 
 		// Add notification observer
 		NotificationCenter.default.addObserver(

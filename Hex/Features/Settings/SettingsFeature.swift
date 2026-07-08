@@ -570,7 +570,13 @@ struct SettingsFeature {
 
       case let .setDisplayMode(mode):
         state.$hexSettings.withLock { $0.displayMode = mode }
-        return .none
+        // The menu-bar status item (chip vs static feather) is AppKit-
+        // managed and can't observe @Shared — nudge it.
+        return .run { _ in
+          await MainActor.run {
+            NotificationCenter.default.post(name: .displayModeChanged, object: nil)
+          }
+        }
 
       case let .togglePreventSystemSleep(enabled):
         state.$hexSettings.withLock { $0.preventSystemSleep = enabled }

@@ -14,6 +14,9 @@ extension NSNotification.Name {
   static let actionConfirmationCancelled = NSNotification.Name("ActionConfirmationCancelled")
   /// Posted when HUD position mode changes (floating ↔ pinned).
   static let hudPositionModeChanged = NSNotification.Name("HUDPositionModeChanged")
+  /// Posted when the display mode changes (HUD ↔ Orb ↔ Chip) so the
+  /// AppKit-side status item can swap its label.
+  static let displayModeChanged = NSNotification.Name("DisplayModeChanged")
 }
 
 enum ActionConfirmationNotification {
