@@ -84,7 +84,15 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
     if hexSettings.displayMode == .chip {
       button.image = nil
       if chipHostView == nil {
-        let host = NSHostingView(rootView: MenuBarChipView(store: transcriptionStore))
+        let host = NSHostingView(rootView: MenuBarChipView(
+          store: transcriptionStore,
+          onDesiredLengthChanged: { [weak self] length in
+            // Guard against a stale mode-reveal timer firing after the
+            // user leaves chip mode (would wrongly widen the feather icon).
+            guard let self, self.hexSettings.displayMode == .chip else { return }
+            self.statusItem.length = length
+          }
+        ))
         host.translatesAutoresizingMaskIntoConstraints = false
         button.addSubview(host)
         NSLayoutConstraint.activate([
