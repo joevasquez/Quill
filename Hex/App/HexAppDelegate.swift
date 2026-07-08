@@ -305,9 +305,8 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 		let servers = hexSettings.mcpServers.filter(\.isEnabled)
 		guard !servers.isEmpty else { return }
 		Task {
-			@Dependency(\.keychain) var keychain
 			for server in servers {
-				let token = await keychain.read(server.keychainTokenKey)
+				let token = await MCPOAuthClient.resolveAuthToken(for: server)
 				do {
 					try await MCPToolCatalog.shared.refresh(server: server, authToken: token)
 				} catch {

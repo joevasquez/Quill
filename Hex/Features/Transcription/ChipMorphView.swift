@@ -248,15 +248,15 @@ struct MenuBarChipView: View {
 /// by construction, rather than a fixed height that could differ per Mac.
 enum ChipSpec {
   static let orb: CGFloat = 16
-  static let feather = CGSize(width: 18, height: 18)
+  static let feather = CGSize(width: 19, height: 19)
   /// Fixed slot the orb/feather/meter render in (widest glyph state).
-  static let glyphSlot: CGFloat = 18
-  static let chipHPad: CGFloat = 8
+  static let glyphSlot: CGFloat = 22
+  static let chipHPad: CGFloat = 9
   /// Inset from the top/bottom bar edges — the pill fills the rest.
-  static let chipVMargin: CGFloat = 1
+    static let chipVMargin: CGFloat = 0
   /// Gap between the glyph and the transient mode label.
   static let labelGap: CGFloat = 5
-  static let itemLength: CGFloat = 42  // NSStatusItem length at rest (chip + breathing room)
+  static let itemLength: CGFloat = 44  // NSStatusItem length at rest (chip + breathing room)
   /// Extra room around the chip within the status-item slot during a reveal.
   static let slotSlack: CGFloat = 8
   static let bloomWidth: CGFloat = 232

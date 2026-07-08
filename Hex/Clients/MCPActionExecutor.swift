@@ -46,8 +46,9 @@ enum MCPActionExecutor {
       throw MCPExecutionError.unknownServer(serverName)
     }
 
-    @Dependency(\.keychain) var keychain
-    let token = await keychain.read(server.keychainTokenKey)
+    // OAuth access token (refreshed if needed) when the server is
+    // OAuth-connected, else the static bearer token.
+    let token = await MCPOAuthClient.resolveAuthToken(for: server)
 
     // Coerce string arguments to the schema's declared types where we have
     // a cached schema; unknown properties stay strings.

@@ -35,6 +35,9 @@ public struct MCPServerConfig: Codable, Equatable, Sendable, Identifiable {
   }
 
   public var keychainTokenKey: String { "mcp_token_\(id.uuidString)" }
+  /// Keychain key for the OAuth token blob (`MCPOAuthTokens` JSON) when the
+  /// server authenticates via the MCP OAuth flow instead of a static token.
+  public var oauthKeychainKey: String { "mcp_oauth_\(id.uuidString)" }
 }
 
 /// A tool advertised by an MCP server via tools/list.

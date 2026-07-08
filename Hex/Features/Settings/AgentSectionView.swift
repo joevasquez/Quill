@@ -23,6 +23,7 @@ struct AgentSectionView: View {
   @State private var memories: [MemoryEntity] = []
   @State private var mcpToolCounts: [UUID: Int] = [:]
   @State private var mcpErrors: [UUID: String] = [:]
+  @State private var mcpSignedIn: [UUID: Bool] = [:]
   @State private var showAddMCPServer = false
   @State private var editingMCP: MCPEditContext?
 
@@ -63,22 +64,7 @@ struct AgentSectionView: View {
         }
       } else {
         ForEach(hexSettings.mcpServers) { server in
-          MCPServerRow(
-            server: server,
-            toolCount: mcpToolCounts[server.id],
-            error: mcpErrors[server.id],
-            onToggleEnabled: { enabled in
-              $hexSettings.withLock { settings in
-                if let idx = settings.mcpServers.firstIndex(where: { $0.id == server.id }) {
-                  settings.mcpServers[idx].isEnabled = enabled
-                }
-              }
-              if enabled { Task { await refreshServer(server) } }
-            },
-            onRefresh: { Task { await refreshServer(server) } },
-            onEdit: { Task { await beginEditMCPServer(server) } },
-            onDelete: { Task { await deleteMCPServer(server) } }
-          )
+          mcpServerRow(server)
         }
       }
       Button {
@@ -90,9 +76,31 @@ struct AgentSectionView: View {
     } header: {
       Text("Tools (MCP)")
     } footer: {
-      Text("Connect any Model Context Protocol server over HTTP and its tools become things you can ask \(agentName) to do by voice. Auth tokens are stored in the keychain.")
+      Text("Connect any Model Context Protocol server over HTTP and its tools become things you can ask \(agentName) to do by voice. Servers that require a browser sign-in (OAuth) prompt automatically when added; others take an optional bearer token. Credentials are stored in the keychain.")
         .settingsCaption()
     }
+  }
+
+  // Extracted so the Section body stays small enough for the type-checker.
+  private func mcpServerRow(_ server: MCPServerConfig) -> some View {
+    MCPServerRow(
+      server: server,
+      toolCount: mcpToolCounts[server.id],
+      error: mcpErrors[server.id],
+      isSignedIn: mcpSignedIn[server.id] ?? false,
+      onSignIn: { Task { await signInMCPServer(server) } },
+      onToggleEnabled: { enabled in
+        $hexSettings.withLock { settings in
+          if let idx = settings.mcpServers.firstIndex(where: { $0.id == server.id }) {
+            settings.mcpServers[idx].isEnabled = enabled
+          }
+        }
+        if enabled { Task { await refreshServer(server) } }
+      },
+      onRefresh: { Task { await refreshServer(server) } },
+      onEdit: { Task { await beginEditMCPServer(server) } },
+      onDelete: { Task { await deleteMCPServer(server) } }
+    )
   }
 
   private func addMCPServer(name: String, url: String, token: String) async {
@@ -102,19 +110,44 @@ struct AgentSectionView: View {
       try? await keychain.save(server.keychainTokenKey, token)
     }
     $hexSettings.withLock { $0.mcpServers.append(server) }
-    await refreshServer(server)
+    let error = await refreshServer(server)
+    // No static token + server demands auth → kick off the browser sign-in
+    // automatically (matches how OAuth MCP servers expect to be added).
+    if token.isEmpty, isAuthError(error) {
+      await signInMCPServer(server)
+    }
   }
 
-  private func refreshServer(_ server: MCPServerConfig) async {
-    @Dependency(\.keychain) var keychain
-    let token = await keychain.read(server.keychainTokenKey)
+  @discardableResult
+  private func refreshServer(_ server: MCPServerConfig) async -> Error? {
+    let token = await MCPOAuthClient.resolveAuthToken(for: server)
     do {
       let tools = try await MCPToolCatalog.shared.refresh(server: server, authToken: token)
       mcpToolCounts[server.id] = tools.count
       mcpErrors[server.id] = nil
+      return nil
+    } catch {
+      mcpErrors[server.id] = error.localizedDescription
+      return error
+    }
+  }
+
+  /// Runs the browser OAuth flow, then refreshes the tool list.
+  @MainActor
+  private func signInMCPServer(_ server: MCPServerConfig) async {
+    do {
+      try await MCPOAuthClient.signIn(server: server)
+      mcpSignedIn[server.id] = true
+      mcpErrors[server.id] = nil
+      await refreshServer(server)
     } catch {
       mcpErrors[server.id] = error.localizedDescription
     }
+  }
+
+  private func isAuthError(_ error: Error?) -> Bool {
+    guard let mcp = error as? MCPError, case let .httpError(code, _) = mcp else { return false }
+    return code == 401 || code == 403
   }
 
   private func deleteMCPServer(_ server: MCPServerConfig) async {
@@ -124,6 +157,7 @@ struct AgentSectionView: View {
     await MCPToolCatalog.shared.remove(serverID: server.id)
     @Dependency(\.keychain) var keychain
     await keychain.delete(server.keychainTokenKey)
+    await keychain.delete(server.oauthKeychainKey)
   }
 
   /// Opens the edit sheet, first probing the keychain so the sheet knows
@@ -219,6 +253,7 @@ struct AgentSectionView: View {
       if let entry = await MCPToolCatalog.shared.cachedTools(for: server.id) {
         mcpToolCounts[server.id] = entry.tools.count
       }
+      mcpSignedIn[server.id] = await MCPOAuthClient.isSignedIn(server)
     }
   }
 
@@ -453,6 +488,8 @@ private struct MCPServerRow: View {
   let server: MCPServerConfig
   let toolCount: Int?
   let error: String?
+  let isSignedIn: Bool
+  let onSignIn: () -> Void
   let onToggleEnabled: (Bool) -> Void
   let onRefresh: () -> Void
   let onEdit: () -> Void
@@ -476,15 +513,25 @@ private struct MCPServerRow: View {
             Text("· \(error)")
               .font(.caption)
               .foregroundStyle(.red)
-              .lineLimit(1)
+              .lineLimit(2)
           } else if let toolCount {
             Text("· \(toolCount) tool\(toolCount == 1 ? "" : "s")")
+              .font(.caption)
+              .foregroundStyle(.green)
+          } else if isSignedIn {
+            Text("· signed in")
               .font(.caption)
               .foregroundStyle(.green)
           }
         }
       }
       Spacer()
+      Button(action: onSignIn) {
+        Image(systemName: isSignedIn ? "key.fill" : "key")
+          .foregroundStyle(isSignedIn ? Color.green : Color.secondary)
+      }
+      .buttonStyle(.plain)
+      .help(isSignedIn ? "Re-authenticate (browser sign-in)" : "Sign in with browser (OAuth)")
       Button(action: onRefresh) {
         Image(systemName: "arrow.clockwise")
           .foregroundStyle(.secondary)
