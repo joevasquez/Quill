@@ -327,8 +327,10 @@ struct MultiActionConfirmationFeature {
             case let .succeeded(text):
               // MCP tools return meaningful text (a query answer); native
               // adapters return an item id, which isn't worth showing.
+              // Format the (usually-JSON) result for readability — the raw
+              // result still fed the resolve pass, this is display/copy only.
               if item.intent.actionType == .mcpCall, !text.isEmpty, text != "Done" {
-                outputs.append(.init(title: item.displayTitle, text: text))
+                outputs.append(.init(title: item.displayTitle, text: MCPResultFormatter.format(text)))
               }
             default:
               break
