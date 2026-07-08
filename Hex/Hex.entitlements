@@ -21,5 +21,13 @@
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spks</string>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spki</string>
 	</array>
+	<!-- NOTE: The Data Protection keychain (see KeychainClient) needs a
+	     keychain access group, which requires *development* signing (an
+	     application-identifier from a provisioning profile). Adding an
+	     explicit `keychain-access-groups` entitlement here breaks ad-hoc
+	     "Sign to Run Locally" builds. Once the debug build is signed with
+	     an Apple Development certificate, the DP keychain works via the
+	     default access group with NO extra entitlement — the repeated
+	     password prompts stop then. -->
 </dict>
 </plist>
