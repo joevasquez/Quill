@@ -160,6 +160,7 @@ struct MultiActionConfirmationFeature {
     case toggleExpanded(UUID)
     case removeItem(UUID)
     case executeAll
+    case copyOutput
     case itemResult(UUID, State.ItemResult)
     case completionDismissed
     case cancel
@@ -296,23 +297,21 @@ struct MultiActionConfirmationFeature {
           )
           actionLogger.info("Multi-action complete: \(succeeded) succeeded, \(failed) failed, \(queued) queued, \(outputs.count) output(s)")
 
-          // Copy any output to the clipboard so the user can paste it.
-          let clipboard = outputs.map(\.text).joined(separator: "\n\n")
-          let copyEffect: Effect<Action> = clipboard.isEmpty ? .none : .run { [pasteboard] _ in
-            await pasteboard.copy(clipboard)
-          }
           // Auto-dismiss only when there's nothing to read (no failures and
-          // no output). Otherwise keep the panel up until the user dismisses.
-          guard failed == 0, outputs.isEmpty else { return copyEffect }
-          return .merge(
-            copyEffect,
-            .run { send in
-              try? await Task.sleep(for: .milliseconds(1800))
-              await send(.completionDismissed)
-            }
-          )
+          // no output). Otherwise keep the panel up until the user dismisses
+          // (the output has an explicit Copy button).
+          guard failed == 0, outputs.isEmpty else { return .none }
+          return .run { send in
+            try? await Task.sleep(for: .milliseconds(1800))
+            await send(.completionDismissed)
+          }
         }
         return .none
+
+      case .copyOutput:
+        let text = (state.completion?.outputs ?? []).map(\.text).joined(separator: "\n\n")
+        guard !text.isEmpty else { return .none }
+        return .run { [pasteboard] _ in await pasteboard.copy(text) }
 
       case .completionDismissed:
         return .run { _ in

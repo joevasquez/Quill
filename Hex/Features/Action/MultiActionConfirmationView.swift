@@ -6,6 +6,7 @@ import SwiftUI
 struct MultiActionConfirmationView: View {
   @Bindable var store: StoreOf<MultiActionConfirmationFeature>
   @ObserveInjection var inject
+  @State private var didCopyOutput = false
 
   var body: some View {
     ZStack {
@@ -306,9 +307,22 @@ struct MultiActionConfirmationView: View {
               .frame(maxHeight: 180)
             }
           }
-          Label("Copied to clipboard", systemImage: "doc.on.clipboard")
-            .font(.system(size: 11))
-            .foregroundStyle(.green)
+          Button {
+            store.send(.copyOutput)
+            didCopyOutput = true
+            Task { try? await Task.sleep(for: .seconds(1.4)); didCopyOutput = false }
+          } label: {
+            Label(didCopyOutput ? "Copied" : "Copy", systemImage: didCopyOutput ? "checkmark" : "doc.on.doc")
+              .font(.system(size: 12, weight: .medium))
+              .foregroundStyle(didCopyOutput ? .green : .white)
+              .padding(.horizontal, 12)
+              .padding(.vertical, 6)
+              .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                  .fill(.white.opacity(0.14))
+              )
+          }
+          .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
