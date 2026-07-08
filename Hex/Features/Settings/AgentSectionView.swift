@@ -24,6 +24,7 @@ struct AgentSectionView: View {
   @State private var mcpToolCounts: [UUID: Int] = [:]
   @State private var mcpErrors: [UUID: String] = [:]
   @State private var showAddMCPServer = false
+  @State private var editingMCP: MCPEditContext?
 
   var body: some View {
     Group {
@@ -35,8 +36,13 @@ struct AgentSectionView: View {
     }
     .task { await reload() }
     .sheet(isPresented: $showAddMCPServer) {
-      MCPServerSheet { name, url, token in
+      MCPServerSheet { name, url, token, _ in
         Task { await addMCPServer(name: name, url: url, token: token) }
+      }
+    }
+    .sheet(item: $editingMCP) { ctx in
+      MCPServerSheet(existing: ctx.server, hasStoredToken: ctx.hasToken) { name, url, token, removeToken in
+        Task { await editMCPServer(ctx.server, name: name, url: url, token: token, removeToken: removeToken) }
       }
     }
     .enableInjection()
@@ -70,6 +76,7 @@ struct AgentSectionView: View {
               if enabled { Task { await refreshServer(server) } }
             },
             onRefresh: { Task { await refreshServer(server) } },
+            onEdit: { Task { await beginEditMCPServer(server) } },
             onDelete: { Task { await deleteMCPServer(server) } }
           )
         }
@@ -117,6 +124,37 @@ struct AgentSectionView: View {
     await MCPToolCatalog.shared.remove(serverID: server.id)
     @Dependency(\.keychain) var keychain
     await keychain.delete(server.keychainTokenKey)
+  }
+
+  /// Opens the edit sheet, first probing the keychain so the sheet knows
+  /// whether a token is already stored (it isn't shown, only replaced).
+  private func beginEditMCPServer(_ server: MCPServerConfig) async {
+    @Dependency(\.keychain) var keychain
+    let hasToken = !(await keychain.read(server.keychainTokenKey) ?? "").isEmpty
+    editingMCP = MCPEditContext(server: server, hasToken: hasToken)
+  }
+
+  private func editMCPServer(
+    _ server: MCPServerConfig, name: String, url: String, token: String, removeToken: Bool
+  ) async {
+    $hexSettings.withLock { settings in
+      if let idx = settings.mcpServers.firstIndex(where: { $0.id == server.id }) {
+        settings.mcpServers[idx].name = name
+        settings.mcpServers[idx].url = url
+      }
+    }
+    @Dependency(\.keychain) var keychain
+    // Token key is derived from the (unchanged) id, so it stays stable.
+    if removeToken {
+      await keychain.delete(server.keychainTokenKey)
+    } else if !token.isEmpty {
+      try? await keychain.save(server.keychainTokenKey, token)
+    }
+    // Re-fetch tools with the updated URL/token.
+    var updated = server
+    updated.name = name
+    updated.url = url
+    await refreshServer(updated)
   }
 
   // MARK: - Hero
@@ -417,6 +455,7 @@ private struct MCPServerRow: View {
   let error: String?
   let onToggleEnabled: (Bool) -> Void
   let onRefresh: () -> Void
+  let onEdit: () -> Void
   let onDelete: () -> Void
 
   var body: some View {
@@ -452,6 +491,12 @@ private struct MCPServerRow: View {
       }
       .buttonStyle(.plain)
       .help("Refresh tool list")
+      Button(action: onEdit) {
+        Image(systemName: "pencil")
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.plain)
+      .help("Edit server")
       Toggle("", isOn: Binding(get: { server.isEnabled }, set: onToggleEnabled))
         .toggleStyle(.switch)
         .controlSize(.mini)
@@ -466,22 +511,51 @@ private struct MCPServerRow: View {
   }
 }
 
+/// Carries the server + whether it has a stored token into the edit sheet.
+private struct MCPEditContext: Identifiable {
+  let server: MCPServerConfig
+  let hasToken: Bool
+  var id: UUID { server.id }
+}
+
+/// Add/edit sheet for an MCP server. `existing == nil` → add mode.
+/// The stored token is never displayed: in edit mode, a blank token field
+/// keeps the current token, a non-blank one replaces it, and "Remove saved
+/// token" clears it.
 private struct MCPServerSheet: View {
   @Environment(\.dismiss) private var dismiss
-  let onAdd: (String, String, String) -> Void
+  var existing: MCPServerConfig?
+  var hasStoredToken: Bool = false
+  /// (name, url, newToken, removeToken)
+  let onSave: (String, String, String, Bool) -> Void
 
-  @State private var name = ""
-  @State private var url = ""
+  @State private var name: String
+  @State private var url: String
   @State private var token = ""
+  @State private var removeToken = false
+
+  init(
+    existing: MCPServerConfig? = nil,
+    hasStoredToken: Bool = false,
+    onSave: @escaping (String, String, String, Bool) -> Void
+  ) {
+    self.existing = existing
+    self.hasStoredToken = hasStoredToken
+    self.onSave = onSave
+    _name = State(initialValue: existing?.name ?? "")
+    _url = State(initialValue: existing?.url ?? "")
+  }
+
+  private var isEditing: Bool { existing != nil }
 
   private var isValid: Bool {
     !name.trimmingCharacters(in: .whitespaces).isEmpty
-      && URL(string: url)?.scheme?.hasPrefix("http") == true
+      && URL(string: url.trimmingCharacters(in: .whitespaces))?.scheme?.hasPrefix("http") == true
   }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
-      Text("Add MCP Server")
+      Text(isEditing ? "Edit MCP Server" : "Add MCP Server")
         .font(.headline)
       Text("Any server speaking Model Context Protocol over HTTP. Its tools become voice-invocable actions.")
         .font(.caption)
@@ -492,18 +566,29 @@ private struct MCPServerSheet: View {
       TextField("URL (https://mcp.example.com/mcp)", text: $url)
         .textFieldStyle(.roundedBorder)
         .autocorrectionDisabled()
-      SecureField("Bearer token (optional)", text: $token)
-        .textFieldStyle(.roundedBorder)
+      SecureField(
+        hasStoredToken ? "Bearer token (leave blank to keep current)" : "Bearer token (optional)",
+        text: $token
+      )
+      .textFieldStyle(.roundedBorder)
+      .disabled(removeToken)
+      if hasStoredToken {
+        Toggle("Remove saved token", isOn: $removeToken)
+          .toggleStyle(.checkbox)
+          .controlSize(.small)
+          .font(.caption)
+      }
 
       HStack {
         Spacer()
         Button("Cancel") { dismiss() }
           .keyboardShortcut(.cancelAction)
-        Button("Add") {
-          onAdd(
+        Button(isEditing ? "Save" : "Add") {
+          onSave(
             name.trimmingCharacters(in: .whitespaces),
             url.trimmingCharacters(in: .whitespaces),
-            token.trimmingCharacters(in: .whitespaces)
+            token.trimmingCharacters(in: .whitespaces),
+            removeToken
           )
           dismiss()
         }
