@@ -35,26 +35,17 @@ private func liveStatus(_ store: StoreOf<TranscriptionFeature>) -> Transcription
   return .idle
 }
 
-/// Spec's adaptive chip palette. The status bar window's effective
-/// appearance tracks the wallpaper, and the hosted view's `colorScheme`
-/// tracks the window — so semantic switching happens for free.
-private struct ChipPalette {
-  let bg: Color
-  let ring: Color
-  let fg: Color
-
-  init(_ scheme: ColorScheme) {
-    if scheme == .light {
-      // Light wallpaper → light chip surface, dark glyph.
-      bg = Color.white.opacity(0.55)
-      ring = Color.black.opacity(0.16)
-      fg = Color(red: 0.08, green: 0.08, blue: 0.09).opacity(0.85)
-    } else {
-      bg = Color.black.opacity(0.30)
-      ring = Color.white.opacity(0.35)
-      fg = Color.white.opacity(0.92)
-    }
-  }
+/// Fixed chip style. The design's `.ultraThinMaterial` + wallpaper-adaptive
+/// palette rendered inconsistently inside the status-item hosting view
+/// (opaque black on one display, translucent on another — SwiftUI's
+/// material needs an NSVisualEffectView backdrop it doesn't get here), and
+/// the appearance flip could put a dark feather on a dark chip. A fixed
+/// translucent-dark pill with a white glyph is legible on any wallpaper and
+/// identical across displays — the same tack as the solid system mic pill.
+private enum ChipStyle {
+  static let bg = Color.black.opacity(0.34)
+  static let ring = Color.white.opacity(0.26)
+  static let fg = Color.white.opacity(0.95)
 }
 
 /// Tracks the "resolved" flash: when a capture finishes (transcribing/
@@ -84,7 +75,6 @@ struct MenuBarChipView: View {
   /// grow/shrink the NSStatusItem when the mode-name reveal appears.
   var onDesiredLengthChanged: (CGFloat) -> Void = { _ in }
 
-  @Environment(\.colorScheme) private var colorScheme
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @StateObject private var flash = ResultFlash()
   @State private var breathe = false
@@ -118,9 +108,8 @@ struct MenuBarChipView: View {
   }
 
   var body: some View {
-    let palette = ChipPalette(colorScheme)
     HStack(spacing: revealMode == nil ? 0 : ChipSpec.labelGap) {
-      glyph(palette)
+      glyph
         .frame(width: ChipSpec.glyphSlot, height: ChipSpec.glyphSlot)
 
       // Transient mode label after a hotkey/menu mode switch.
@@ -137,13 +126,16 @@ struct MenuBarChipView: View {
       }
     }
     .padding(.horizontal, ChipSpec.chipHPad)
-    .frame(height: ChipSpec.chipHeight)
+    // Fill the button height so the pill matches the system mic pill,
+    // insetting a hair from the bar edges. No fixed height → never clips
+    // regardless of the exact menu-bar thickness.
+    .frame(maxHeight: .infinity)
     .background(
       Capsule(style: .continuous)
-        .fill(palette.bg)
-        .background(Capsule(style: .continuous).fill(.ultraThinMaterial))
-        .overlay(Capsule(style: .continuous).strokeBorder(palette.ring, lineWidth: 0.5))
+        .fill(ChipStyle.bg)
+        .overlay(Capsule(style: .continuous).strokeBorder(ChipStyle.ring, lineWidth: 0.5))
     )
+    .padding(.vertical, ChipSpec.chipVMargin)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .animation(reduceMotion ? .easeInOut(duration: 0.18)
                : .spring(response: 0.32, dampingFraction: 0.82), value: revealMode)
@@ -157,7 +149,7 @@ struct MenuBarChipView: View {
   }
 
   /// The orb/feather/meter stack (the morph glyph), without the chip capsule.
-  private func glyph(_ palette: ChipPalette) -> some View {
+  private var glyph: some View {
     ZStack {
       // Orb — glow scales with mic level.
       Circle()
@@ -175,16 +167,17 @@ struct MenuBarChipView: View {
         .opacity(live && !isListening ? 1 : 0)
         .scaleEffect(live ? 1 : 0.30)
 
-      // Feather — the original brand feather (asset), tinted to the chip
-      // foreground; idle, with the 4.8s breath.
+      // Feather — the original brand feather (asset), white; idle, with a
+      // gentle SCALE breath only. The old opacity breath (0.8↔1.0) read as
+      // the feather "pulsing to transparent", so opacity stays solid.
       Image(nsImage: HexApp.menuBarIcon)
         .resizable()
         .renderingMode(.template)
         .aspectRatio(contentMode: .fit)
-        .foregroundStyle(palette.fg)
+        .foregroundStyle(ChipStyle.fg)
         .frame(width: ChipSpec.feather.width, height: ChipSpec.feather.height)
-        .opacity(live ? 0 : (breathe ? 1.0 : 0.8))
-        .scaleEffect(live ? 0.42 : (breathe ? 1.07 : 1.0))
+        .opacity(live ? 0 : 1)
+        .scaleEffect(live ? 0.42 : (breathe ? 1.05 : 1.0))
         .rotationEffect(.degrees(live ? -14 : 0))
         .offset(y: live ? 2 : 0)
         .animation(
@@ -196,7 +189,7 @@ struct MenuBarChipView: View {
 
       // 4-bar meter replaces the orb face while listening.
       if isListening {
-        ChipMeter(level: level, color: palette.fg)
+        ChipMeter(level: level, color: ChipStyle.fg)
           .transition(.opacity)
       }
     }
@@ -250,18 +243,20 @@ struct MenuBarChipView: View {
   }
 }
 
-/// Menu-bar geometry. Sized so the chip pill matches the height of the
-/// system dictation mic pill (~22pt) rather than the 18px design spec.
+/// Menu-bar geometry. The chip pill fills the status-item button height
+/// (minus `chipVMargin`) so it matches the system dictation mic pill (~25px)
+/// by construction, rather than a fixed height that could differ per Mac.
 enum ChipSpec {
-  static let chipHeight: CGFloat = 22
-  static let orb: CGFloat = 15
-  static let feather = CGSize(width: 17, height: 17)
+  static let orb: CGFloat = 16
+  static let feather = CGSize(width: 18, height: 18)
   /// Fixed slot the orb/feather/meter render in (widest glyph state).
-  static let glyphSlot: CGFloat = 17
+  static let glyphSlot: CGFloat = 18
   static let chipHPad: CGFloat = 8
+  /// Inset from the top/bottom bar edges — the pill fills the rest.
+  static let chipVMargin: CGFloat = 1
   /// Gap between the glyph and the transient mode label.
   static let labelGap: CGFloat = 5
-  static let itemLength: CGFloat = 40  // NSStatusItem length at rest (chip + breathing room)
+  static let itemLength: CGFloat = 42  // NSStatusItem length at rest (chip + breathing room)
   /// Extra room around the chip within the status-item slot during a reveal.
   static let slotSlack: CGFloat = 8
   static let bloomWidth: CGFloat = 232
