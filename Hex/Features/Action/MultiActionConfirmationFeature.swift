@@ -133,6 +133,9 @@ struct MultiActionConfirmationFeature {
       let succeeded: Int
       let failed: Int
       let queued: Int
+      /// Distinct error messages for the failed items, shown on the badge
+      /// so the user sees *why* something failed (e.g. MCP auth).
+      var failureReasons: [String] = []
     }
 
     init(intents: [ActionIntent], rawTranscript: String, autoExecute: Bool = false) {
@@ -259,9 +262,19 @@ struct MultiActionConfirmationFeature {
           let succeeded = state.results.values.filter { if case .succeeded = $0 { return true }; return false }.count
           let failed = state.results.values.filter { if case .failed = $0 { return true }; return false }.count
           let queued = state.results.values.filter { if case .queued = $0 { return true }; return false }.count
-          soundEffect.play(.pasteTranscript)
-          state.completion = .init(succeeded: succeeded, failed: failed, queued: queued)
+          // Collect distinct failure reasons, preserving item order.
+          var reasons: [String] = []
+          for item in state.items {
+            if case let .failed(msg) = state.results[item.id], !reasons.contains(msg) {
+              reasons.append(msg)
+            }
+          }
+          soundEffect.play(failed > 0 ? .cancel : .pasteTranscript)
+          state.completion = .init(succeeded: succeeded, failed: failed, queued: queued, failureReasons: reasons)
           actionLogger.info("Multi-action complete: \(succeeded) succeeded, \(failed) failed, \(queued) queued")
+          // Only auto-dismiss when nothing failed. On failure, keep the
+          // panel up so the user can read the reason and dismiss manually.
+          guard failed == 0 else { return .none }
           return .run { send in
             try? await Task.sleep(for: .milliseconds(1800))
             await send(.completionDismissed)

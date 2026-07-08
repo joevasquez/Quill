@@ -278,7 +278,7 @@ struct MultiActionConfirmationView: View {
       }
 
       VStack(spacing: 3) {
-        Text(completion.failed == 0 ? "Done" : "Partial success")
+        Text(completionTitle(completion))
           .font(.system(size: 15, weight: .semibold))
           .foregroundStyle(.white)
         Text(completionSubhead(completion))
@@ -286,10 +286,55 @@ struct MultiActionConfirmationView: View {
           .foregroundStyle(.white.opacity(0.7))
           .multilineTextAlignment(.center)
       }
+
+      // Show *why* it failed, and require a manual dismiss (the panel no
+      // longer auto-closes when something failed).
+      if !completion.failureReasons.isEmpty {
+        VStack(alignment: .leading, spacing: 6) {
+          ForEach(completion.failureReasons, id: \.self) { reason in
+            HStack(alignment: .top, spacing: 7) {
+              Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+                .padding(.top, 1)
+              Text(reason)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
+            }
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(Color.orange.opacity(0.12))
+        )
+
+        Button { store.send(.completionDismissed) } label: {
+          Text("Dismiss")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(
+              RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.white.opacity(0.14))
+            )
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(.defaultAction)
+      }
     }
     .padding(.horizontal, 24)
-    .padding(.vertical, 32)
+    .padding(.vertical, 28)
     .frame(maxWidth: .infinity)
+  }
+
+  private func completionTitle(_ c: MultiActionConfirmationFeature.State.Completion) -> String {
+    if c.failed == 0 { return "Done" }
+    if c.succeeded > 0 || c.queued > 0 { return "Partial success" }
+    return c.failed == 1 ? "Action failed" : "Actions failed"
   }
 
   private func badgeTint(_ c: MultiActionConfirmationFeature.State.Completion) -> Color {

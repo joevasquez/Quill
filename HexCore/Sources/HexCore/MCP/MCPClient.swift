@@ -60,10 +60,21 @@ public enum MCPError: LocalizedError {
 
   public var errorDescription: String? {
     switch self {
-    case .invalidURL: "Invalid MCP server URL"
-    case .httpError(let code, _): "MCP server returned HTTP \(code)"
-    case .rpcError(let code, let message): "MCP error \(code): \(message)"
-    case .malformedResponse: "Malformed response from MCP server"
+    case .invalidURL:
+      "Invalid MCP server URL"
+    case .httpError(let code, _):
+      switch code {
+      case 401, 403:
+        "Authentication failed (HTTP \(code)). This server needs a valid token — add or fix it in Settings → Agent → Tools. (Servers that require an OAuth sign-in aren't supported yet.)"
+      case 404:
+        "MCP server not found (HTTP 404) — check the URL in Settings → Agent → Tools."
+      default:
+        "MCP server returned HTTP \(code)"
+      }
+    case .rpcError(let code, let message):
+      "MCP error \(code): \(message)"
+    case .malformedResponse:
+      "Malformed response from MCP server"
     }
   }
 }
