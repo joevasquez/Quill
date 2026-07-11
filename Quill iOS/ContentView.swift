@@ -34,11 +34,24 @@ final class RecordingViewModel: ObservableObject {
   /// Set when an AI post-processing call failed and we fell back to
   /// the raw transcript. Cleared on the next successful run.
   @Published var aiErrorMessage: String?
-  /// Set when an Action recording finishes parsing. ContentView
-  /// presents the confirmation sheet in response.
-  @Published var parsedIntent: ActionIntent?
-  /// Set when multiple action intents are parsed from a single recording.
+  /// Set when an Action recording finishes parsing — one or more
+  /// intents; ContentView presents the confirmation sheet in response.
   @Published var parsedMultiIntents: [ActionIntent]?
+  /// True when Auto routing (not the user) classified this recording as
+  /// an action — drives the sheet's "Save to note instead" escape hatch.
+  var wasAutoRouted: Bool = false
+  /// Set when a dictation was appended to a voice-targeted note ("add
+  /// milk to my groceries note") instead of the active note. ContentView
+  /// shows a confirmation pill and skips the default append.
+  @Published var noteTargetBanner: String?
+  /// Set when the transcript matched a saved routine's trigger phrase —
+  /// `parsedMultiIntents` then carries the routine's stored steps and the
+  /// multi sheet honors `matchedRoutine.autoRun`.
+  @Published var matchedRoutine: Routine?
+  /// Set when the transcript was a routine-authoring request ("new
+  /// routine: when I say ship it, …") and the LLM produced a draft.
+  /// ContentView presents the save-routine sheet in response.
+  @Published var routineDraft: RoutineDraft?
   /// True when the current recording was started via the Action FAB.
   var isActionRecording: Bool = false
   /// True while the WhisperKit model is loading (first launch, or
@@ -109,6 +122,7 @@ final class RecordingViewModel: ObservableObject {
     switch phase {
     case .idle, .done, .error:
       isActionRecording = false
+      wasAutoRouted = false
       await startRecording(model: model, mode: mode, provider: provider)
     case .recording:
       if isActionRecording {
@@ -134,8 +148,10 @@ final class RecordingViewModel: ObservableObject {
     switch phase {
     case .idle, .done, .error:
       isActionRecording = true
-      parsedIntent = nil
+      wasAutoRouted = false
       parsedMultiIntents = nil
+      matchedRoutine = nil
+      routineDraft = nil
       await startRecording(model: model, mode: .off, provider: provider)
     case .recording:
       await stopAndParseAction(model: model, provider: provider)
@@ -238,6 +254,52 @@ final class RecordingViewModel: ObservableObject {
           return
         }
 
+        // Voice-targeted note append — "add milk to my groceries note"
+        // goes into the NAMED note, not the active one. Checked before
+        // Auto routing because it's more specific than the action
+        // keywords ("add to" would otherwise wake the agent). Only fires
+        // when a note actually matches; otherwise falls through.
+        if !isActionRecording,
+           let target = NoteTargetMatcher.match(text),
+           let note = NotesStore.shared.sortedNotes.first(where: {
+             $0.displayTitle.localizedCaseInsensitiveContains(target.noteName)
+           }) {
+          NotesStore.shared.appendToNote(id: note.id, text: target.content)
+          noteTargetBanner = "Added to \u{201C}\(note.displayTitle)\u{201D}"
+          Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            self?.noteTargetBanner = nil
+          }
+          // Mark handled so the default active-note append is skipped.
+          isActionRecording = true
+          phase = .done
+          UINotificationFeedbackGenerator().notificationOccurred(.success)
+          return
+        }
+
+        // Auto routing (mirrors macOS Auto mode): when the dictation
+        // sounds like a command ("remind me…", "add to todoist…"), hand
+        // it to the agent pipeline instead of appending to the note.
+        // Apple Reminders/Calendar need no setup, so action capability is
+        // always present on iOS — the classifier's keywords decide.
+        // The bolt FAB still forces Action; this covers the mic path.
+        let autoRouting = UserDefaults.standard.object(forKey: QuillIOSSettingsKey.autoActionRouting) as? Bool
+          ?? QuillIOSSettingsKey.defaultAutoActionRouting
+        if autoRouting, !isActionRecording,
+           AutoModeClassifier.resolve(
+             transcript: text,
+             hasSelection: false,
+             hasIntegrations: true
+           ) == .action {
+          // Flip the routing flags so downstream handlers (note append,
+          // sheet presentation) treat this result as an action — and so
+          // the sheet offers "Save to note instead" as the undo path.
+          isActionRecording = true
+          wasAutoRouted = true
+          await routeActionTranscript(text, provider: provider, sessionID: sessionID)
+          return
+        }
+
         let shouldRunAI = mode != .off || customSystemPrompt != nil
         if shouldRunAI {
           phase = .aiProcessing
@@ -309,18 +371,93 @@ final class RecordingViewModel: ObservableObject {
           return
         }
 
+        await routeActionTranscript(cleaned, provider: provider, sessionID: sessionID)
+      } catch {
+        guard sessionID == recordingSessionID else { return }
+        phase = .error("Action parsing failed: \(error.localizedDescription)")
+      }
+    }
+    await transcriptionTask?.value
+  }
+
+  /// Shared Action-mode continuation: routine authoring → saved-routine
+  /// trigger → LLM parse. Called by the Action FAB path and by Auto
+  /// routing when a dictation sounds like a command.
+  private func routeActionTranscript(
+    _ cleaned: String,
+    provider: AIProvider,
+    sessionID: UUID
+  ) async {
+        // Routine authoring — "new routine: when I say ship it, …" goes to
+        // the routine parser, not the action parser (mirrors macOS Branch 3).
+        let agentName = UserDefaults.standard.string(forKey: QuillIOSSettingsKey.agentName)
+          ?? QuillIOSSettingsKey.defaultAgentName
+        if let description = RoutineMatcher.authoringRequest(transcript: cleaned, agentName: agentName) {
+          phase = .actionParsing
+          do {
+            let draft = try await IOSActionParsingClient.parseRoutine(
+              description: description, provider: provider
+            )
+            guard sessionID == recordingSessionID else { return }
+            routineDraft = draft
+            phase = .done
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+          } catch {
+            guard sessionID == recordingSessionID else { return }
+            phase = .error("Couldn't understand that routine: \(error.localizedDescription)")
+          }
+          return
+        }
+
+        // Saved-routine trigger — exact phrase match posts the stored steps
+        // straight to the multi sheet: instant, free, works offline.
+        let routines = await RoutineStore.shared.loadAll()
+        if let routine = RoutineMatcher.match(transcript: cleaned, routines: routines) {
+          guard sessionID == recordingSessionID else { return }
+          await RoutineStore.shared.recordRun(id: routine.id)
+          matchedRoutine = routine
+          parsedMultiIntents = routine.steps
+          phase = .done
+          UINotificationFeedbackGenerator().notificationOccurred(.success)
+          return
+        }
+
         phase = .actionParsing
         do {
+          // MCP: list connected servers' tools so the LLM can emit
+          // mcpCall actions (no-op when no server has a cached catalog).
+          let mcpContext = await MCPToolCatalog.shared.promptContext(
+            servers: MCPServersStorage.load()
+          )
+          // Agent memory: known people/projects/preferences so "email Mike"
+          // resolves without clarifying questions.
+          let memoryEnabled = UserDefaults.standard.object(forKey: QuillIOSSettingsKey.agentMemoryEnabled) as? Bool
+            ?? QuillIOSSettingsKey.defaultAgentMemoryEnabled
+          var memoryContext: String?
+          if memoryEnabled {
+            memoryContext = MemoryContextBuilder.context(from: await MemoryStore.shared.loadAll())
+          }
           let response = try await IOSActionParsingClient.parseMulti(
             transcript: cleaned,
-            provider: provider
+            provider: provider,
+            memoryContext: memoryContext,
+            mcpContext: mcpContext
           )
-          guard sessionID == recordingSessionID else { return }
-          if response.isSingleAction, let intent = response.actions.first {
-            parsedIntent = intent
-          } else {
-            parsedMultiIntents = response.actions
+          // Fire-and-forget memory pass: distill durable entities from the
+          // transcript so the agent gets smarter with every action.
+          if memoryEnabled {
+            Task {
+              if let candidates = try? await IOSActionParsingClient.extractMemory(
+                transcript: cleaned, provider: provider
+              ), !candidates.isEmpty {
+                await MemoryStore.shared.upsert(candidates)
+              }
+            }
           }
+          guard sessionID == recordingSessionID else { return }
+          // Every parse — single or multi — flows through the one
+          // confirmation sheet (a single action is a one-item list).
+          parsedMultiIntents = response.actions
           phase = .done
           UINotificationFeedbackGenerator().notificationOccurred(.success)
         } catch {
@@ -338,12 +475,6 @@ final class RecordingViewModel: ObservableObject {
             phase = .error("Action parsing failed: \(error.localizedDescription)")
           }
         }
-      } catch {
-        guard sessionID == recordingSessionID else { return }
-        phase = .error("Action parsing failed: \(error.localizedDescription)")
-      }
-    }
-    await transcriptionTask?.value
   }
 }
 
@@ -364,7 +495,6 @@ struct ContentView: View {
   /// `applyParsedIntent` once the parse returns. Using a single
   /// long-lived instance also avoids the brief flicker that comes
   /// from rebuilding the VM on every presentation.
-  @StateObject private var actionVM = ActionConfirmationViewModel(transcript: "")
   @EnvironmentObject private var deepLinks: QuillDeepLinkRouter
   @State private var showingSettings = false
   @State private var showingNotesList = false
@@ -381,8 +511,8 @@ struct ContentView: View {
   @State private var isBuildingPDF = false
   @State private var pendingDeleteNoteID: UUID?
   @State private var editingNoteID: UUID?
-  @State private var showingActionConfirmation = false
   @State private var showingMultiActionConfirmation = false
+  @State private var showingRoutineSave = false
   @StateObject private var multiActionVM = MultiActionConfirmationViewModel()
   /// Transient banner state — set true when an action mode item is queued
   /// because we're offline. Auto-clears after a few seconds via the task
@@ -526,11 +656,15 @@ struct ContentView: View {
       .sheet(item: $shareRequest) { req in
         ShareSheet(items: req.items)
       }
-      .sheet(isPresented: $showingActionConfirmation) {
-        ActionConfirmationSheet(vm: actionVM)
-      }
       .sheet(isPresented: $showingMultiActionConfirmation) {
         MultiActionConfirmationSheet(vm: multiActionVM)
+      }
+      .sheet(isPresented: $showingRoutineSave) {
+        if let draft = vm.routineDraft {
+          RoutineSaveSheet(draft: draft) {
+            vm.routineDraft = nil
+          }
+        }
       }
       .sheet(isPresented: Binding(
         get: { editingNoteID != nil },
@@ -585,48 +719,48 @@ struct ContentView: View {
         }
         // Open the confirmation sheet the moment we start parsing —
         // the user sees their captured transcript in HEARD with a
-        // skeleton parsing card where WILL DO will land. When the
-        // parse returns, `vm.parsedIntent` flips and we populate the
-        // form (see the parsedIntent `onChange` below).
-        if case .actionParsing = newPhase, !showingActionConfirmation {
-          actionVM.startParsing(transcript: vm.rawTranscript)
-          showingActionConfirmation = true
+        // skeleton card where WILL DO will land. `applyParsedIntents`
+        // fills it in place when the parse returns.
+        if case .actionParsing = newPhase, !showingMultiActionConfirmation {
+          multiActionVM.onSaveToNote = { appendTranscriptToActiveNote() }
+          multiActionVM.startParsing(
+            transcript: vm.rawTranscript,
+            wasAutoRouted: vm.wasAutoRouted
+          )
+          showingMultiActionConfirmation = true
         }
-        // Parse failed (queue path or hard error) without `parsedIntent`
-        // ever landing → close the parsing sheet so the offline banner
-        // / error pill in the main UI can take over.
+        // Parse failed (queue path or hard error) without intents ever
+        // landing → close the parsing sheet so the offline banner /
+        // error pill in the main UI can take over.
         if case .done = newPhase,
            vm.isActionRecording,
-           vm.parsedIntent == nil,
-           showingActionConfirmation,
-           actionVM.isParsing {
-          showingActionConfirmation = false
+           vm.parsedMultiIntents == nil,
+           showingMultiActionConfirmation,
+           multiActionVM.isParsing {
+          showingMultiActionConfirmation = false
         }
         if case .error = newPhase,
-           showingActionConfirmation,
-           actionVM.isParsing {
-          showingActionConfirmation = false
+           showingMultiActionConfirmation,
+           multiActionVM.isParsing {
+          showingMultiActionConfirmation = false
         }
-      }
-      .onChange(of: vm.parsedIntent) { _, intent in
-        guard let intent else { return }
-        if !showingActionConfirmation {
-          // Defensive — covers any path that lands an intent without
-          // first flipping into `.actionParsing` (shouldn't happen via
-          // normal flow, but the sheet should still open).
-          actionVM.startParsing(transcript: vm.rawTranscript)
-          showingActionConfirmation = true
-        }
-        actionVM.applyParsedIntent(intent)
       }
       .onChange(of: vm.parsedMultiIntents) { _, intents in
         guard let intents, !intents.isEmpty else { return }
-        // Close parsing sheet if open and present multi-action instead
-        if showingActionConfirmation {
-          showingActionConfirmation = false
-        }
-        multiActionVM.applyParsedIntents(intents, rawTranscript: vm.rawTranscript)
+        // Routine trust ladder: an auto-run routine skips the confirmation —
+        // the sheet opens straight into execution progress.
+        let autoRun = vm.matchedRoutine?.autoRun ?? false
+        multiActionVM.onSaveToNote = { appendTranscriptToActiveNote() }
+        multiActionVM.applyParsedIntents(
+          intents,
+          rawTranscript: vm.rawTranscript,
+          autoExecute: autoRun
+        )
         showingMultiActionConfirmation = true
+      }
+      .onChange(of: vm.routineDraft) { _, draft in
+        guard draft != nil else { return }
+        showingRoutineSave = true
       }
       .onReceive(NotificationCenter.default.publisher(for: .quillActionQueuedOffline)) { _ in
         // Show a transient pill above the FAB cluster acknowledging the
@@ -884,6 +1018,10 @@ struct ContentView: View {
     if let aiError = vm.aiErrorMessage, vm.phase == .done {
       statusPill(aiError, icon: "exclamationmark.triangle", tint: .orange)
     }
+    if let banner = vm.noteTargetBanner {
+      statusPill(banner, icon: "note.text.badge.plus", tint: QuillDesign.success)
+        .transition(.move(edge: .trailing).combined(with: .opacity))
+    }
     // Whisper model load runs on first launch (and when the user
     // switches models). The first transcription blocks on this if
     // it hasn't finished — surface it so users see "Loading model"
@@ -903,7 +1041,7 @@ struct ContentView: View {
     case .transcribing:
       statusPill("Transcribing…", icon: "waveform", tint: .blue)
     case .actionParsing:
-      statusPill("Parsing action…", icon: "bolt.fill", tint: .orange)
+      statusPill("Parsing action…", icon: "bolt.fill", tint: QuillDesign.actionAccent)
     case .aiProcessing:
       statusPill("Enhancing with \(aiProvider.displayName)…", icon: "sparkles", tint: .purple)
     case .error(let msg):
@@ -976,6 +1114,21 @@ struct ContentView: View {
     return existing + "\n\n" + partial
   }
 
+  /// Flip a `- [ ]` / `- [x]` marker tapped in the note canvas. The
+  /// canvas renders body *segments* (text between photo tokens), so the
+  /// toggle runs on the segment string and the edited segment is
+  /// spliced back into the note body at its first occurrence.
+  private func toggleCheckbox(noteID: UUID, segmentText: String, lineIndex: Int) {
+    guard let note = notes.notes.first(where: { $0.id == noteID }),
+          let toggledSegment = MarkdownCheckbox.toggleLine(lineIndex, in: segmentText),
+          let range = note.body.range(of: segmentText)
+    else { return }
+    var body = note.body
+    body.replaceSubrange(range, with: toggledSegment)
+    notes.updateBody(id: noteID, to: body)
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+  }
+
   private func noteCanvas(for note: Note) -> some View {
     let tint: Color = aiMode == .off ? .blue : .purple
     let segments = NoteContent.segments(from: note.body)
@@ -1028,8 +1181,14 @@ struct ContentView: View {
   private func segmentView(_ seg: NoteSegment, noteID: UUID) -> some View {
     switch seg {
     case .text(let text):
-      NoteTextView(text: text, headingColor: .purple)
-        .textSelection(.enabled)
+      NoteTextView(
+        text: text,
+        headingColor: .purple,
+        onToggleCheckbox: { lineIndex in
+          toggleCheckbox(noteID: noteID, segmentText: text, lineIndex: lineIndex)
+        }
+      )
+      .textSelection(.enabled)
     case .photo(let photoID):
       VStack(alignment: .leading, spacing: 8) {
         if let ui = PhotoStore.shared.loadImage(noteID: noteID, photoID: photoID) {

@@ -14,6 +14,7 @@
 //  prompts, not buttons — so users feel they own the next move.
 //
 
+import HexCore
 import SwiftUI
 
 struct QuillEmptyHome: View {
@@ -41,7 +42,7 @@ struct QuillEmptyHome: View {
           .foregroundStyle(.primary)
           .multilineTextAlignment(.center)
 
-        Text("Tap the purple mic to dictate, the orange bolt for a voice action, or the camera to capture context.")
+        Text("Tap the mic and talk — notes stay notes, and commands go to your agent automatically. Hold the mic to force an action.")
           .font(.subheadline)
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.center)
@@ -56,8 +57,8 @@ struct QuillEmptyHome: View {
         )
         ExampleUtteranceChip(
           icon: "bolt.fill",
-          tint: .orange,
-          example: "slack Amanda — push our 3pm to Thursday"
+          tint: QuillDesign.actionAccent,
+          example: "remind me to send the deck tomorrow at 9"
         )
         ExampleUtteranceChip(
           icon: "camera.fill",

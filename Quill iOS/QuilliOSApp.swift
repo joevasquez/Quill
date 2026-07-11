@@ -14,7 +14,7 @@ struct QuilliOSApp: App {
   /// `quill://` deep link has arrived — currently fired by the home-
   /// screen widget to request "start recording immediately" or "open
   /// the notes list". See `QuillDeepLink` for the routing table.
-  @StateObject private var deepLinkRouter = QuillDeepLinkRouter()
+  @ObservedObject private var deepLinkRouter = QuillDeepLinkRouter.shared
 
   @AppStorage(QuillIOSSettingsKey.hasCompletedOnboarding)
   private var hasCompletedOnboarding: Bool = false
@@ -34,6 +34,16 @@ struct QuilliOSApp: App {
         executor: IOSSystemActionQueueExecutor(),
         parser: IOSActionQueueParser()
       )
+    }
+    // Warm the MCP tool catalog for enabled servers so the first Action
+    // parse after launch can already offer mcpCall tools (mirrors macOS
+    // `HexAppDelegate.refreshMCPCatalog`). Failures are fine — the
+    // catalog just stays empty for that server until a manual refresh.
+    Task { @MainActor in
+      for server in MCPServersStorage.load() where server.isEnabled {
+        let token = await IOSMCPOAuthClient.resolveAuthToken(for: server)
+        _ = try? await MCPToolCatalog.shared.refresh(server: server, authToken: token)
+      }
     }
     // Backfill `IntegrationConnectionStore` from OAuth state. Users who
     // signed in to Google before the store was being updated have valid

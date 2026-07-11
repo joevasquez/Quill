@@ -23,6 +23,10 @@ enum QuillDeepLink: Equatable {
 
 @MainActor
 final class QuillDeepLinkRouter: ObservableObject {
+  /// Single app-wide instance — the SwiftUI scene observes it and App
+  /// Intents (Siri / Action Button / Shortcuts) publish into it.
+  static let shared = QuillDeepLinkRouter()
+
   /// Monotonically-increasing sequence of pending deep links. Using a
   /// sequence (rather than a single optional) means back-to-back
   /// widget taps don't deduplicate — the consumer sees each one.

@@ -3,18 +3,17 @@
 //  Quill (iOS)
 //
 //  Single + button at the bottom of the home screen that fans up into
-//  three vertically-stacked FABs (dictate, photo, action) when tapped.
-//  The mode dropdown floats up alongside the dictate button on its
-//  leading edge.
+//  two vertically-stacked FABs (dictate, photo) when tapped. The mode
+//  dropdown floats up alongside the dictate button on its leading edge.
 //
-//  Rationale: replaces the prior three-FABs-always-on-screen layout to
-//  reduce visual weight at rest. Most of the time the user is reading
-//  notes, not staring at three colored circles.
+//  One-button capture: the mic FAB is the only voice entry point. A tap
+//  starts a dictation (Auto routing hands command-sounding transcripts
+//  to the agent — see `quill.autoActionRouting`); a LONG-PRESS forces an
+//  Action recording for when you want the agent explicitly. The old
+//  separate bolt FAB is gone.
 //
-//  Recording state: the + button stays as + (per the spec) but gains
-//  a red pulsing ring + a corner dot so it's obvious recording is in
-//  flight. To stop, the user taps + → expands → taps the now-red
-//  dictate (or action) button.
+//  Recording state: the + button flips to a red stop button — single
+//  tap to stop, routed to whichever mode started the recording.
 //
 
 import HexCore
@@ -33,9 +32,7 @@ struct QuillFABCluster: View {
 
   @State private var expanded = false
 
-  /// Visible diameter of each round FAB. Trimmed slightly from the
-  /// previous 72pt mic FAB so a vertical stack of three doesn't crowd
-  /// the screen on smaller iPhones.
+  /// Visible diameter of each round FAB.
   private let fabSize: CGFloat = 60
   /// Outer slot — gives shadows + glows room without spilling into
   /// neighbours. ~20pt buffer past `fabSize` is the working minimum.
@@ -49,19 +46,9 @@ struct QuillFABCluster: View {
     vm.phase == .recording
   }
 
-  /// Recording started via the dictate FAB.
-  private var isDictateRecording: Bool {
-    isAnyRecording && !vm.isActionRecording
-  }
-
-  /// Recording started via the action FAB.
-  private var isActionRecording: Bool {
-    isAnyRecording && vm.isActionRecording
-  }
-
-  /// Action mode is in its post-recording parse phase. Disables the
-  /// action button so the user can't double-fire while the LLM is
-  /// resolving the intent.
+  /// Action mode is in its post-recording parse phase — surfaced on the
+  /// + button as a teal spinner so "we heard you and we're thinking" is
+  /// visible without a dedicated bolt FAB.
   private var isActionParsing: Bool {
     vm.phase == .actionParsing
   }
@@ -88,9 +75,6 @@ struct QuillFABCluster: View {
 
         photoFAB
           .transition(.move(edge: .bottom).combined(with: .opacity))
-
-        actionFAB
-          .transition(.move(edge: .bottom).combined(with: .opacity))
       }
 
       plusButton
@@ -116,41 +100,37 @@ struct QuillFABCluster: View {
         } else {
           onTapMic()
         }
-        // Defensive: collapse the stack if it was somehow open mid-
-        // recording (shouldn't happen via normal flow but keeps state
-        // tidy after the tap).
         expanded = false
-      } else {
+      } else if !isActionParsing {
         expanded.toggle()
       }
     } label: {
       ZStack {
-        // Filled circle — purple when idle, red when recording so the
-        // button itself signals "tap to stop". No separate halo or
-        // corner dot; the color swap is the indicator.
+        // Filled circle — purple when idle, red when recording, teal
+        // while the agent is parsing. The color IS the state indicator.
         Circle()
           .fill(
             LinearGradient(
-              colors: isAnyRecording
-                ? [Color.red, Color.red.opacity(0.82)]
-                : [Color.purple, Color.purple.opacity(0.82)],
+              colors: plusColors,
               startPoint: .topLeading,
               endPoint: .bottomTrailing
             )
           )
           .frame(width: plusSize, height: plusSize)
-          .shadow(
-            color: (isAnyRecording ? Color.red : Color.purple).opacity(0.4),
-            radius: 8,
-            y: 4
-          )
+          .shadow(color: plusColors[0].opacity(0.4), radius: 8, y: 4)
 
-        Image(systemName: isAnyRecording ? "stop.fill" : "plus")
-          .font(.system(size: 26, weight: .bold))
-          .foregroundStyle(.white)
-          // Rotation only applies to the +. Stop glyph never rotates;
-          // expanding has no meaning while recording.
-          .rotationEffect(.degrees(expanded && !isAnyRecording ? 45 : 0))
+        if isActionParsing {
+          ProgressView()
+            .tint(.white)
+            .controlSize(.regular)
+        } else {
+          Image(systemName: isAnyRecording ? "stop.fill" : "plus")
+            .font(.system(size: 26, weight: .bold))
+            .foregroundStyle(.white)
+            // Rotation only applies to the +. Stop glyph never rotates;
+            // expanding has no meaning while recording.
+            .rotationEffect(.degrees(expanded && !isAnyRecording ? 45 : 0))
+        }
       }
       .frame(width: fabSlot, height: fabSlot)
     }
@@ -158,21 +138,34 @@ struct QuillFABCluster: View {
     .accessibilityLabel(plusAccessibilityLabel)
   }
 
+  private var plusColors: [Color] {
+    if isAnyRecording { return [Color.red, Color.red.opacity(0.82)] }
+    if isActionParsing { return [QuillDesign.actionAccent, QuillDesign.actionAccent.opacity(0.82)] }
+    return [Color.purple, Color.purple.opacity(0.82)]
+  }
+
   private var plusAccessibilityLabel: String {
     if isAnyRecording { return "Stop recording" }
+    if isActionParsing { return "Working on your action" }
     return expanded ? "Hide actions" : "Show actions"
   }
 
-  // MARK: - Dictate
+  // MARK: - Dictate (tap) / Action (long-press)
 
   private var dictateFAB: some View {
-    let recording = isDictateRecording
+    let recording = isAnyRecording
     let tint: Color = recording ? .red : .purple
 
     return Button {
-      onTapMic()
-      // Collapse after tap — the recording state will be apparent
-      // from the + button's red ring, no need to keep the stack open.
+      if recording {
+        // Stop whichever mode started (defensive — the stack usually
+        // collapses at record-start, but keep the tap meaningful).
+        vm.isActionRecording ? onTapAction() : onTapMic()
+      } else {
+        onTapMic()
+      }
+      // Collapse after tap — the recording state is apparent from the
+      // + button turning red.
       expanded = false
     } label: {
       fabBubble(
@@ -182,7 +175,17 @@ struct QuillFABCluster: View {
       )
     }
     .buttonStyle(.plain)
-    .accessibilityLabel(recording ? "Stop dictating" : "Start dictating")
+    .simultaneousGesture(
+      // Long-press = force Action mode (the agent), bypassing Auto
+      // routing. Tap still dictates.
+      LongPressGesture(minimumDuration: 0.45).onEnded { _ in
+        guard !recording, !isActionParsing else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        onTapAction()
+        expanded = false
+      }
+    )
+    .accessibilityLabel(recording ? "Stop recording" : "Start dictating (hold for an action)")
   }
 
   // MARK: - Photo
@@ -196,48 +199,6 @@ struct QuillFABCluster: View {
     }
     .buttonStyle(.plain)
     .accessibilityLabel("Add photo")
-  }
-
-  // MARK: - Action (voice command)
-
-  private var actionFAB: some View {
-    let recording = isActionRecording
-    let tint: Color = recording ? .red : .orange
-
-    return Button {
-      if !isActionParsing {
-        onTapAction()
-        expanded = false
-      }
-    } label: {
-      ZStack {
-        fabBubble(
-          glyph: recording ? "stop.fill" : "bolt.fill",
-          tint: tint,
-          glyphSize: 22
-        )
-        if isActionParsing {
-          // Subtle parsing indicator — replaces the glyph with a
-          // spinner without changing the tint, so "we heard you and
-          // we're thinking" is visible.
-          Circle()
-            .fill(tint.opacity(0.5))
-            .frame(width: fabSize, height: fabSize)
-          ProgressView()
-            .tint(.white)
-            .controlSize(.regular)
-        }
-      }
-    }
-    .buttonStyle(.plain)
-    .disabled(isActionParsing)
-    .accessibilityLabel(actionLabel)
-  }
-
-  private var actionLabel: String {
-    if isActionParsing { return "Parsing voice action…" }
-    if isActionRecording { return "Stop voice action" }
-    return "Start voice action"
   }
 
   // MARK: - Shared bubble
@@ -265,4 +226,3 @@ struct QuillFABCluster: View {
     .frame(width: fabSlot, height: fabSlot)
   }
 }
-

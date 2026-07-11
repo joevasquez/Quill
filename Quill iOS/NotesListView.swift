@@ -131,6 +131,10 @@ struct NotesListView: View {
                 // Defer to the alert. The alert resolves the actual
                 // delete + haptic so a stray tap doesn't lose work.
                 pendingDeleteNoteID = note.id
+              },
+              onTogglePin: {
+                store.togglePin(id: note.id)
+                UISelectionFeedbackGenerator().selectionChanged()
               }
             )
           }
@@ -284,6 +288,7 @@ private struct NoteRow: View {
   let onTap: () -> Void
   let onRename: () -> Void
   let onDelete: () -> Void
+  var onTogglePin: (() -> Void)? = nil
   @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
@@ -292,6 +297,12 @@ private struct NoteRow: View {
         // Body preview + title
         VStack(alignment: .leading, spacing: 6) {
           HStack(spacing: 8) {
+            if note.isPinned {
+              Image(systemName: "pin.fill")
+                .font(.caption)
+                .foregroundStyle(.purple)
+                .rotationEffect(.degrees(45))
+            }
             Text(note.displayTitle)
               .font(.headline)
               .lineLimit(1)
@@ -403,6 +414,11 @@ private struct NoteRow: View {
     // users expect swipe-to-delete too. Fall back to a long-press menu for
     // consistent discoverability.
     .contextMenu {
+      if let onTogglePin {
+        Button(action: onTogglePin) {
+          Label(note.isPinned ? "Unpin" : "Pin", systemImage: note.isPinned ? "pin.slash" : "pin")
+        }
+      }
       Button(action: onRename) {
         Label("Rename", systemImage: "pencil")
       }

@@ -28,6 +28,8 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
   /// a real title, so subsequent appends don't keep re-titling the
   /// note out from under the user.
   var isAutoTitle: Bool
+  /// Pinned notes sort to the top of the notes list.
+  var isPinned: Bool
 
   init(
     id: UUID = UUID(),
@@ -36,7 +38,8 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
     createdAt: Date = Date(),
     updatedAt: Date? = nil,
     location: NoteLocation? = nil,
-    isAutoTitle: Bool = true
+    isAutoTitle: Bool = true,
+    isPinned: Bool = false
   ) {
     self.id = id
     self.title = title
@@ -45,6 +48,7 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
     self.updatedAt = updatedAt ?? createdAt
     self.location = location
     self.isAutoTitle = isAutoTitle
+    self.isPinned = isPinned
   }
 
   /// Custom Codable init so notes persisted before the
@@ -61,6 +65,7 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
     updatedAt = try c.decode(Date.self, forKey: .updatedAt)
     location = try c.decodeIfPresent(NoteLocation.self, forKey: .location)
     isAutoTitle = try c.decodeIfPresent(Bool.self, forKey: .isAutoTitle) ?? false
+    isPinned = try c.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
   }
 
   /// Derive a title from the first meaningful line of body text.

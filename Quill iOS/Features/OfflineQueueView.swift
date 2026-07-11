@@ -165,7 +165,7 @@ private struct QueueRow: View {
   private var iconName: String {
     switch item.payload {
     case .ready(let intent):
-      return Integration.all.first { $0.identifier == intent.targetIntegration }?.systemImage ?? "questionmark.circle"
+      return ConnectionTarget.forIntent(intent).systemImage
     case .pendingParse:
       return "doc.text.magnifyingglass"
     }
@@ -174,7 +174,9 @@ private struct QueueRow: View {
   private var tint: Color {
     switch item.payload {
     case .ready(let intent):
-      return Color(hex: Integration.all.first { $0.identifier == intent.targetIntegration }?.tintHex ?? "") ?? .secondary
+      let target = ConnectionTarget.forIntent(intent)
+      if case .open = target { return .blue }
+      return target.tintHex.flatMap { Color(hex: $0) } ?? QuillDesign.mcpTile
     case .pendingParse:
       return .orange
     }
@@ -183,7 +185,7 @@ private struct QueueRow: View {
   private var targetLabel: String {
     switch item.payload {
     case .ready(let intent):
-      return Integration.all.first { $0.identifier == intent.targetIntegration }?.name ?? intent.targetIntegration.rawValue
+      return ConnectionTarget.forIntent(intent).displayName
     case .pendingParse:
       return "Awaiting parse"
     }

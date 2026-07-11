@@ -77,10 +77,13 @@ final class NotesStore: ObservableObject {
     return notes.first(where: { $0.id == id })
   }
 
-  /// Sort descending by updatedAt so freshly-touched notes float to the top
-  /// — matches the Mac transcription history order.
+  /// Pinned notes first, then descending by updatedAt so freshly-touched
+  /// notes float to the top — matches the Mac transcription history order.
   var sortedNotes: [Note] {
-    notes.sorted { $0.updatedAt > $1.updatedAt }
+    notes.sorted {
+      if $0.isPinned != $1.isPinned { return $0.isPinned }
+      return $0.updatedAt > $1.updatedAt
+    }
   }
 
   // MARK: - Mutations
@@ -160,6 +163,32 @@ final class NotesStore: ObservableObject {
   func updateBody(id: UUID, to body: String) {
     guard let idx = notes.firstIndex(where: { $0.id == id }) else { return }
     notes[idx].body = body
+    notes[idx].updatedAt = Date()
+    save(syncNoteID: id)
+  }
+
+  /// Pin/unpin without touching `updatedAt` — pinning is an
+  /// organizational act, not an edit, so it shouldn't bump the note in
+  /// recency order (or trigger a title regeneration).
+  func togglePin(id: UUID) {
+    guard let idx = notes.firstIndex(where: { $0.id == id }) else { return }
+    notes[idx].isPinned.toggle()
+    save(syncNoteID: id)
+  }
+
+  /// Append text to a specific (voice-targeted) note — "add milk to my
+  /// groceries note". Same paragraph-separator behavior as the active-
+  /// note append, but never creates a note and doesn't change which
+  /// note is active.
+  func appendToNote(id: UUID, text: String) {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty,
+          let idx = notes.firstIndex(where: { $0.id == id }) else { return }
+    if notes[idx].body.isEmpty {
+      notes[idx].body = trimmed
+    } else {
+      notes[idx].body += "\n\n" + trimmed
+    }
     notes[idx].updatedAt = Date()
     save(syncNoteID: id)
   }

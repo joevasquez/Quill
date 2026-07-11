@@ -21,7 +21,6 @@ struct NoteEditSheet: View {
 
   @State private var draftBody: String
   @State private var draftTitle: String
-  @FocusState private var bodyFocused: Bool
 
   init(note: Note) {
     self.note = note
@@ -39,30 +38,35 @@ struct NoteEditSheet: View {
 
   var body: some View {
     NavigationStack {
-      Form {
-        Section("Title") {
-          TextField("Title", text: $draftTitle)
-            .textInputAutocapitalization(.sentences)
-        }
+      // The UITextView is the ONLY scroller — nesting it in a Form/
+      // ScrollView makes the two fight over drag gestures (same lesson
+      // as the macOS editor). Title + hints are fixed chrome around it.
+      VStack(spacing: 0) {
+        TextField("Title", text: $draftTitle)
+          .textInputAutocapitalization(.sentences)
+          .font(.headline)
+          .padding(.horizontal, 16)
+          .padding(.vertical, 10)
 
-        Section {
-          TextEditor(text: $draftBody)
-            .focused($bodyFocused)
-            .frame(minHeight: 280)
-            .scrollContentBackground(.hidden)
-        } header: {
-          Text("Body")
-        } footer: {
+        Divider()
+
+        MarkdownTextEditorIOS(text: $draftBody)
+
+        Divider()
+
+        Group {
           if hasPhotoTokens {
             Text("This note has inline photos. Don't edit the `![photo](...)` markers — they tell Quill where each photo belongs.")
-              .font(.caption)
               .foregroundStyle(.orange)
           } else {
-            Text("Plain text. Saved changes sync to the cloud automatically when cloud sync is on.")
-              .font(.caption)
+            Text("Markdown supported — use the keyboard toolbar for bold, lists, and headings. Changes sync to the cloud automatically when cloud sync is on.")
               .foregroundStyle(.secondary)
           }
         }
+        .font(.caption)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
       }
       .navigationTitle("Edit Note")
       .navigationBarTitleDisplayMode(.inline)
@@ -78,7 +82,6 @@ struct NoteEditSheet: View {
           .disabled(!hasChanges)
         }
       }
-      .onAppear { bodyFocused = true }
     }
   }
 

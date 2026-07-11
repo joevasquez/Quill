@@ -30,6 +30,19 @@ enum QuillIOSSettingsKey {
   /// Empty array (the default) means everything is visible.
   static let disabledBuiltInModes = "quill.disabledBuiltInModes"
 
+  /// User-renameable agent name ("Hermes" by default) — mirrors macOS
+  /// `HexSettings.agentName`.
+  static let agentName = "quill.agentName"
+  /// When true, a background memory-extraction pass runs after every
+  /// successful Action parse so "email Mike" resolves without questions.
+  /// Mirrors macOS `HexSettings.agentMemoryEnabled`.
+  static let agentMemoryEnabled = "quill.agentMemoryEnabled"
+  /// When true (default), mic-button dictations that sound like commands
+  /// ("remind me…", "add to todoist…") are routed to the agent's action
+  /// pipeline instead of the note — the iOS counterpart of macOS Auto
+  /// mode. The bolt FAB always forces Action regardless.
+  static let autoActionRouting = "quill.autoActionRouting"
+
   // Defaults
   static let defaultModel = "openai_whisper-tiny.en"  // Ships small, English-focused
   // AI defaults to .off so users see raw transcripts until they pick a mode.
@@ -38,6 +51,9 @@ enum QuillIOSSettingsKey {
   /// On by default — most users dictate naturally and expect "period"
   /// to become a `.` rather than the literal word.
   static let defaultVoiceCommandsEnabled = true
+  static let defaultAgentName = "Hermes"
+  static let defaultAgentMemoryEnabled = true
+  static let defaultAutoActionRouting = true
 }
 
 extension AIProvider {

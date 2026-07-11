@@ -15,6 +15,7 @@ struct SettingsView: View {
   @AppStorage(QuillIOSSettingsKey.selectedModel) private var selectedModel: String = QuillIOSSettingsKey.defaultModel
   @AppStorage(QuillIOSSettingsKey.aiProvider) private var aiProviderRaw: String = QuillIOSSettingsKey.defaultProvider
   @AppStorage(QuillIOSSettingsKey.voiceCommandsEnabled) private var voiceCommandsEnabled: Bool = QuillIOSSettingsKey.defaultVoiceCommandsEnabled
+  @AppStorage(QuillIOSSettingsKey.autoActionRouting) private var autoActionRouting: Bool = QuillIOSSettingsKey.defaultAutoActionRouting
   @AppStorage(CustomAIModesStorage.userDefaultsKey) private var customModesData: Data = Data()
   @AppStorage(IntegrationConnectionStore.userDefaultsKey) private var integrationData: Data = Data()
   @AppStorage(ErrorMonitoringSettings.crashReportingEnabledKey) private var crashReportingEnabled: Bool = false
@@ -33,6 +34,12 @@ struct SettingsView: View {
     let count = IntegrationConnectionStore.decode(integrationData).count
     let cap = IntegrationLimits.freeTierMaxConnections
     return "\(count)/\(cap)"
+  }
+
+  /// Trailing accessory for the Agent row — the user's agent name.
+  private var agentNameLabel: String {
+    UserDefaults.standard.string(forKey: QuillIOSSettingsKey.agentName)
+      ?? QuillIOSSettingsKey.defaultAgentName
   }
 
   /// Trailing accessory for the Google Account row. Shows the cached email
@@ -146,10 +153,11 @@ struct SettingsView: View {
 
         Section {
           Toggle("Inline voice commands", isOn: $voiceCommandsEnabled)
+          Toggle("Auto-detect actions", isOn: $autoActionRouting)
         } header: {
           Text("Dictation")
         } footer: {
-          Text("When on, phrases like \"period\", \"comma\", \"new paragraph\", and \"new line\" are converted to punctuation and line breaks as you dictate — instead of being transcribed literally. Applies before AI cleanup.")
+          Text("Voice commands convert phrases like \"period\" and \"new paragraph\" into punctuation as you dictate. Auto-detect actions routes dictations that sound like commands (\"remind me to…\", \"add to Todoist…\") to the agent instead of the note — the bolt button always runs actions regardless.")
         }
 
         Section {
@@ -221,10 +229,21 @@ struct SettingsView: View {
 
         Section {
           NavigationLink {
-            IntegrationsView()
+            AgentSettingsView()
           } label: {
             HStack {
-              Label("Integrations", systemImage: "app.connected.to.app.below.fill")
+              Label("Agent", systemImage: "sparkles")
+              Spacer()
+              Text(agentNameLabel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+          }
+          NavigationLink {
+            ConnectionsView()
+          } label: {
+            HStack {
+              Label("Connections", systemImage: "app.connected.to.app.below.fill")
               Spacer()
               Text(integrationCountLabel)
                 .font(.caption)
@@ -234,7 +253,7 @@ struct SettingsView: View {
         } header: {
           Text("Productivity")
         } footer: {
-          Text("Send dictations into Todoist, Apple Reminders, Notion, Things, Slack, Linear. Free plan includes \(IntegrationLimits.freeTierMaxConnections) — Pro unlocks all.")
+          Text("Send dictations into Todoist, Apple Reminders, Gmail, Notion, Linear, Dex, and anything with an MCP server. Free plan includes \(IntegrationLimits.freeTierMaxConnections) — Pro unlocks all.")
         }
 
         Section {
