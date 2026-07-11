@@ -49,6 +49,46 @@ public actor MCPToolCatalog {
     entries[serverID] = nil
   }
 
+  /// property name → declared JSON Schema type ("integer", "number",
+  /// "boolean", "string", …) from the cached tools/list entry. Used to
+  /// coerce the LLM's string arguments before a tools/call.
+  public func propertyTypes(serverID: UUID, toolName: String) -> [String: String] {
+    guard let entry = entries[serverID],
+          let tool = entry.tools.first(where: { $0.name == toolName }),
+          let schemaJSON = tool.inputSchemaJSON,
+          let data = schemaJSON.data(using: .utf8),
+          let schema = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let properties = schema["properties"] as? [String: Any]
+    else { return [:] }
+
+    var types: [String: String] = [:]
+    for (name, spec) in properties {
+      if let spec = spec as? [String: Any], let type = spec["type"] as? String {
+        types[name] = type
+      }
+    }
+    return types
+  }
+
+  /// Coerce the planner's string arguments to the schema's declared types.
+  /// Unknown properties stay strings.
+  public static func coerceArguments(_ stringArgs: [String: String], types: [String: String]) -> [String: Any] {
+    var result: [String: Any] = [:]
+    for (key, value) in stringArgs {
+      switch types[key] {
+      case "integer":
+        result[key] = Int(value) ?? value
+      case "number":
+        result[key] = Double(value) ?? value
+      case "boolean":
+        result[key] = (value as NSString).boolValue
+      default:
+        result[key] = value
+      }
+    }
+    return result
+  }
+
   /// Renders the cached catalog as a prompt section for the action parser.
   /// Returns nil when no enabled server has cached tools — the prompt stays
   /// unchanged and the LLM never invents MCP calls.

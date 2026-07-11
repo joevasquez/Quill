@@ -23,25 +23,33 @@ public struct NoteTextView: View {
   public var textColor: Color = .primary
   public var bulletColor: Color = .primary
   public var headingColor: Color? = nil
+  /// When set, `- [ ]` / `- [x]` lines render as tappable checkboxes and
+  /// a tap calls back with the line index (into `text.components(
+  /// separatedBy: "\n")`) so the owner can flip the marker in storage —
+  /// see `MarkdownCheckbox.toggleLine`. When nil, checkboxes render as
+  /// static glyphs (macOS read-only viewer).
+  public var onToggleCheckbox: ((Int) -> Void)? = nil
 
   public init(
     text: String,
     font: Font = .body,
     textColor: Color = .primary,
     bulletColor: Color = .primary,
-    headingColor: Color? = nil
+    headingColor: Color? = nil,
+    onToggleCheckbox: ((Int) -> Void)? = nil
   ) {
     self.text = text
     self.font = font
     self.textColor = textColor
     self.bulletColor = bulletColor
     self.headingColor = headingColor
+    self.onToggleCheckbox = onToggleCheckbox
   }
 
   public var body: some View {
     VStack(alignment: .leading, spacing: 4) {
-      ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-        render(line: line)
+      ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+        render(line: line, index: index)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -52,12 +60,30 @@ public struct NoteTextView: View {
   }
 
   @ViewBuilder
-  private func render(line: String) -> some View {
+  private func render(line: String, index: Int) -> some View {
     let leadingSpaces = line.prefix { $0 == " " }.count
     let trimmed = line.trimmingCharacters(in: .whitespaces)
 
     if trimmed.isEmpty {
       Color.clear.frame(height: 6)
+    } else if let (checked, content) = matchCheckbox(trimmed) {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Button {
+          onToggleCheckbox?(index)
+        } label: {
+          Image(systemName: checked ? "checkmark.square.fill" : "square")
+            .font(font)
+            .foregroundStyle(checked ? bulletColor : textColor.opacity(0.55))
+        }
+        .buttonStyle(.plain)
+        .disabled(onToggleCheckbox == nil)
+        Text(inline(content))
+          .font(font)
+          .strikethrough(checked, color: textColor.opacity(0.5))
+          .foregroundStyle(checked ? textColor.opacity(0.5) : textColor)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .padding(.leading, CGFloat(leadingSpaces) * 6)
     } else if let heading = matchHeading(trimmed) {
       Text(inline(heading))
         .font(font.weight(.bold))
@@ -87,6 +113,12 @@ public struct NoteTextView: View {
     if s.hasPrefix("- ") { return String(s.dropFirst(2)) }
     if s.hasPrefix("* ") { return String(s.dropFirst(2)) }
     if s.hasPrefix("• ") { return String(s.dropFirst(2)) }
+    return nil
+  }
+
+  private func matchCheckbox(_ s: String) -> (checked: Bool, content: String)? {
+    if s.hasPrefix("- [ ] ") { return (false, String(s.dropFirst(6))) }
+    if s.hasPrefix("- [x] ") || s.hasPrefix("- [X] ") { return (true, String(s.dropFirst(6))) }
     return nil
   }
 

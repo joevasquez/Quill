@@ -12,6 +12,12 @@
 
 import Foundation
 
+/// App-defined errors that carry an HTTP status can conform so the
+/// classifier can apply the 408/429/5xx rule without knowing the type.
+public protocol HTTPStatusCarrying {
+  var httpStatusCode: Int? { get }
+}
+
 public enum QueueableErrorClassifier {
   /// Returns true when retrying this error after connectivity returns is
   /// likely to succeed.
@@ -54,10 +60,13 @@ public enum QueueableErrorClassifier {
       return queueableCodes.contains(nsError.code)
     }
 
-    // App-defined errors carrying an HTTP status code as their
-    // `localizedDescription` or as an associated value: callers who know
-    // the type can pre-filter via `isQueueable(httpStatus:)`. Without
-    // that hint, we can't safely decide here — bias to NOT queueing
+    // App-defined errors that expose their HTTP status (e.g.
+    // `LLMTransportError`) get the standard 408/429/5xx rule.
+    if let carrier = error as? HTTPStatusCarrying, let status = carrier.httpStatusCode {
+      return isQueueable(httpStatus: status)
+    }
+
+    // Everything else: we can't safely decide — bias to NOT queueing
     // because a 4xx (client error) replayed will fail the same way.
     return false
   }
