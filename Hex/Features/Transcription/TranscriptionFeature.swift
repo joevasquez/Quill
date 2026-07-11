@@ -123,6 +123,9 @@ struct TranscriptionFeature {
     case inlineEditUndo
 
     // Action mode
+    /// A command typed (not spoken) via the menu bar's "Type a Command…"
+    /// panel — runs the same agent pipeline as a dictated action.
+    case typedActionSubmitted(String)
     case actionIntentParsed(ActionIntent)
     case multiActionIntentsParsed([ActionIntent])
     case actionParsingFailed(String)
@@ -373,6 +376,82 @@ struct TranscriptionFeature {
         )
 
       // MARK: - Action Mode
+
+      case let .typedActionSubmitted(text):
+        // Typed commands run the same agent pipeline as spoken ones —
+        // routine authoring, trigger fast-path, memory context, MCP —
+        // just without the recorder/Whisper front-half (and without a
+        // history entry: there's no audio, and the panel is the record).
+        let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typed.isEmpty else { return .none }
+        state.isAIProcessing = true
+        state.lastActionTranscript = typed
+        state.$usageStats.withLock { stats in
+          stats.actionCount += 1
+          stats.totalWordsTranscribed += transcriptionWordCount(of: typed)
+        }
+        let typedAgentName = state.hexSettings.agentName
+        let typedMemoryEnabled = state.hexSettings.agentMemoryEnabled
+        let typedProvider = state.hexSettings.aiProvider
+        return .run { [actionParsing] send in
+          if let routineDescription = RoutineMatcher.authoringRequest(transcript: typed, agentName: typedAgentName) {
+            do {
+              let draft = try await actionParsing.parseRoutine(routineDescription, typedProvider)
+              await RoutineStore.shared.add(
+                Routine(name: draft.name, triggerPhrases: [draft.triggerPhrase], steps: draft.actions)
+              )
+              await send(.aiProcessingFinished)
+              await send(.routineSaved(draft))
+            } catch {
+              await send(.aiProcessingFinished)
+              if let actionError = error as? ActionParsingError, case .missingAPIKey = actionError {
+                await send(.actionModeNeedsAPIKey)
+              } else {
+                await send(.actionParsingFailed(typed))
+              }
+            }
+            return
+          }
+
+          let routines = await RoutineStore.shared.loadAll()
+          if let routine = RoutineMatcher.match(transcript: typed, routines: routines) {
+            await RoutineStore.shared.recordRun(id: routine.id)
+            await send(.aiProcessingFinished)
+            await send(.routineTriggered(routine))
+            return
+          }
+
+          do {
+            let response = try await actionParsing.parseMulti(typed, typedProvider, nil)
+            await send(.aiProcessingFinished)
+            if response.isSingleAction, let intent = response.actions.first,
+               intent.actionType != .mcpCall, intent.actionType != .open {
+              await send(.actionIntentParsed(intent))
+            } else {
+              await send(.multiActionIntentsParsed(response.actions))
+            }
+            if typedMemoryEnabled {
+              Task {
+                if let candidates = try? await actionParsing.extractMemory(typed, typedProvider),
+                   !candidates.isEmpty {
+                  await MemoryStore.shared.upsert(candidates)
+                }
+              }
+            }
+          } catch {
+            await send(.aiProcessingFinished)
+            if let actionError = error as? ActionParsingError, case .missingAPIKey = actionError {
+              await send(.actionModeNeedsAPIKey)
+            } else if QueueableErrorClassifier.isQueueable(error) {
+              await ActionQueueManager.shared.enqueueTranscript(
+                typed, provider: typedProvider, lastError: error.localizedDescription
+              )
+              await send(.actionParsingQueued)
+            } else {
+              await send(.actionParsingFailed(typed))
+            }
+          }
+        }
 
       case let .actionIntentParsed(intent):
         // Apply hard-lock: if the user pre-selected an integration on the

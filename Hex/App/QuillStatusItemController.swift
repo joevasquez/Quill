@@ -156,6 +156,10 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
     pasteItem.target = self
     appMenu.addItem(pasteItem)
 
+    let typeCommand = NSMenuItem(title: "Type a Command…", action: #selector(openTypedAction), keyEquivalent: "t")
+    typeCommand.target = self
+    appMenu.addItem(typeCommand)
+
     appMenu.addItem(.separator())
 
     let modeItem = NSMenuItem(title: "Mode", action: nil, keyEquivalent: "")
@@ -252,6 +256,10 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
 
   @objc private func checkForUpdates() { CheckForUpdatesViewModel.shared.checkForUpdates() }
   @objc private func pasteLastTranscript() { store.send(.pasteLastTranscript) }
+
+  @objc private func openTypedAction() {
+    TypedActionPanelController.shared.show(store: transcriptionStore)
+  }
   @objc private func openSettings() { onOpenSettings() }
   @objc private func openSettingsFromPending() { onOpenSettings() }
   @objc private func quit() { NSApplication.shared.terminate(nil) }

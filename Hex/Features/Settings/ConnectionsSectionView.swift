@@ -2,16 +2,19 @@
 //  ConnectionsSectionView.swift
 //  Quill (macOS)
 //
-//  MCP-backed connections for the Integrations tab — the macOS half of
-//  the unified "Connections" surface. Featured brands from the shared
-//  `ConnectionDirectory` connect with one click (creates an
-//  `MCPServerConfig` + auto-starts the browser OAuth flow on the first
-//  401); custom servers get the full management row. Moved here from
-//  AgentSectionView so native integrations and MCP services live on one
-//  settings tab; the Agent tab keeps identity/routines/memory.
+//  THE connections surface on the Integrations tab — one "Apps &
+//  services" list where native integrations (EventKit / Todoist /
+//  Google) and featured MCP-backed brands from `ConnectionDirectory`
+//  render as the same kind of row, so the user never learns which
+//  protocol a row uses. Featured brands connect with one click
+//  (creates an `MCPServerConfig` + auto-starts the browser OAuth flow
+//  on the first 401); "Custom servers" below is the power-user escape
+//  hatch. Absorbed the old IntegrationsSectionView and the MCP section
+//  from AgentSectionView; the Agent tab keeps identity/routines/memory.
 //
 
 import Dependencies
+import EventKit
 import HexCore
 import Inject
 import Sharing
@@ -21,6 +24,12 @@ struct ConnectionsSectionView: View {
   @ObserveInjection var inject
   @Shared(.hexSettings) var hexSettings: HexSettings
 
+  // Native integration connection state — same UserDefaults key as iOS.
+  @AppStorage(IntegrationConnectionStore.userDefaultsKey)
+  private var connectedData: Data = Data()
+  @State private var showingTodoistSheet = false
+  @State private var showingGoogleOAuthSheet = false
+
   @State private var mcpToolCounts: [UUID: Int] = [:]
   @State private var mcpErrors: [UUID: String] = [:]
   @State private var mcpSignedIn: [UUID: Bool] = [:]
@@ -28,9 +37,19 @@ struct ConnectionsSectionView: View {
   @State private var showAddMCPServer = false
   @State private var editingMCP: MCPEditContext?
 
+  /// Native integrations with a working send adapter. Everything else
+  /// connects through MCP.
+  private static let nativeIdentifiers: [Integration.Identifier] = [
+    .appleReminders, .calendar, .todoist, .gmail, .googleCalendar,
+  ]
+
+  private var nativeIntegrations: [Integration] {
+    Integration.all.filter { Self.nativeIdentifiers.contains($0.identifier) }
+  }
+
   var body: some View {
     Form {
-      featuredSection
+      appsSection
       customSection
     }
     .formStyle(.grouped)
@@ -45,23 +64,180 @@ struct ConnectionsSectionView: View {
         Task { await editMCPServer(ctx.server, name: name, url: url, token: token, removeToken: removeToken) }
       }
     }
+    .sheet(isPresented: $showingTodoistSheet) {
+      TodoistTokenSheet(onConnected: {
+        var current = connected
+        current.insert(.todoist)
+        connectedData = IntegrationConnectionStore.encode(current)
+      })
+    }
+    .sheet(isPresented: $showingGoogleOAuthSheet) {
+      GoogleOAuthSheet(onConnected: {
+        var current = connected
+        current.insert(.gmail)
+        current.insert(.googleCalendar)
+        connectedData = IntegrationConnectionStore.encode(current)
+      })
+    }
     .enableInjection()
   }
 
-  // MARK: - Featured brands
+  // MARK: - Apps & services (native + featured, one list)
 
-  private var featuredSection: some View {
+  private var appsSection: some View {
     Section {
+      ForEach(nativeIntegrations) { integration in
+        nativeRow(integration)
+          .padding(.vertical, 2)
+      }
       ForEach(ConnectionDirectory.featured) { brand in
         featuredRow(brand)
+          .padding(.vertical, 2)
+      }
+      if connectedFreeCount >= IntegrationLimits.freeTierMaxConnections,
+         nativeIntegrations.contains(where: { !isConnected($0) && !$0.requiresPro }) {
+        Text("Free plan is capped at \(IntegrationLimits.freeTierMaxConnections) connected integrations. Disconnect one to swap, or upgrade to Pro for unlimited.")
+          .font(.caption)
+          .foregroundStyle(.orange)
       }
     } header: {
-      Text("More apps & services")
+      Text("Apps & services")
     } footer: {
-      Text("One-click connections powered by each service's MCP server — most open a browser sign-in. Everything connected here becomes voice actions, same as the integrations above.")
+      Text("Everything here becomes voice actions — \u{201C}remind me Friday to review the launch deck\u{201D} becomes a Todoist task; \u{201C}log a note on Joe in Dex\u{201D} calls the service directly. Rows without a native adapter connect through each service\u{2019}s MCP server (usually a quick browser sign-in).")
         .settingsCaption()
     }
   }
+
+  // MARK: - Native integration rows
+
+  private func nativeRow(_ integration: Integration) -> some View {
+    HStack(alignment: .center, spacing: 10) {
+      RoundedRectangle(cornerRadius: 6, style: .continuous)
+        .fill(Color(hex: integration.tintHex) ?? .secondary)
+        .frame(width: 26, height: 26)
+        .overlay(
+          Image(systemName: integration.systemImage)
+            .foregroundStyle(.white)
+            .font(.system(size: 13, weight: .semibold))
+        )
+      VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 6) {
+          Text(integration.name)
+            .font(.subheadline.weight(.medium))
+          if integration.requiresPro {
+            Text("PRO")
+              .font(.caption2.weight(.bold))
+              .foregroundStyle(.white)
+              .padding(.horizontal, 6)
+              .padding(.vertical, 1)
+              .background(Capsule().fill(Color.purple))
+          }
+        }
+        Text(isConnected(integration) ? "Connected" : integration.tagline)
+          .font(.caption)
+          .foregroundStyle(isConnected(integration) ? .green : .secondary)
+          .lineLimit(2)
+      }
+      Spacer()
+      Button(isConnected(integration) ? "Disconnect" : "Connect") {
+        toggle(integration)
+      }
+      .controlSize(.small)
+      .disabled(!canConnect(integration) && !isConnected(integration))
+    }
+  }
+
+  private var connected: Set<Integration.Identifier> {
+    IntegrationConnectionStore.decode(connectedData)
+  }
+
+  /// Free-tier cap counts only non-Pro integrations — Pro ones (Gmail,
+  /// Google Calendar) come in through their own OAuth path and would
+  /// otherwise squeeze out the free set after one Google sign-in.
+  private var connectedFreeCount: Int {
+    connected.filter { id in
+      Integration.all.first(where: { $0.identifier == id })?.requiresPro == false
+    }.count
+  }
+
+  private func isConnected(_ integration: Integration) -> Bool {
+    connected.contains(integration.identifier)
+  }
+
+  private func canConnect(_ integration: Integration) -> Bool {
+    if isConnected(integration) { return true }  // so they can still disconnect
+    if integration.requiresPro { return false }
+    return connectedFreeCount < IntegrationLimits.freeTierMaxConnections
+  }
+
+  private func toggle(_ integration: Integration) {
+    var current = connected
+    if current.contains(integration.identifier) {
+      current.remove(integration.identifier)
+      connectedData = IntegrationConnectionStore.encode(current)
+      switch integration.identifier {
+      case .todoist:
+        Task {
+          @Dependency(\.keychain) var keychain
+          await keychain.delete(KeychainKey.todoistAPIToken)
+        }
+      case .gmail, .googleCalendar:
+        var updated = IntegrationConnectionStore.decode(connectedData)
+        updated.remove(.gmail)
+        updated.remove(.googleCalendar)
+        connectedData = IntegrationConnectionStore.encode(updated)
+        Task {
+          @Dependency(\.googleOAuth) var googleOAuth
+          await googleOAuth.disconnect()
+        }
+      default:
+        break
+      }
+      return
+    }
+
+    switch integration.identifier {
+    case .appleReminders:
+      Task {
+        let store = EKEventStore()
+        let granted = (try? await store.requestFullAccessToReminders()) ?? false
+        if granted {
+          var updated = connected
+          updated.insert(.appleReminders)
+          connectedData = IntegrationConnectionStore.encode(updated)
+        }
+      }
+    case .calendar:
+      Task {
+        let store = EKEventStore()
+        let granted = (try? await store.requestFullAccessToEvents()) ?? false
+        if granted {
+          var updated = connected
+          updated.insert(.calendar)
+          connectedData = IntegrationConnectionStore.encode(updated)
+        }
+      }
+    case .todoist:
+      showingTodoistSheet = true
+    case .gmail, .googleCalendar:
+      // Already signed in via the Google Account section → just flip
+      // the integration bit; otherwise run the OAuth sheet.
+      Task {
+        @Dependency(\.googleOAuth) var googleOAuth
+        if await googleOAuth.isAuthorized() {
+          var updated = connected
+          updated.insert(integration.identifier)
+          connectedData = IntegrationConnectionStore.encode(updated)
+        } else {
+          showingGoogleOAuthSheet = true
+        }
+      }
+    default:
+      break
+    }
+  }
+
+  // MARK: - Featured brands
 
   /// The stored server backing a featured brand, if connected.
   private func server(for brand: ConnectionBrand) -> MCPServerConfig? {

@@ -163,11 +163,10 @@ struct IntegrationsSettingsTabView: View {
     ScrollView {
       VStack(spacing: 0) {
         GoogleAccountSectionView(store: store)
-        IntegrationsSectionView(store: store)
-        // MCP-backed services (featured one-click connects + custom
-        // servers) — unified onto this tab so native integrations and
-        // MCP live in one place; the Agent tab keeps identity/routines/
-        // memory.
+        // One unified surface: native integrations + featured MCP
+        // brands render as the same kind of row ("Apps & services"),
+        // with custom MCP servers below. The Agent tab keeps identity/
+        // routines/memory.
         ConnectionsSectionView()
       }
     }

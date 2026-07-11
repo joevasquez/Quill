@@ -380,9 +380,32 @@ final class RecordingViewModel: ObservableObject {
     await transcriptionTask?.value
   }
 
+  /// Typed command entry point — same agent pipeline as voice (routines,
+  /// memory, MCP, confirmation sheet), just skipping the recorder +
+  /// Whisper. For meetings, trains, and anywhere talking is awkward.
+  func runTypedAction(_ text: String, provider: AIProvider) async {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    switch phase {
+    case .idle, .done, .error:
+      break
+    default:
+      return  // recording/transcribing in flight — don't fight it
+    }
+    isActionRecording = true
+    wasAutoRouted = false
+    matchedRoutine = nil
+    routineDraft = nil
+    parsedMultiIntents = nil
+    recordingSessionID = UUID()
+    rawTranscript = trimmed
+    await routeActionTranscript(trimmed, provider: provider, sessionID: recordingSessionID)
+  }
+
   /// Shared Action-mode continuation: routine authoring → saved-routine
-  /// trigger → LLM parse. Called by the Action FAB path and by Auto
-  /// routing when a dictation sounds like a command.
+  /// trigger → LLM parse. Called by the Action FAB path, by Auto
+  /// routing when a dictation sounds like a command, and by typed
+  /// commands.
   private func routeActionTranscript(
     _ cleaned: String,
     provider: AIProvider,
@@ -513,6 +536,7 @@ struct ContentView: View {
   @State private var editingNoteID: UUID?
   @State private var showingMultiActionConfirmation = false
   @State private var showingRoutineSave = false
+  @State private var showingTypedAction = false
   @StateObject private var multiActionVM = MultiActionConfirmationViewModel()
   /// Transient banner state — set true when an action mode item is queued
   /// because we're offline. Auto-clears after a few seconds via the task
@@ -664,6 +688,11 @@ struct ContentView: View {
           RoutineSaveSheet(draft: draft) {
             vm.routineDraft = nil
           }
+        }
+      }
+      .sheet(isPresented: $showingTypedAction) {
+        TypedActionSheet { text in
+          Task { await vm.runTypedAction(text, provider: aiProvider) }
         }
       }
       .sheet(isPresented: Binding(
@@ -987,6 +1016,7 @@ struct ContentView: View {
             )
           }
         },
+        onTapType: { showingTypedAction = true },
         onRequestSettings: { showingSettings = true }
       )
     }

@@ -28,6 +28,7 @@ struct QuillFABCluster: View {
   let onTapCamera: () -> Void
   let onTapAction: () -> Void
   let onTapMic: () -> Void
+  let onTapType: () -> Void
   let onRequestSettings: () -> Void
 
   @State private var expanded = false
@@ -74,6 +75,9 @@ struct QuillFABCluster: View {
         .transition(.move(edge: .bottom).combined(with: .opacity))
 
         photoFAB
+          .transition(.move(edge: .bottom).combined(with: .opacity))
+
+        typeFAB
           .transition(.move(edge: .bottom).combined(with: .opacity))
       }
 
@@ -199,6 +203,19 @@ struct QuillFABCluster: View {
     }
     .buttonStyle(.plain)
     .accessibilityLabel("Add photo")
+  }
+
+  // MARK: - Type a command
+
+  private var typeFAB: some View {
+    Button {
+      onTapType()
+      expanded = false
+    } label: {
+      fabBubble(glyph: "keyboard", tint: QuillDesign.actionAccent, glyphSize: 20)
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("Type a command")
   }
 
   // MARK: - Shared bubble
