@@ -638,6 +638,11 @@ private struct NoteEditorView: View {
         }
         .help("Bullet List")
 
+        Button { insertAtLineStart("- [ ] ") } label: {
+          Image(systemName: "checklist")
+        }
+        .help("Checkbox")
+
         Button { insertAtLineStart("1. ") } label: {
           Image(systemName: "list.number")
         }
@@ -827,8 +832,18 @@ private struct MarkdownTextEditor: NSViewRepresentable {
         length: 0
       )
       tv.setSelectedRange(clamped)
-      MarkdownHighlighter.highlight(tv)
+      Self.applyHighlight(tv)
     }
+  }
+
+  /// Runs the shared HexCore highlighter over the view's storage with
+  /// undo registration suspended — highlighting is cosmetic, not an edit.
+  static func applyHighlight(_ tv: NSTextView) {
+    guard let storage = tv.textStorage else { return }
+    let undoManager = tv.undoManager
+    undoManager?.disableUndoRegistration()
+    MarkdownHighlighter.highlight(storage)
+    undoManager?.enableUndoRegistration()
   }
 
   final class Coordinator: NSObject, NSTextViewDelegate {
@@ -841,235 +856,28 @@ private struct MarkdownTextEditor: NSViewRepresentable {
     func textDidChange(_ notification: Notification) {
       guard let tv = notification.object as? NSTextView else { return }
       parent.text = tv.string
-      MarkdownHighlighter.highlight(tv)
+      MarkdownTextEditor.applyHighlight(tv)
     }
 
-    /// Auto-continue markdown lists on Enter: "- ", "1. ", and "> "
-    /// carry to the next line (numbered lists increment); pressing Enter
-    /// on an EMPTY item deletes the marker and exits the list.
+    /// Auto-continue markdown lists on Enter — shared logic in HexCore's
+    /// `MarkdownListContinuation` (same behavior on iOS).
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
       guard commandSelector == #selector(NSResponder.insertNewline(_:)) else { return false }
-      let ns = textView.string as NSString
       let sel = textView.selectedRange()
-      guard sel.length == 0, sel.location <= ns.length else { return false }
+      guard sel.length == 0 else { return false }
 
-      let lineRange = ns.lineRange(for: NSRange(location: sel.location, length: 0))
-      let headRange = NSRange(location: lineRange.location, length: sel.location - lineRange.location)
-      let head = ns.substring(with: headRange)
-      let indent = String(head.prefix(while: { $0 == " " || $0 == "\t" }))
-      let trimmed = head.trimmingCharacters(in: .whitespaces)
-
-      // Empty item + Enter = exit the list (clear the marker, stay put).
-      let emptyMarkers = ["-", ">", "- [ ]", "- [x]"]
-      if emptyMarkers.contains(trimmed) || trimmed.range(of: #"^\d+\.$"#, options: .regularExpression) != nil {
-        textView.insertText("", replacementRange: headRange)
+      switch MarkdownListContinuation.handleNewline(text: textView.string, caretLocation: sel.location) {
+      case .exitList(let clearRange):
+        textView.insertText("", replacementRange: clearRange)
         return true
-      }
-
-      let continuation: String
-      if trimmed.hasPrefix("- ") {
-        continuation = "\n\(indent)- "
-      } else if trimmed.hasPrefix("> ") {
-        continuation = "\n\(indent)> "
-      } else if trimmed.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil {
-        let number = Int(trimmed.prefix(while: \.isNumber)) ?? 0
-        continuation = "\n\(indent)\(number + 1). "
-      } else {
+      case .continueList(let insert):
+        textView.insertText(insert, replacementRange: sel)
+        return true
+      case .none:
         return false
       }
-      textView.insertText(continuation, replacementRange: sel)
-      return true
     }
   }
 }
 
-// MARK: - Live markdown highlighter
-
-/// Applies visual formatting to markdown syntax in an `NSTextView`
-/// without changing the underlying text. Markers (`**`, `_`, `~~`,
-/// `` ` ``) are rendered in a near-invisible color while the content
-/// between them gets the appropriate typographic treatment (bold,
-/// italic, strikethrough, monospace). Headings and bullets get
-/// styled at the line level.
-private enum MarkdownHighlighter {
-  /// Slightly larger than the system default — notes are prose, not UI
-  /// chrome, and the extra 2pt plus line spacing reads much better in a
-  /// full-width editor.
-  static let baseSize = NSFont.systemFontSize + 2
-  static let baseFont = NSFont.systemFont(ofSize: baseSize)
-
-  static let paragraphStyle: NSParagraphStyle = {
-    let style = NSMutableParagraphStyle()
-    style.lineSpacing = 3
-    style.paragraphSpacing = 4
-    return style
-  }()
-
-  static func highlight(_ textView: NSTextView) {
-    guard let textStorage = textView.textStorage else { return }
-    let string = textStorage.string
-    let fullRange = NSRange(location: 0, length: (string as NSString).length)
-    guard fullRange.length > 0 else { return }
-
-    // Suspend undo registration — highlighting is cosmetic, not an edit.
-    let undoManager = textView.undoManager
-    undoManager?.disableUndoRegistration()
-    textStorage.beginEditing()
-
-    // 1. Reset everything to the base style.
-    let baseAttrs: [NSAttributedString.Key: Any] = [
-      .font: baseFont,
-      .foregroundColor: NSColor.labelColor,
-      .strikethroughStyle: 0,
-      .paragraphStyle: paragraphStyle,
-    ]
-    textStorage.setAttributes(baseAttrs, range: fullRange)
-
-    let markerAttrs: [NSAttributedString.Key: Any] = [
-      .foregroundColor: NSColor.tertiaryLabelColor.withAlphaComponent(0.35),
-      .font: NSFont.systemFont(ofSize: baseSize * 0.85),
-    ]
-
-    // 2. Bold: **text**
-    applyInline(
-      pattern: #"\*\*(.+?)\*\*"#,
-      storage: textStorage, string: string,
-      contentAttrs: [.font: NSFont.boldSystemFont(ofSize: baseSize)],
-      markerAttrs: markerAttrs, markerLen: 2
-    )
-
-    // 3. Italic: _text_ (word-boundary aware to avoid matching snake_case)
-    applyInline(
-      pattern: #"(?<![a-zA-Z0-9])_(.+?)_(?![a-zA-Z0-9])"#,
-      storage: textStorage, string: string,
-      contentAttrs: [.font: NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)],
-      markerAttrs: markerAttrs, markerLen: 1
-    )
-
-    // 4. Strikethrough: ~~text~~
-    applyInline(
-      pattern: #"~~(.+?)~~"#,
-      storage: textStorage, string: string,
-      contentAttrs: [
-        .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-        .strikethroughColor: NSColor.secondaryLabelColor,
-      ],
-      markerAttrs: markerAttrs, markerLen: 2
-    )
-
-    // 5. Inline code: `text`
-    applyInline(
-      pattern: #"`([^`]+)`"#,
-      storage: textStorage, string: string,
-      contentAttrs: [
-        .font: NSFont.monospacedSystemFont(ofSize: baseSize * 0.93, weight: .regular),
-        .backgroundColor: NSColor.quaternaryLabelColor.withAlphaComponent(0.3),
-      ],
-      markerAttrs: markerAttrs, markerLen: 1
-    )
-
-    // 6. Headings: # at line start
-    applyLinePattern(
-      pattern: #"^(#{1,3})\s+(.+)$"#,
-      storage: textStorage, string: string
-    ) { match in
-      let hashRange = match.range(at: 1)
-      let textRange = match.range(at: 2)
-      let level = hashRange.length // 1, 2, or 3
-      let headingSize = baseSize + CGFloat(4 - level) * 3 // #=+9, ##=+6, ###=+3
-      textStorage.addAttributes(markerAttrs, range: hashRange)
-      textStorage.addAttributes([
-        .font: NSFont.boldSystemFont(ofSize: headingSize),
-      ], range: textRange)
-    }
-
-    // 7. Bullets: - at line start
-    applyLinePattern(
-      pattern: #"^(-)\s+(.+)$"#,
-      storage: textStorage, string: string
-    ) { match in
-      let dashRange = match.range(at: 1)
-      textStorage.addAttributes([
-        .foregroundColor: NSColor.tertiaryLabelColor,
-      ], range: dashRange)
-    }
-
-    // 8. Numbered lists: "1. " at line start — marker de-emphasized
-    applyLinePattern(
-      pattern: #"^(\d+\.)\s+(.+)$"#,
-      storage: textStorage, string: string
-    ) { match in
-      textStorage.addAttributes([
-        .foregroundColor: NSColor.tertiaryLabelColor,
-      ], range: match.range(at: 1))
-    }
-
-    // 9. Blockquotes: "> " at line start — faded marker, italic content
-    applyLinePattern(
-      pattern: #"^(>)\s?(.*)$"#,
-      storage: textStorage, string: string
-    ) { match in
-      textStorage.addAttributes(markerAttrs, range: match.range(at: 1))
-      let contentRange = match.range(at: 2)
-      if contentRange.length > 0 {
-        textStorage.addAttributes([
-          .font: NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask),
-          .foregroundColor: NSColor.secondaryLabelColor,
-        ], range: contentRange)
-      }
-    }
-
-    textStorage.endEditing()
-    undoManager?.enableUndoRegistration()
-  }
-
-  /// Highlights an inline markdown pattern (e.g. `**bold**`). The
-  /// markers get faded styling; the content between them gets the
-  /// supplied attributes.
-  private static func applyInline(
-    pattern: String,
-    storage: NSTextStorage,
-    string: String,
-    contentAttrs: [NSAttributedString.Key: Any],
-    markerAttrs: [NSAttributedString.Key: Any],
-    markerLen: Int
-  ) {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
-    let nsString = string as NSString
-    let fullRange = NSRange(location: 0, length: nsString.length)
-
-    regex.enumerateMatches(in: string, range: fullRange) { match, _, _ in
-      guard let matchRange = match?.range, matchRange.length > markerLen * 2 else { return }
-
-      // Leading marker
-      let leading = NSRange(location: matchRange.location, length: markerLen)
-      storage.addAttributes(markerAttrs, range: leading)
-
-      // Content
-      let contentStart = matchRange.location + markerLen
-      let contentLength = matchRange.length - markerLen * 2
-      let content = NSRange(location: contentStart, length: contentLength)
-      storage.addAttributes(contentAttrs, range: content)
-
-      // Trailing marker
-      let trailing = NSRange(location: matchRange.location + matchRange.length - markerLen, length: markerLen)
-      storage.addAttributes(markerAttrs, range: trailing)
-    }
-  }
-
-  /// Runs a line-anchored regex and calls the handler for each match.
-  private static func applyLinePattern(
-    pattern: String,
-    storage: NSTextStorage,
-    string: String,
-    handler: (NSTextCheckingResult) -> Void
-  ) {
-    guard let regex = try? NSRegularExpression(pattern: pattern, options: .anchorsMatchLines) else { return }
-    let fullRange = NSRange(location: 0, length: (string as NSString).length)
-    regex.enumerateMatches(in: string, range: fullRange) { match, _, _ in
-      guard let match else { return }
-      handler(match)
-    }
-  }
-}
 #endif

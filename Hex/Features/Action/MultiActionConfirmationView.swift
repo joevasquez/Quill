@@ -507,16 +507,19 @@ struct MultiActionConfirmationView: View {
   }
 
   private func stepIcon(_ item: MultiActionConfirmationFeature.State.ActionItemState) -> String {
+    // Unified ConnectionTarget branding: known MCP servers (Dex, Notion…)
+    // get their directory icon; unknown ones the neutral puzzle piece.
     switch item.intent.actionType {
-    case .mcpCall: return "puzzlepiece.extension.fill"
-    case .open: return "globe"
+    case .mcpCall, .open: return ConnectionTarget.forIntent(item.intent).systemImage
     default: return integrationIcon(item.intent.targetIntegration)
     }
   }
 
   private func stepTint(_ item: MultiActionConfirmationFeature.State.ActionItemState) -> Color {
     switch item.intent.actionType {
-    case .mcpCall: return Color(hex: "8E8E93") ?? .gray
+    case .mcpCall:
+      return ConnectionTarget.forIntent(item.intent).tintHex.flatMap { Color(hex: $0) }
+        ?? Color(hex: "8E8E93") ?? .gray
     case .open: return Color(hex: "0A84FF") ?? .blue
     default: return integrationTint(item.intent.targetIntegration)
     }

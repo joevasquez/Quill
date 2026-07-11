@@ -74,6 +74,10 @@ struct OrbView: View {
   var pendingEditResult: TranscriptionFeature.PendingEditResult?
   var partialTranscript: String = ""
   var actionIntegrations: [Integration.Identifier] = []
+  /// Enabled MCP servers — shown as branded satellites alongside the
+  /// integrations (display + live intuition; tap-to-lock stays on
+  /// integrations, whose lock overrides the parsed target).
+  var mcpServerNames: [String] = []
   var lockedActionIntegration: Integration.Identifier?
   /// When mode is .auto, the detected sub-mode (dictate/edit/action).
   var autoDetectedMode: Mode = .dictate
@@ -86,7 +90,7 @@ struct OrbView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var displayedHue: Double = OrbHue.dictate
   @State private var displayedSaturation: Double = 0.5
-  @State private var intuitedTarget: Integration.Identifier?
+  @State private var intuitedTarget: OrbRingTarget?
 
   private var isLive: Bool { status != .idle }
   private var isListening: Bool { status == .recording }
@@ -121,9 +125,9 @@ struct OrbView: View {
     isListening ? min(1.0, meter.averagePower * 2.5) : 0
   }
 
-  /// The currently-highlighted integration: user lock wins, then AI intuition.
-  private var activeTarget: Integration.Identifier? {
-    lockedActionIntegration ?? intuitedTarget
+  /// The currently-highlighted target: user lock wins, then AI intuition.
+  private var activeTarget: OrbRingTarget? {
+    lockedActionIntegration.map { .integration($0) } ?? intuitedTarget
   }
 
   // MARK: Body
@@ -175,7 +179,11 @@ struct OrbView: View {
     .onChange(of: partialTranscript) { _, text in
       guard isActMode, lockedActionIntegration == nil else { return }
       withAnimation(.easeOut(duration: 0.25)) {
-        intuitedTarget = Self.intuitTarget(from: text, integrations: actionIntegrations)
+        intuitedTarget = Self.intuitRingTarget(
+          from: text,
+          integrations: actionIntegrations,
+          mcpServers: mcpServerNames
+        )
       }
     }
     .onChange(of: mode) { _, newMode in
@@ -474,8 +482,13 @@ struct OrbView: View {
   /// active target (locked or intuited) is always swapped into view.
   private static let maxVisibleSatellites = 6
 
-  private var visibleSatellites: [Integration.Identifier] {
-    let all = actionIntegrations
+  /// Integrations + enabled MCP servers, in one branded ring.
+  private var allSatellites: [OrbRingTarget] {
+    actionIntegrations.map { .integration($0) } + mcpServerNames.map { .mcp($0) }
+  }
+
+  private var visibleSatellites: [OrbRingTarget] {
+    let all = allSatellites
     guard all.count > Self.maxVisibleSatellites + 1 else { return all }
     var visible = Array(all.prefix(Self.maxVisibleSatellites))
     if let target = activeTarget, !visible.contains(target), all.contains(target) {
@@ -485,7 +498,7 @@ struct OrbView: View {
   }
 
   private var overflowSatelliteCount: Int {
-    max(0, actionIntegrations.count - visibleSatellites.count)
+    max(0, allSatellites.count - visibleSatellites.count)
   }
 
   private var satelliteRing: some View {
@@ -493,14 +506,21 @@ struct OrbView: View {
     let overflow = overflowSatelliteCount
     let total = visible.count + (overflow > 0 ? 1 : 0)
     return ZStack {
-      ForEach(Array(visible.enumerated()), id: \.element) { index, id in
+      ForEach(Array(visible.enumerated()), id: \.element) { index, target in
         OrbSatelliteTile(
-          identifier: id,
-          isTarget: activeTarget == id,
+          target: target,
+          isTarget: activeTarget == target,
           index: index,
           total: total,
           radius: OrbSize.satelliteRingRadius,
-          onTap: { onToggleActionIntegration(id) }
+          onTap: {
+            // Tap-to-lock only applies to integrations — the lock
+            // overrides the parsed intent's target, which has no MCP
+            // equivalent (the confirmation panel stays the arbiter).
+            if case .integration(let id) = target {
+              onToggleActionIntegration(id)
+            }
+          }
         )
       }
       if overflow > 0 {
@@ -528,12 +548,12 @@ struct OrbView: View {
   }
 
   private var satelliteTether: some View {
-    let integrations = visibleSatellites
+    let satellites = visibleSatellites
     let overflow = overflowSatelliteCount
-    let total = integrations.count + (overflow > 0 ? 1 : 0)
+    let total = satellites.count + (overflow > 0 ? 1 : 0)
     return Canvas { context, size in
       guard let target = activeTarget,
-            let index = integrations.firstIndex(of: target)
+            let index = satellites.firstIndex(of: target)
       else { return }
       let center = CGPoint(x: size.width / 2, y: size.height / 2)
       let angle = Self.satelliteAngle(index: index, total: total)
@@ -541,15 +561,12 @@ struct OrbView: View {
         x: center.x + OrbSize.satelliteRingRadius * cos(angle),
         y: center.y + OrbSize.satelliteRingRadius * sin(angle)
       )
-      let integration = Integration.all.first { $0.identifier == target }
-      let hue = integration?.satelliteHue ?? 200
-      let color = Color(hue: hue / 360.0, saturation: 0.6, brightness: 0.85)
       var path = Path()
       path.move(to: center)
       path.addLine(to: dest)
       context.stroke(
         path,
-        with: .color(color.opacity(0.6)),
+        with: .color(target.accentColor.opacity(0.6)),
         style: StrokeStyle(lineWidth: 1.5, dash: [3, 4])
       )
     }
@@ -559,12 +576,37 @@ struct OrbView: View {
 
   // MARK: - Destination classifier
 
+  /// Legacy integration-only entry point (used by the Corner Bloom's
+  /// destination rows). New callers use `intuitRingTarget`.
   static func intuitTarget(
     from text: String,
     integrations: [Integration.Identifier]
   ) -> Integration.Identifier? {
+    if case .integration(let id) = intuitRingTarget(from: text, integrations: integrations, mcpServers: []) {
+      return id
+    }
+    return nil
+  }
+
+  /// Scans the live transcript for a destination. Explicit MCP server
+  /// names beat integration keywords (a name mention is the strongest
+  /// possible signal); integration priority order is unchanged.
+  static func intuitRingTarget(
+    from text: String,
+    integrations: [Integration.Identifier],
+    mcpServers: [String]
+  ) -> OrbRingTarget? {
     guard !text.isEmpty else { return nil }
     let lowered = " " + text.lowercased() + " "
+
+    for server in mcpServers {
+      let name = server.lowercased().trimmingCharacters(in: .whitespaces)
+      guard !name.isEmpty else { continue }
+      if lowered.contains(" \(name) ") || lowered.contains(" \(name),") || lowered.contains(" \(name).") {
+        return .mcp(server)
+      }
+    }
+
     let priority: [Integration.Identifier] = [
       .todoist, .gmail, .googleCalendar, .appleReminders, .calendar,
       .notion, .things, .slack, .linear,
@@ -574,7 +616,7 @@ struct OrbView: View {
       let integration = Integration.all.first { $0.identifier == id }
       guard let keywords = integration?.intuitKeywords else { continue }
       for kw in keywords {
-        if lowered.contains(kw) { return id }
+        if lowered.contains(kw) { return .integration(id) }
       }
     }
     return nil
@@ -863,24 +905,47 @@ private struct OrbParticle: View {
   }
 }
 
-// MARK: - Satellite tile (Act-mode integration button)
+// MARK: - Satellite targets (integration OR MCP server)
+
+/// One tile on the Act-mode ring. Integrations keep their satellite hue
+/// and tap-to-lock; MCP servers get their directory branding (or a
+/// neutral steel tone for unknown servers) and highlight from intuition.
+enum OrbRingTarget: Hashable {
+  case integration(Integration.Identifier)
+  case mcp(String)
+
+  var connection: ConnectionTarget {
+    switch self {
+    case .integration(let id): .integration(id)
+    case .mcp(let name): .mcpServer(name)
+    }
+  }
+
+  var accentColor: Color {
+    switch self {
+    case .integration(let id):
+      let hue = Integration.all.first { $0.identifier == id }?.satelliteHue ?? 200
+      return Color(hue: hue / 360.0, saturation: 0.6, brightness: 0.85)
+    case .mcp:
+      if let hex = connection.tintHex, let color = Color(hex: hex) {
+        return color
+      }
+      return Color(hue: 220 / 360.0, saturation: 0.25, brightness: 0.75)
+    }
+  }
+}
+
+// MARK: - Satellite tile (Act-mode ring button)
 
 private struct OrbSatelliteTile: View {
-  let identifier: Integration.Identifier
+  let target: OrbRingTarget
   let isTarget: Bool
   let index: Int
   let total: Int
   let radius: CGFloat
   let onTap: () -> Void
 
-  private var integration: Integration? {
-    Integration.all.first { $0.identifier == identifier }
-  }
-
-  private var accentColor: Color {
-    let hue = integration?.satelliteHue ?? 200
-    return Color(hue: hue / 360.0, saturation: 0.6, brightness: 0.85)
-  }
+  private var accentColor: Color { target.accentColor }
 
   private var angle: CGFloat {
     OrbView.satelliteAngle(index: index, total: total)
@@ -890,7 +955,7 @@ private struct OrbSatelliteTile: View {
     let x = radius * cos(angle)
     let y = radius * sin(angle)
     Button(action: onTap) {
-      Image(systemName: integration?.systemImage ?? "questionmark.circle")
+      Image(systemName: target.connection.systemImage)
         .font(.system(size: 14, weight: .semibold))
         .foregroundStyle(isTarget ? .white : .white.opacity(0.7))
         .frame(width: OrbSize.satelliteTileSize, height: OrbSize.satelliteTileSize)
@@ -914,7 +979,7 @@ private struct OrbSatelliteTile: View {
     .buttonStyle(.plain)
     .offset(x: x, y: y)
     .animation(.spring(response: 0.35, dampingFraction: 0.7), value: isTarget)
-    .accessibilityLabel("Send to \(integration?.name ?? identifier.rawValue)")
+    .accessibilityLabel("Send to \(target.connection.displayName)")
   }
 }
 

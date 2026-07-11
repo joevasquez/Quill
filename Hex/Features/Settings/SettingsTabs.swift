@@ -164,6 +164,11 @@ struct IntegrationsSettingsTabView: View {
       VStack(spacing: 0) {
         GoogleAccountSectionView(store: store)
         IntegrationsSectionView(store: store)
+        // MCP-backed services (featured one-click connects + custom
+        // servers) — unified onto this tab so native integrations and
+        // MCP live in one place; the Agent tab keeps identity/routines/
+        // memory.
+        ConnectionsSectionView()
       }
     }
     .task { await store.send(.task).finish() }

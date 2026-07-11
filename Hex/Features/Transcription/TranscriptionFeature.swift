@@ -276,7 +276,7 @@ struct TranscriptionFeature {
         // In Auto mode, run the classifier on every partial transcript
         // update so the orb badge shifts in real time.
         if state.selectedMode == .auto {
-          state.autoDetectedMode = AutoModeClassifier.classifyPartial(text)
+          state.autoDetectedMode = AutoModeClassifier.classifyPartial(text).indicatorMode
         }
         return .none
 
@@ -1108,7 +1108,7 @@ private extension TranscriptionFeature {
         transcript: modifiedResult,
         hasSelection: state.inlineEditSelection != nil,
         hasIntegrations: !state.availableActionIntegrations.isEmpty
-      )
+      ).indicatorMode
       state.autoDetectedMode = effectiveMode
       let _hasSelection = state.inlineEditSelection != nil
       transcriptionFeatureLogger.info("Auto mode resolved to \(effectiveMode.rawValue) (hasSelection=\(_hasSelection))")
@@ -1674,6 +1674,7 @@ struct TranscriptionView: View {
           pendingEditResult: store.pendingEditResult,
           partialTranscript: store.partialTranscript,
           actionIntegrations: store.availableActionIntegrations,
+          mcpServerNames: store.hexSettings.mcpServers.filter(\.isEnabled).map(\.name),
           lockedActionIntegration: store.lockedActionIntegration,
           autoDetectedMode: store.autoDetectedMode,
           isPinnedToTop: store.hexSettings.hudPinnedToTop,
@@ -1725,5 +1726,19 @@ private enum ForceQuitCommandDetector {
       .components(separatedBy: CharacterSet.alphanumerics.inverted)
       .filter { !$0.isEmpty }
       .joined(separator: " ")
+  }
+}
+
+// MARK: - AutoModeClassifier bridging
+
+extension TranscriptionMode {
+  /// Maps the HexCore classifier's portable mode onto the macOS HUD's
+  /// mode enum (which additionally has `.auto`).
+  var indicatorMode: TranscriptionIndicatorView.Mode {
+    switch self {
+    case .dictate: .dictate
+    case .edit: .edit
+    case .action: .action
+    }
   }
 }

@@ -13,8 +13,8 @@ private let proLogger = HexLog.aiProcessing
 /// The proxy validates the caller's Google OAuth access token, checks Pro
 /// status in Firestore, and forwards the request to Anthropic.
 enum ProAIProxyClient {
-    /// Cloud Function endpoint. Update this after deploying the function.
-    static let proxyURL = "https://us-central1-quill-495210.cloudfunctions.net/quill-ai-proxy"
+    /// Cloud Function endpoint (defined once in `LLMTransport`).
+    static let proxyURL = LLMTransport.proProxyURL
 
     static func process(
         text: String,
@@ -22,44 +22,25 @@ enum ProAIProxyClient {
         accessToken: String,
         skipTranscriptWrapping: Bool = false
     ) async throws -> String {
-        let url = URL(string: proxyURL)!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 30
-
         let userMessage = skipTranscriptWrapping ? text : TranscriptWrapper.wrap(text)
 
-        let body: [String: Any] = [
-            "systemPrompt": systemPrompt,
-            "userMessage": userMessage,
-        ]
-
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        proLogger.info("Sending text to Pro AI proxy (\(text.count) chars)")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw ProAIError.invalidResponse
+        do {
+            let content = try await LLMTransport.complete(
+                userMessage: userMessage,
+                systemPrompt: systemPrompt,
+                credential: .proProxy(accessToken: accessToken)
+            )
+            proLogger.info("Pro AI processing complete (\(content.count) chars)")
+            return content
+        } catch let error as LLMTransportError {
+            // Preserve the historical error surface for existing callers.
+            switch error {
+            case .apiError(let code, let body):
+                throw ProAIError.apiError(code, body)
+            case .invalidResponse:
+                throw ProAIError.unexpectedFormat
+            }
         }
-
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "unknown"
-            proLogger.error("Pro AI proxy error \(httpResponse.statusCode): \(errorBody, privacy: .private)")
-            throw ProAIError.apiError(httpResponse.statusCode, errorBody)
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = json["content"] as? String
-        else {
-            throw ProAIError.unexpectedFormat
-        }
-
-        proLogger.info("Pro AI processing complete (\(content.count) chars)")
-        return content
     }
 }
 
