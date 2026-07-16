@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.23.0
+
+### Minor Changes
+
+- iOS: add an Appearance setting (Auto/Light/Dark) and remember the last capture mode across launches — the home rail and Settings stay in sync
+- 52455cb: iOS agent parity refresh: MCP servers with OAuth sign-in, multi-step actions with dependent-step chaining and answer extraction, routines, agent memory, and Pro-plan AI routing on iPhone
+- 52455cb: Branded action steps: MCP calls show their service's icon and color in the confirmation panel, offline queue, and the Mac orb's satellite ring (which now includes MCP servers with live voice targeting)
+- 52455cb: One-button capture on iOS: the mic auto-routes commands to the agent (long-press to force), single and multi actions share one confirmation sheet with a parsing preview and a Save-to-note-instead undo
+- Rebuild the Quill colour system on OKLCH and adopt the new mode palette on both platforms — Auto is now violet (and carries the brand hue), Dictate blue, Edit amber, Act teal
+- 52455cb: Mac-consistent iOS design: shared color tokens (teal action accent, unified cards), MCP-first integrations screen, tappable markdown checkboxes in notes, pinned notes, and voice-targeted note appends (add milk to my groceries note)
+- 52455cb: Siri and Action Button capture (New Quill note) plus on-device Apple Intelligence fallback for note cleanup and titles when no API key is set
+- 9e00201: One unified Apps & services list on the Mac Integrations tab — native integrations and MCP-backed brands are the same kind of row (no more duplicate Notion/coming-soon entries)
+- iOS: rebuild the notes list in the new design language — flat themed page, compose/close header, search field, hairline note cards
+- 9e00201: Type a command: run agent actions from the keyboard — Type a Command in the Mac menu bar and a keyboard button in the iPhone capture cluster, using the same pipeline as voice (routines, memory, connections)
+- 52455cb: Auto action routing on iOS: dictations that sound like commands are routed to the agent instead of the note (toggle in Settings)
+- 52455cb: Unified Connections: native integrations and MCP services share one settings surface on Mac and iPhone — Notion, Linear, Dex, GitHub and more connect with one tap (browser sign-in), custom MCP servers remain for power users
+- Rebuild the iOS home around the orb: a capture launcher with an Auto/Dictate/Act mode rail, a live capture sheet, and mode-as-colour throughout
+- Connections: tap any row to expand its available tools and actions, filter the list with a search bar that also matches tool names, sort everything alphabetically, and tighten the rows
+- Menu bar now always shows the current mode. The status item shows the mode name beside the feather/chip at all times, instead of only flashing it briefly on switch — which also removes the glitchy status-item resize that made mode-switching look janky. On top of that, every mode switch flashes a brief bubble at the top of the screen (like the macOS input-source HUD), so you always get a confirmation even when a full-screen app has hidden or is covering the menu bar (e.g. Citrix).
+- 52455cb: Rich markdown note editor on iOS: live highlighting, keyboard formatting toolbar, and list auto-continuation (shared engine with the Mac notes editor)
+
+### Patch Changes
+
+- Fix silent data loss where a long dictation could lose everything but its final seconds — a duplicate hotkey press mid-recording restarted the take, resetting the timer and truncating the audio file. Starting a recording is now idempotent.
+- Fix MCP servers that serve their tool catalog anonymously (like Dex) never prompting for OAuth sign-in — Quill now probes the server's OAuth metadata at add time and opens the browser sign-in immediately
+- iOS: fix doubled Done buttons in the Connections and Custom Modes sheets
+- iOS: surface note-edit failures in the composer — a failed Shorten/Make-it-bullets used to do nothing visible (missing API key errors were rendered on a screen the note detail covers)
+
 ## 0.22.0
 
 ### Minor Changes

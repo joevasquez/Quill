@@ -7,6 +7,7 @@
 
 import Foundation
 import HexCore
+import SwiftUI
 
 enum QuillIOSSettingsKey {
   static let selectedModel = "quill.selectedModel"
@@ -43,6 +44,18 @@ enum QuillIOSSettingsKey {
   /// mode. The bolt FAB always forces Action regardless.
   static let autoActionRouting = "quill.autoActionRouting"
 
+  /// The `QuillMode` a fresh capture starts in. The live mode is transient
+  /// (the rail can change it per-capture); this is only the seed.
+  static let defaultCaptureMode = "quill.defaultCaptureMode"
+
+  /// Theme override. Empty string = follow the device.
+  static let appearance = "quill.appearance"
+
+  /// JSON-encoded `[String: Int]` of Edit-command usage counts, so the
+  /// commands the user actually reaches for float to the front of the
+  /// chip row.
+  static let editCommandUsage = "quill.editCommandUsage"
+
   // Defaults
   static let defaultModel = "openai_whisper-tiny.en"  // Ships small, English-focused
   // AI defaults to .off so users see raw transcripts until they pick a mode.
@@ -54,6 +67,63 @@ enum QuillIOSSettingsKey {
   static let defaultAgentName = "Hermes"
   static let defaultAgentMemoryEnabled = true
   static let defaultAutoActionRouting = true
+  /// Auto is the default: it's the mode that decides for you, and it wears
+  /// the brand colour.
+  static let defaultCaptureModeValue = QuillMode.auto.rawValue
+}
+
+/// The user's theme choice. The control is three-way even though the design
+/// handoff drew a two-way Light/Dark toggle — its own footer says "Auto
+/// follows your device", and following the device is the right default.
+enum QuillAppearance: String, CaseIterable, Identifiable {
+  case system = ""
+  case light
+  case dark
+
+  var id: String { rawValue }
+
+  var label: String {
+    switch self {
+    case .system: "Auto"
+    case .light: "Light"
+    case .dark: "Dark"
+    }
+  }
+
+  /// `nil` hands the decision back to the system.
+  var colorScheme: ColorScheme? {
+    switch self {
+    case .system: nil
+    case .light: .light
+    case .dark: .dark
+    }
+  }
+}
+
+/// Per-command usage counts for the Edit chip row, persisted as JSON in
+/// UserDefaults. Kept tiny and local — it's a convenience, not a profile.
+enum EditCommandUsage {
+  static func decode(_ data: Data) -> [String: Int] {
+    guard !data.isEmpty,
+          let counts = try? JSONDecoder().decode([String: Int].self, from: data)
+    else { return [:] }
+    return counts
+  }
+
+  static func encode(_ counts: [String: Int]) -> Data {
+    (try? JSONEncoder().encode(counts)) ?? Data()
+  }
+
+  /// The `limit` most-used commands, most-used first. Ties break
+  /// alphabetically so the row doesn't reshuffle on every render.
+  static func mostUsed(_ counts: [String: Int], limit: Int = 3) -> [String] {
+    counts
+      .sorted { a, b in
+        a.value == b.value ? a.key < b.key : a.value > b.value
+      }
+      .prefix(limit)
+      .map(\.key)
+  }
 }
 
 extension AIProvider {

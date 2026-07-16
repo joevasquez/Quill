@@ -30,6 +30,13 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
   var isAutoTitle: Bool
   /// Pinned notes sort to the top of the notes list.
   var isPinned: Bool
+  /// Set while an Edit-mode revision is awaiting Undo/Keep. Holds the
+  /// previous body so Undo is lossless. Cleared when the user accepts or
+  /// reverts.
+  ///
+  /// Deliberately local: it isn't uploaded by cloud sync, since a pending
+  /// review on your phone shouldn't follow you to the Mac.
+  var pendingEdit: NoteEdit?
 
   init(
     id: UUID = UUID(),
@@ -39,7 +46,8 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
     updatedAt: Date? = nil,
     location: NoteLocation? = nil,
     isAutoTitle: Bool = true,
-    isPinned: Bool = false
+    isPinned: Bool = false,
+    pendingEdit: NoteEdit? = nil
   ) {
     self.id = id
     self.title = title
@@ -49,6 +57,7 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
     self.location = location
     self.isAutoTitle = isAutoTitle
     self.isPinned = isPinned
+    self.pendingEdit = pendingEdit
   }
 
   /// Custom Codable init so notes persisted before the
@@ -66,6 +75,7 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
     location = try c.decodeIfPresent(NoteLocation.self, forKey: .location)
     isAutoTitle = try c.decodeIfPresent(Bool.self, forKey: .isAutoTitle) ?? false
     isPinned = try c.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+    pendingEdit = try c.decodeIfPresent(NoteEdit.self, forKey: .pendingEdit)
   }
 
   /// Derive a title from the first meaningful line of body text.
@@ -95,6 +105,22 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
   /// Count of inline photos embedded in the note body.
   var photoCount: Int {
     NoteContent.photoIDs(in: body).count
+  }
+}
+
+/// A revision awaiting the user's Undo/Keep. Stores the previous body so
+/// reverting restores exactly what was there.
+struct NoteEdit: Codable, Equatable, Hashable {
+  /// The body as it was before the edit.
+  var previousBody: String
+  /// Short past-tense summary for the banner, e.g. "Shortened".
+  var label: String
+  var editedAt: Date
+
+  init(previousBody: String, label: String, editedAt: Date = Date()) {
+    self.previousBody = previousBody
+    self.label = label
+    self.editedAt = editedAt
   }
 }
 

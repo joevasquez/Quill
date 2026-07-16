@@ -19,7 +19,6 @@ import HexCore
 import SwiftUI
 
 struct ConnectionsView: View {
-  @Environment(\.dismiss) private var dismiss
   @AppStorage(IntegrationConnectionStore.userDefaultsKey) private var connectedData: Data = Data()
 
   @State private var showingTodoistSheet = false
@@ -28,11 +27,19 @@ struct ConnectionsView: View {
   // MCP state (shared by featured + custom sections)
   @State private var servers: [MCPServerConfig] = MCPServersStorage.load()
   @State private var toolCounts: [UUID: Int] = [:]
+  /// Full cached tool lists, so an expanded row can show what a server
+  /// actually offers (not just the count).
+  @State private var toolLists: [UUID: [MCPTool]] = [:]
   @State private var serverErrors: [UUID: String] = [:]
   @State private var signedIn: [UUID: Bool] = [:]
   @State private var busyServers: Set<UUID> = []
   @State private var showAddServer = false
   @State private var editingServer: MCPEditContext?
+
+  /// Rows the user has expanded to inspect tools/actions. Keyed by a
+  /// stable per-row string (integration rawValue / brand id / server UUID).
+  @State private var expandedRows: Set<String> = []
+  @State private var searchText = ""
 
   /// Native integrations with a working send adapter.
   private static let nativeIdentifiers: [Integration.Identifier] = [
@@ -48,38 +55,95 @@ struct ConnectionsView: View {
     servers.filter { ConnectionDirectory.brand(forServerNamed: $0.name, url: $0.url) == nil }
   }
 
+  // MARK: - Search
+
+  /// A row matches when the query hits its name OR one of its tool/action
+  /// names — so "contact" finds Dex even though the row just says "Dex".
+  private func matchesSearch(_ name: String, extras: [String] = []) -> Bool {
+    let q = searchText.trimmingCharacters(in: .whitespaces)
+    guard !q.isEmpty else { return true }
+    if name.localizedCaseInsensitiveContains(q) { return true }
+    return extras.contains { $0.localizedCaseInsensitiveContains(q) }
+  }
+
+  private var visibleNativeIntegrations: [Integration] {
+    nativeIntegrations.filter {
+      matchesSearch($0.name, extras: Self.nativeActions($0.identifier).map(\.label))
+    }
+  }
+
+  private var visibleBrands: [ConnectionBrand] {
+    ConnectionDirectory.featured.filter { brand in
+      let tools = server(for: brand).flatMap { toolLists[$0.id] } ?? []
+      return matchesSearch(brand.name, extras: tools.map(\.name))
+    }
+  }
+
+  private var visibleCustomServers: [MCPServerConfig] {
+    customServers
+      .filter { server in
+        matchesSearch(server.name, extras: (toolLists[server.id] ?? []).map(\.name))
+      }
+      .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+  }
+
+  /// Natives and featured brands interleaved into ONE alphabetical list —
+  /// the user shouldn't have to know which protocol a row uses to guess
+  /// where it sorts.
+  private enum AppsListItem: Identifiable {
+    case native(Integration)
+    case brand(ConnectionBrand)
+
+    var id: String {
+      switch self {
+      case .native(let i): "native-\(i.identifier.rawValue)"
+      case .brand(let b): "brand-\(b.id)"
+      }
+    }
+
+    var sortName: String {
+      switch self {
+      case .native(let i): i.name
+      case .brand(let b): b.name
+      }
+    }
+  }
+
+  private var visibleAppsItems: [AppsListItem] {
+    (visibleNativeIntegrations.map(AppsListItem.native)
+      + visibleBrands.map(AppsListItem.brand))
+      .sorted { $0.sortName.localizedCaseInsensitiveCompare($1.sortName) == .orderedAscending }
+  }
+
+  // Deliberately no NavigationStack / Done of its own: this screen is both
+  // pushed (Settings → Connections) and presented as a sheet (home's
+  // "+ Connect an app" chip). The presenter owns the chrome — owning it
+  // here too put a second Done in the sheet's bar.
   var body: some View {
-    NavigationStack {
       List {
         Section {
-          ForEach(nativeIntegrations) { integration in
-            ConnectionRow(
-              icon: integration.systemImage,
-              tintHex: integration.tintHex,
-              name: integration.name,
-              subtitle: integration.tagline,
-              requiresPro: integration.requiresPro,
-              isConnected: isConnected(integration),
-              canConnect: canConnect(integration),
-              onToggle: { toggle(integration) }
-            )
-          }
-          ForEach(ConnectionDirectory.featured) { brand in
-            featuredRow(brand)
+          ForEach(visibleAppsItems) { item in
+            switch item {
+            case .native(let integration): nativeRow(integration)
+            case .brand(let brand): featuredRow(brand)
+            }
           }
         } header: {
           Text("Apps & services")
         } footer: {
-          Text("Dictate naturally — \"remind me Friday to review the launch deck\" becomes a task; \"log a note on Joe in Dex\" calls the service directly. Free plan includes \(IntegrationLimits.freeTierMaxConnections) integrations; Pro unlocks all.")
+          Text("Tap a row to see what it can do. Free plan includes \(IntegrationLimits.freeTierMaxConnections) integrations; Pro unlocks all.")
         }
 
         Section {
-          if customServers.isEmpty {
-            Label("No custom servers", systemImage: "point.3.connected.trianglepath.dotted")
-              .font(.caption)
-              .foregroundStyle(.secondary)
+          if visibleCustomServers.isEmpty {
+            Label(
+              searchText.isEmpty ? "No custom servers" : "No matches",
+              systemImage: "point.3.connected.trianglepath.dotted"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
           } else {
-            ForEach(customServers) { server in
+            ForEach(visibleCustomServers) { server in
               customServerRow(server)
             }
           }
@@ -96,11 +160,7 @@ struct ConnectionsView: View {
       }
       .navigationTitle("Connections")
       .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .topBarLeading) {
-          Button("Done") { dismiss() }
-        }
-      }
+      .searchable(text: $searchText, prompt: "Search connections and tools")
       .task { await reloadServers() }
       .sheet(isPresented: $showingTodoistSheet) {
         TodoistTokenSheetIOS(onConnected: {
@@ -129,6 +189,130 @@ struct ConnectionsView: View {
           Task { await editServer(ctx.server, name: name, url: url, token: token, removeToken: removeToken) }
         }
       }
+  }
+
+  // MARK: - Expansion
+
+  private func toggleExpanded(_ key: String) {
+    if expandedRows.contains(key) {
+      expandedRows.remove(key)
+    } else {
+      expandedRows.insert(key)
+    }
+    UISelectionFeedbackGenerator().selectionChanged()
+  }
+
+  /// What each native integration can do in Action mode. Static — these
+  /// are the adapters we ship, not a live tool list.
+  static func nativeActions(_ id: Integration.Identifier) -> [(symbol: String, label: String)] {
+    switch id {
+    case .appleReminders:
+      [("checklist", "Create reminders — due date, list, priority")]
+    case .calendar:
+      [("calendar.badge.plus", "Create calendar events — title, start & end, calendar")]
+    case .todoist:
+      [("checkmark.circle", "Create tasks — project, due date, priority")]
+    case .gmail:
+      [("square.and.pencil", "Draft emails — recipient, subject, body")]
+    case .googleCalendar:
+      [("calendar.badge.plus", "Create events — title, time, attendees")]
+    default:
+      []
+    }
+  }
+
+  /// "dex_create_contact" → "Create contact" (the server prefix is noise
+  /// when it's sitting under that server's own row). Split on both
+  /// underscores and hyphens first, THEN drop the leading server word —
+  /// tool names vary in separator style across servers.
+  private func prettyToolName(_ raw: String, serverName: String) -> String {
+    var words = raw
+      .replacingOccurrences(of: "_", with: " ")
+      .replacingOccurrences(of: "-", with: " ")
+      .split(separator: " ")
+      .map(String.init)
+    if words.count > 1, words[0].lowercased() == serverName.lowercased() {
+      words.removeFirst()
+    }
+    let joined = words.joined(separator: " ")
+    return joined.prefix(1).uppercased() + joined.dropFirst()
+  }
+
+  /// Expanded content for an MCP-backed row: the live tool list, a
+  /// loading state while it fetches, or a hint when not connected.
+  @ViewBuilder
+  private func mcpExpansion(server: MCPServerConfig?) -> some View {
+    if let server {
+      if let tools = toolLists[server.id], !tools.isEmpty {
+        ForEach(tools, id: \.name) { tool in
+          expansionLine(
+            symbol: "wrench.and.screwdriver",
+            title: prettyToolName(tool.name, serverName: server.name),
+            detail: tool.description
+          )
+        }
+      } else if busyServers.contains(server.id) {
+        HStack(spacing: 8) {
+          ProgressView().controlSize(.mini)
+          Text("Loading tools…")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+      } else if let error = serverErrors[server.id] {
+        Text(error)
+          .font(.caption)
+          .foregroundStyle(.orange)
+      } else {
+        Text("No tools reported. Try Refresh Tools from the long-press menu.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    } else {
+      Text("Connect to see this service's tools.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private func expansionLine(symbol: String, title: String, detail: String?) -> some View {
+    HStack(alignment: .top, spacing: 8) {
+      Image(systemName: symbol)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(width: 16)
+        .padding(.top, 1)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(title)
+          .font(.caption.weight(.medium))
+        if let detail, !detail.isEmpty {
+          Text(detail)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+        }
+      }
+    }
+    .padding(.vertical, 2)
+  }
+
+  // MARK: - Native rows
+
+  private func nativeRow(_ integration: Integration) -> some View {
+    ConnectionRow(
+      icon: integration.systemImage,
+      tintHex: integration.tintHex,
+      name: integration.name,
+      requiresPro: integration.requiresPro,
+      isConnected: isConnected(integration),
+      canConnect: canConnect(integration),
+      isExpanded: expandedRows.contains(integration.identifier.rawValue),
+      onToggle: { toggle(integration) },
+      onToggleExpanded: { toggleExpanded(integration.identifier.rawValue) }
+    ) {
+      ForEach(Self.nativeActions(integration.identifier), id: \.label) { action in
+        expansionLine(symbol: action.symbol, title: action.label, detail: nil)
+      }
     }
   }
 
@@ -146,19 +330,30 @@ struct ConnectionsView: View {
       icon: brand.systemImage,
       tintHex: brand.tintHex,
       name: brand.name.capitalized,
-      subtitle: statusText(for: existing) ?? brand.tagline,
+      statusText: existing.flatMap { serverErrors[$0.id] },
+      toolCount: existing.flatMap { toolCounts[$0.id] },
       requiresPro: false,
       isConnected: existing != nil,
       canConnect: true,
       isBusy: existing.map { busyServers.contains($0.id) } ?? false,
+      isExpanded: expandedRows.contains(brand.id),
       onToggle: {
         if let existing {
           Task { await deleteServer(existing) }
         } else {
           Task { await connectFeatured(brand) }
         }
+      },
+      onToggleExpanded: {
+        toggleExpanded(brand.id)
+        // First expansion of a connected server with a cold cache: fetch.
+        if expandedRows.contains(brand.id), let existing, toolLists[existing.id] == nil {
+          Task { await refreshServer(existing) }
+        }
       }
-    )
+    ) {
+      mcpExpansion(server: existing)
+    }
     .contextMenu {
       if let existing {
         Button("Refresh Tools", systemImage: "arrow.clockwise") {
@@ -183,15 +378,6 @@ struct ConnectionsView: View {
     }
   }
 
-  private func statusText(for server: MCPServerConfig?) -> String? {
-    guard let server else { return nil }
-    if let error = serverErrors[server.id] { return error }
-    if let count = toolCounts[server.id] {
-      return "\(count) tool\(count == 1 ? "" : "s")\(signedIn[server.id] == true ? " · signed in" : "")"
-    }
-    return "Connected"
-  }
-
   /// One-tap connect: create the server from the directory entry, then
   /// refresh; a 401 auto-starts the browser sign-in (standard MCP OAuth).
   private func connectFeatured(_ brand: ConnectionBrand) async {
@@ -201,24 +387,44 @@ struct ConnectionsView: View {
   // MARK: - Custom server rows
 
   private func customServerRow(_ server: MCPServerConfig) -> some View {
-    HStack {
-      VStack(alignment: .leading, spacing: 2) {
-        Text(server.name)
-          .font(.body.weight(.medium))
-        statusLine(server)
+    VStack(alignment: .leading, spacing: 0) {
+      HStack {
+        Image(systemName: "chevron.right")
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.tertiary)
+          .rotationEffect(.degrees(expandedRows.contains(server.id.uuidString) ? 90 : 0))
+        VStack(alignment: .leading, spacing: 2) {
+          Text(server.name)
+            .font(.body.weight(.medium))
+          statusLine(server)
+        }
+        Spacer()
+        if busyServers.contains(server.id) {
+          ProgressView()
+            .controlSize(.small)
+        }
+        Toggle("", isOn: Binding(
+          get: { server.isEnabled },
+          set: { enabled in setEnabled(enabled, for: server) }
+        ))
+        .labelsHidden()
       }
-      Spacer()
-      if busyServers.contains(server.id) {
-        ProgressView()
-          .controlSize(.small)
+      .contentShape(Rectangle())
+      .onTapGesture {
+        toggleExpanded(server.id.uuidString)
+        if expandedRows.contains(server.id.uuidString), toolLists[server.id] == nil {
+          Task { await refreshServer(server) }
+        }
       }
-      Toggle("", isOn: Binding(
-        get: { server.isEnabled },
-        set: { enabled in setEnabled(enabled, for: server) }
-      ))
-      .labelsHidden()
+
+      if expandedRows.contains(server.id.uuidString) {
+        VStack(alignment: .leading, spacing: 2) {
+          mcpExpansion(server: server)
+        }
+        .padding(.top, 8)
+        .padding(.leading, 16)
+      }
     }
-    .contentShape(Rectangle())
     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
       Button(role: .destructive) {
         Task { await deleteServer(server) }
@@ -283,6 +489,7 @@ struct ConnectionsView: View {
     for server in servers {
       if let entry = await MCPToolCatalog.shared.cachedTools(for: server.id) {
         toolCounts[server.id] = entry.tools.count
+        toolLists[server.id] = entry.tools
       }
       signedIn[server.id] = await IOSMCPOAuthClient.isSignedIn(server)
     }
@@ -310,9 +517,15 @@ struct ConnectionsView: View {
     servers.append(server)
     persistServers()
     let error = await refreshServer(server)
+    guard token.isEmpty else { return }
     // No static token + server demands auth → kick off the browser sign-in
     // automatically (matches how OAuth MCP servers expect to be added).
-    if token.isEmpty, isAuthError(error) {
+    if isAuthError(error) {
+      await signIn(server)
+    } else if error == nil, await IOSMCPOAuthClient.advertisesOAuth(server) {
+      // The catalog fetch succeeded anonymously, but the server publishes
+      // OAuth metadata — some (Dex) only 401 the actual tool calls. Sign in
+      // NOW so the first voice action doesn't fail with an auth error.
       await signIn(server)
     }
   }
@@ -325,6 +538,7 @@ struct ConnectionsView: View {
     do {
       let tools = try await MCPToolCatalog.shared.refresh(server: server, authToken: token)
       toolCounts[server.id] = tools.count
+      toolLists[server.id] = tools
       serverErrors[server.id] = nil
       return nil
     } catch {
@@ -466,62 +680,100 @@ struct ConnectionsView: View {
 // MARK: - Shared row
 
 /// One row style for every connection — native or MCP-backed. The user
-/// shouldn't be able to tell which protocol a row uses.
-private struct ConnectionRow: View {
+/// shouldn't be able to tell which protocol a row uses. Tight by design:
+/// icon + name + Connect. Tapping the row expands it to list the tools
+/// or actions the connection offers (taglines used to live here — the
+/// expansion replaced them).
+private struct ConnectionRow<Expansion: View>: View {
   let icon: String
   let tintHex: String
   let name: String
-  let subtitle: String
+  /// Inline error (connection failures). nil when healthy.
+  var statusText: String? = nil
+  /// Tool count chip for connected MCP rows.
+  var toolCount: Int? = nil
   let requiresPro: Bool
   let isConnected: Bool
   let canConnect: Bool
   var isBusy: Bool = false
+  let isExpanded: Bool
   let onToggle: () -> Void
+  let onToggleExpanded: () -> Void
+  @ViewBuilder let expansion: () -> Expansion
 
   var body: some View {
-    HStack(alignment: .center, spacing: 12) {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(Color(hex: tintHex) ?? QuillDesign.mcpTile)
-        .frame(width: 38, height: 38)
-        .overlay(
-          Image(systemName: icon)
-            .foregroundStyle(.white)
-            .font(.system(size: 18, weight: .semibold))
-        )
+    VStack(alignment: .leading, spacing: 0) {
+      HStack(alignment: .center, spacing: 10) {
+        Image(systemName: "chevron.right")
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.tertiary)
+          .rotationEffect(.degrees(isExpanded ? 90 : 0))
 
-      VStack(alignment: .leading, spacing: 2) {
-        HStack(spacing: 6) {
-          Text(name)
-            .font(.body.weight(.semibold))
-          if requiresPro {
-            Text("PRO")
-              .font(.caption2.weight(.bold))
+        RoundedRectangle(cornerRadius: 7, style: .continuous)
+          .fill(Color(hex: tintHex) ?? QuillDesign.mcpTile)
+          .frame(width: 28, height: 28)
+          .overlay(
+            Image(systemName: icon)
               .foregroundStyle(.white)
-              .padding(.horizontal, 6)
-              .padding(.vertical, 1)
-              .background(Capsule().fill(Color.purple))
+              .font(.system(size: 13, weight: .semibold))
+          )
+
+        VStack(alignment: .leading, spacing: 1) {
+          HStack(spacing: 6) {
+            Text(name)
+              .font(.body.weight(.medium))
+            if requiresPro {
+              Text("PRO")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(Capsule().fill(Color.purple))
+            }
+            if let toolCount {
+              Text("\(toolCount)")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(Capsule().fill(Color.secondary.opacity(0.15)))
+            }
+          }
+          if let statusText {
+            Text(statusText)
+              .font(.caption2)
+              .foregroundStyle(.orange)
+              .lineLimit(1)
           }
         }
-        Text(subtitle)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(3)
+
+        Spacer(minLength: 8)
+
+        if isBusy {
+          ProgressView()
+            .controlSize(.small)
+        } else {
+          Button(isConnected ? "Disconnect" : "Connect", action: onToggle)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.mini)
+            .tint(isConnected ? .red : .purple)
+            .disabled(!canConnect && !isConnected)
+        }
       }
+      .contentShape(Rectangle())
+      .onTapGesture(perform: onToggleExpanded)
 
-      Spacer(minLength: 8)
-
-      if isBusy {
-        ProgressView()
-          .controlSize(.small)
-      } else {
-        Button(isConnected ? "Disconnect" : "Connect", action: onToggle)
-          .buttonStyle(.borderedProminent)
-          .controlSize(.small)
-          .tint(isConnected ? .red : .purple)
-          .disabled(!canConnect && !isConnected)
+      if isExpanded {
+        VStack(alignment: .leading, spacing: 2) {
+          expansion()
+        }
+        .padding(.top, 8)
+        // Light indent only — aligning under the name (48pt) wasted a
+        // third of the row width on whitespace once descriptions wrapped.
+        .padding(.leading, 16)
       }
     }
-    .padding(.vertical, 6)
+    .padding(.vertical, 2)
   }
 }
 

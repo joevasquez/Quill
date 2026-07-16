@@ -13,26 +13,32 @@ import SwiftUI
 
 // MARK: - Orb colour constants
 
-// Shared by OrbView and ChipMorphView. The hue numbers double as the
-// design spec's OKLCH mode hues (Dictate 248 / Edit 305 / Act 188 /
-// Resolved 150) so both orb-based display modes read identically.
+// Shared by OrbView and ChipMorphView, and with iOS via QuillDesign — the
+// two platforms render one palette so the orb reads the same on both.
+//
+// These are OKLCH hues and must be rendered through `OKLCH`, never through
+// `Color(hue:saturation:brightness:)`. The spaces disagree at the same
+// number: HSB 248 is blue-violet, OKLCH 248 is sky blue.
 enum OrbHue {
-  static let auto: Double = 220
-  static let dictate: Double = 248
-  static let edit: Double = 305
-  static let action: Double = 188
-  static let success: Double = 150
+  static let auto = QuillDesign.Hue.auto
+  static let dictate = QuillDesign.Hue.dictate
+  static let edit = QuillDesign.Hue.edit
+  static let action = QuillDesign.Hue.action
+  static let success = QuillDesign.Hue.success
 }
 
 extension TranscriptionIndicatorView.Mode {
-  var orbHue: Double {
+  /// The mode's full-strength colour — hue, chroma and lightness together.
+  var orbPalette: OKLCH {
     switch self {
-    case .auto:    return OrbHue.auto
-    case .dictate: return OrbHue.dictate
-    case .edit:    return OrbHue.edit
-    case .action:  return OrbHue.action
+    case .auto:    return QuillDesign.ModePalette.auto
+    case .dictate: return QuillDesign.ModePalette.dictate
+    case .edit:    return QuillDesign.ModePalette.edit
+    case .action:  return QuillDesign.ModePalette.act
     }
   }
+
+  var orbHue: Double { orbPalette.H }
 }
 
 // MARK: - Size constants
@@ -88,8 +94,15 @@ struct OrbView: View {
   var onToggleActionIntegration: (Integration.Identifier) -> Void = { _ in }
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var displayedHue: Double = OrbHue.dictate
-  @State private var displayedSaturation: Double = 0.5
+  /// The orb is quiet at rest and saturates as it comes alive. These scale
+  /// the mode's own chroma rather than replacing it, so each mode keeps its
+  /// intended intensity.
+  private static let idleChromaScale: Double = 0.667
+  private static let autoIdleChromaScale: Double = 0.4
+
+  @State private var displayedHue: Double = QuillDesign.ModePalette.dictate.H
+  @State private var displayedChroma: Double = QuillDesign.ModePalette.dictate.C * OrbView.idleChromaScale
+  @State private var displayedLightness: Double = QuillDesign.ModePalette.dictate.L
   @State private var intuitedTarget: OrbRingTarget?
 
   private var isLive: Bool { status != .idle }
@@ -104,21 +117,22 @@ struct OrbView: View {
     status == .idle && pendingEditResult != nil
   }
 
-  /// The hue the orb is heading toward. In Auto mode the hue shifts
-  /// to the detected sub-mode's hue during recording.
-  private var targetHue: Double {
-    if showResult { return OrbHue.success }
-    if mode == .auto && isLive { return autoDetectedMode.orbHue }
-    return mode.orbHue
+  /// The colour the orb is heading toward. In Auto mode it shifts to the
+  /// detected sub-mode's colour during recording.
+  private var targetPalette: OKLCH {
+    if showResult { return QuillDesign.ModePalette.resolved }
+    if mode == .auto && isLive { return autoDetectedMode.orbPalette }
+    return mode.orbPalette
   }
 
-  private var targetSaturation: Double {
-    if mode == .auto && !isLive { return 0.3 }
-    return isLive ? 0.75 : 0.5
+  private var targetChroma: Double {
+    let full = targetPalette.C
+    if mode == .auto && !isLive { return full * Self.autoIdleChromaScale }
+    return isLive ? full : full * Self.idleChromaScale
   }
 
   private var orbColor: Color {
-    Color(hue: displayedHue / 360.0, saturation: displayedSaturation, brightness: 0.9)
+    OKLCH(displayedLightness, displayedChroma, displayedHue).color()
   }
 
   private var audioLevel: Double {
@@ -163,17 +177,19 @@ struct OrbView: View {
     .animation(.snappy(duration: 0.25), value: intuitedTarget)
     .animation(.snappy(duration: 0.3), value: autoDetectedMode)
     .onAppear {
-      displayedHue = targetHue
-      displayedSaturation = targetSaturation
+      displayedHue = targetPalette.H
+      displayedChroma = targetChroma
+      displayedLightness = targetPalette.L
     }
-    .onChange(of: targetHue) { _, newHue in
+    .onChange(of: targetPalette) { _, palette in
       withAnimation(.easeInOut(duration: 0.6)) {
-        displayedHue = newHue
+        displayedHue = OKLCH.nearestEquivalentHue(to: palette.H, from: displayedHue)
+        displayedLightness = palette.L
       }
     }
-    .onChange(of: targetSaturation) { _, newSat in
+    .onChange(of: targetChroma) { _, chroma in
       withAnimation(.easeInOut(duration: 0.4)) {
-        displayedSaturation = newSat
+        displayedChroma = chroma
       }
     }
     .onChange(of: partialTranscript) { _, text in
@@ -348,7 +364,7 @@ struct OrbView: View {
     if showResult {
       Image(systemName: "checkmark")
         .font(.system(size: 28, weight: .bold))
-        .foregroundStyle(Color(hue: OrbHue.success / 360.0, saturation: 0.6, brightness: 0.9))
+        .foregroundStyle(QuillDesign.ModePalette.resolved.color())
         .transition(.scale(scale: 0.6).combined(with: .opacity))
     }
   }

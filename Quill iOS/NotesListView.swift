@@ -2,10 +2,13 @@
 //  NotesListView.swift
 //  Quill (iOS)
 //
-//  Sheet that lists all saved notes, lets the user pick one to make
-//  active, and supports swipe-to-delete. Card style mirrors the macOS
-//  HistoryFeature's TranscriptView (rounded container, body preview,
-//  divider, metadata footer).
+//  The notes list (design handoff §6): a compose/close header row, a
+//  field-style search capsule, and a column of hairline note cards —
+//  title, 2-line preview, per-card compose + delete buttons, meta row.
+//
+//  The old deep-purple gradient band is gone. The design language is flat
+//  and material-first: the page carries the same `QuillTheme` gradient as
+//  home and the note detail, and elevation is hairlines, not shadows.
 //
 
 import HexCore
@@ -15,6 +18,8 @@ struct NotesListView: View {
   @ObservedObject var store: NotesStore
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var colorScheme
+  private var theme: QuillTheme { .of(colorScheme) }
+
   @State private var renamingNoteID: UUID?
   @State private var renameDraft: String = ""
   @State private var searchQuery: String = ""
@@ -22,12 +27,6 @@ struct NotesListView: View {
   /// row, cleared when the alert resolves. Keeps the destructive
   /// action from firing on a single tap.
   @State private var pendingDeleteNoteID: UUID?
-
-  // Shared deep-purple band colors. The toolbar gradient + the
-  // custom search bar's background + the soft fade strip all derive
-  // from these so the entire top band reads as one continuous region.
-  private let bandTopColor = Color(red: 0.16, green: 0.06, blue: 0.32)
-  private let bandBottomColor = Color(red: 0.22, green: 0.10, blue: 0.42)
 
   /// Notes filtered by the current search query. When the query is
   /// blank we return the full sorted list; otherwise we substring-match
@@ -47,75 +46,143 @@ struct NotesListView: View {
   }
 
   var body: some View {
-    NavigationStack {
-      VStack(spacing: 0) {
-        // Custom band — same shape, gradient, and button treatment as
-        // QuillHeaderBar on the home screen. Built from scratch instead
-        // of using NavigationStack's toolbar so iOS doesn't wrap our
-        // buttons in its own frosted backdrop (which was washing the
-        // glyphs out to lavender + magenta on the dark gradient).
-        customHeaderBand
-
-        notesContent
-      }
-      .background(
-        (colorScheme == .dark
-          ? Color(red: 0.11, green: 0.11, blue: 0.12)
-          : Color(red: 0.957, green: 0.945, blue: 0.973))
-          .ignoresSafeArea()
-      )
-      .toolbar(.hidden, for: .navigationBar)
-      .alert("Rename Note", isPresented: Binding(
-        get: { renamingNoteID != nil },
-        set: { if !$0 { renamingNoteID = nil } }
-      )) {
-        TextField("Title", text: $renameDraft)
-        Button("Save") {
-          if let id = renamingNoteID {
-            store.renameNote(id: id, to: renameDraft.trimmingCharacters(in: .whitespacesAndNewlines))
-          }
-          renamingNoteID = nil
+    VStack(spacing: 13) {
+      header
+      notesContent
+    }
+    .padding(.top, 4)
+    .background(pageBackground.ignoresSafeArea())
+    .alert("Rename Note", isPresented: Binding(
+      get: { renamingNoteID != nil },
+      set: { if !$0 { renamingNoteID = nil } }
+    )) {
+      TextField("Title", text: $renameDraft)
+      Button("Save") {
+        if let id = renamingNoteID {
+          store.renameNote(id: id, to: renameDraft.trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        Button("Cancel", role: .cancel) { renamingNoteID = nil }
-      } message: {
-        Text("Leave blank to auto-derive from the first line of the note.")
+        renamingNoteID = nil
       }
-      .alert("Delete Note?", isPresented: Binding(
-        get: { pendingDeleteNoteID != nil },
-        set: { if !$0 { pendingDeleteNoteID = nil } }
-      )) {
-        Button("Delete", role: .destructive) {
-          if let id = pendingDeleteNoteID {
-            store.deleteNote(id: id)
-            UINotificationFeedbackGenerator().notificationOccurred(.warning)
-          }
-          pendingDeleteNoteID = nil
+      Button("Cancel", role: .cancel) { renamingNoteID = nil }
+    } message: {
+      Text("Leave blank to auto-derive from the first line of the note.")
+    }
+    .alert("Delete Note?", isPresented: Binding(
+      get: { pendingDeleteNoteID != nil },
+      set: { if !$0 { pendingDeleteNoteID = nil } }
+    )) {
+      Button("Delete", role: .destructive) {
+        if let id = pendingDeleteNoteID {
+          store.deleteNote(id: id)
+          UINotificationFeedbackGenerator().notificationOccurred(.warning)
         }
-        Button("Cancel", role: .cancel) { pendingDeleteNoteID = nil }
-      } message: {
-        Text("This permanently removes the note and all attached photos. This can't be undone.")
+        pendingDeleteNoteID = nil
       }
+      Button("Cancel", role: .cancel) { pendingDeleteNoteID = nil }
+    } message: {
+      Text("This permanently removes the note and all attached photos. This can't be undone.")
     }
   }
 
-  /// The notes list / search-empty / no-notes states. Pulled out of
-  /// the body so the surrounding band-and-content layout stays
-  /// readable.
+  // MARK: - Header
+
+  /// Compose left, "Notes" centred, close right — then the search field.
+  private var header: some View {
+    VStack(spacing: 13) {
+      HStack {
+        roundButton("square.and.pencil", "New note") {
+          _ = store.startNewNote(location: nil)
+          UINotificationFeedbackGenerator().notificationOccurred(.success)
+          dismiss()
+        }
+
+        Spacer()
+
+        Text("Notes")
+          .font(.system(size: 18, weight: .bold))
+          .foregroundStyle(theme.text)
+
+        Spacer()
+
+        roundButton("xmark", "Close") { dismiss() }
+      }
+
+      searchField
+    }
+    .padding(.horizontal, 16)
+  }
+
+  private func roundButton(
+    _ symbol: String,
+    _ label: String,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      Image(systemName: symbol)
+        .font(.system(size: 16, weight: .medium))
+        .foregroundStyle(theme.text2)
+        .frame(width: 40, height: 40)
+        .background(
+          Circle()
+            .fill(theme.chip)
+            .overlay(Circle().strokeBorder(theme.hair, lineWidth: 0.5))
+        )
+        .contentShape(Circle())
+    }
+    .buttonStyle(QuillPressStyle())
+    .accessibilityLabel(label)
+  }
+
+  private var searchField: some View {
+    HStack(spacing: 9) {
+      Image(systemName: "magnifyingglass")
+        .font(.system(size: 16))
+        .foregroundStyle(theme.text3)
+
+      TextField("", text: $searchQuery, prompt: Text("Search notes").foregroundColor(theme.text3))
+        .font(.system(size: 16))
+        .foregroundStyle(theme.text)
+        .tint(QuillDesign.brand.color())
+        .submitLabel(.search)
+        .autocorrectionDisabled()
+        .textInputAutocapitalization(.never)
+
+      if !searchQuery.isEmpty {
+        Button {
+          searchQuery = ""
+        } label: {
+          Image(systemName: "xmark.circle.fill")
+            .foregroundStyle(theme.text3)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Clear search")
+      }
+    }
+    .padding(.horizontal, 14)
+    .frame(height: 42)
+    .background(
+      Capsule()
+        .fill(theme.field)
+        .overlay(Capsule().strokeBorder(theme.fieldRing, lineWidth: 1))
+    )
+  }
+
+  // MARK: - List
+
   @ViewBuilder
   private var notesContent: some View {
     if store.notes.isEmpty {
-      ContentUnavailableView {
-        Label("No Notes Yet", systemImage: "note.text")
-      } description: {
-        Text("Record something on the main screen to create your first note.")
-      }
+      emptyState(
+        title: "No notes yet",
+        message: "Tap the orb on the home screen to capture your first one."
+      )
     } else if visibleNotes.isEmpty {
-      ContentUnavailableView.search(text: searchQuery)
+      emptyState(title: "No notes found", message: "Nothing matches “\(searchQuery)”.")
     } else {
       ScrollView {
         LazyVStack(spacing: 12) {
           ForEach(visibleNotes) { note in
-            NoteRow(
+            NoteListCard(
               note: note,
               isActive: note.id == store.activeNoteID,
               onTap: {
@@ -127,11 +194,9 @@ struct NotesListView: View {
                 renameDraft = note.title
                 renamingNoteID = note.id
               },
-              onDelete: {
-                // Defer to the alert. The alert resolves the actual
-                // delete + haptic so a stray tap doesn't lose work.
-                pendingDeleteNoteID = note.id
-              },
+              // Defer to the alert. The alert resolves the actual delete
+              // + haptic so a stray tap doesn't lose work.
+              onDelete: { pendingDeleteNoteID = note.id },
               onTogglePin: {
                 store.togglePin(id: note.id)
                 UISelectionFeedbackGenerator().selectionChanged()
@@ -139,285 +204,121 @@ struct NotesListView: View {
             )
           }
         }
-        .padding()
-      }
-    }
-  }
-
-  /// Custom header band — purple gradient with rounded bottom corners
-  /// (matches `QuillHeaderBar` on the home screen), with the New +
-  /// Close buttons + "Notes" title on the top row and the search bar
-  /// on the row below. The whole thing replaces the NavigationStack's
-  /// native toolbar so iOS can't re-tint our buttons.
-  private var customHeaderBand: some View {
-    VStack(spacing: 12) {
-      HStack(spacing: 12) {
-        Button {
-          let new = store.startNewNote(location: nil)
-          _ = new
-          UINotificationFeedbackGenerator().notificationOccurred(.success)
-          dismiss()
-        } label: {
-          headerStyleGlyph("square.and.pencil")
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("New note")
-
-        Spacer()
-
-        Text("Notes")
-          .font(.title3.weight(.semibold))
-          .foregroundStyle(.white)
-
-        Spacer()
-
-        Button {
-          dismiss()
-        } label: {
-          headerStyleGlyph("xmark")
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Close")
-      }
-      .padding(.horizontal, 20)
-
-      customSearchBar
         .padding(.horizontal, 16)
-    }
-    .padding(.top, 12)
-    .padding(.bottom, 14)
-    .background(headerBandBackground)
-    .shadow(color: .purple.opacity(0.18), radius: 10, y: 6)
-  }
-
-  /// Purple gradient with rounded bottom corners that bleeds under
-  /// the safe area at the top. Mirrors `QuillHeaderBar.headerBackground`
-  /// so the two screens read as visually consistent.
-  private var headerBandBackground: some View {
-    UnevenRoundedRectangle(
-      topLeadingRadius: 0,
-      bottomLeadingRadius: 24,
-      bottomTrailingRadius: 24,
-      topTrailingRadius: 0,
-      style: .continuous
-    )
-    .fill(
-      LinearGradient(
-        colors: [bandTopColor, bandBottomColor],
-        startPoint: .top,
-        endPoint: .bottom
-      )
-    )
-    .overlay(alignment: .top) {
-      // Faint inner highlight at the very top of the gradient — same
-      // depth detail QuillHeaderBar uses.
-      LinearGradient(
-        colors: [Color.white.opacity(0.10), .clear],
-        startPoint: .top,
-        endPoint: .bottom
-      )
-      .frame(height: 24)
-      .allowsHitTesting(false)
-    }
-    .ignoresSafeArea(edges: .top)
-  }
-
-  // MARK: - Header-band components
-
-  /// 36pt round glyph button matching `QuillHeaderBar.headerButton` —
-  /// white-18% fill, white-25% hairline, 12pt semibold white glyph.
-  /// Used for the Done (xmark) and New (pencil) toolbar items so they
-  /// read as the same affordance family as the home-screen header
-  /// buttons. Tap target is the toolbar's natural padding around it.
-  private func headerStyleGlyph(_ systemName: String) -> some View {
-    Image(systemName: systemName)
-      .font(.system(size: 12, weight: .semibold))
-      .foregroundStyle(.white)
-      .frame(width: 36, height: 36)
-      .background(Circle().fill(Color.white.opacity(0.18)))
-      .overlay(Circle().stroke(Color.white.opacity(0.25), lineWidth: 0.5))
-  }
-
-  /// Custom search bar that mirrors the header-button style — capsule
-  /// with white-18% fill, white-25% hairline, white glyph + text on
-  /// the deep-purple band. Replaces SwiftUI's `.searchable` so we get
-  /// full control over the visual treatment; loses the system search
-  /// drawer chrome (which we didn't really want anyway since it
-  /// re-tinted with system colors).
-  private var customSearchBar: some View {
-    HStack(spacing: 8) {
-      Image(systemName: "magnifyingglass")
-        .font(.subheadline.weight(.semibold))
-        .foregroundStyle(.white.opacity(0.85))
-
-      TextField(
-        "",
-        text: $searchQuery,
-        prompt: Text("Search notes")
-          .foregroundColor(.white.opacity(0.55))
-      )
-      .font(.subheadline)
-      .foregroundStyle(.white)
-      .tint(.white)
-      .submitLabel(.search)
-      .autocorrectionDisabled()
-      .textInputAutocapitalization(.never)
-
-      if !searchQuery.isEmpty {
-        Button {
-          searchQuery = ""
-        } label: {
-          Image(systemName: "xmark.circle.fill")
-            .foregroundStyle(.white.opacity(0.7))
-        }
-        .buttonStyle(.plain)
+        .padding(.top, 2)
+        .padding(.bottom, 20)
       }
     }
-    .padding(.horizontal, 14)
-    .padding(.vertical, 10)
-    .background(Capsule().fill(Color.white.opacity(0.18)))
-    .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 0.5))
+  }
+
+  private func emptyState(title: String, message: String) -> some View {
+    VStack(spacing: 6) {
+      Spacer()
+      Text(title)
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(theme.text2)
+      Text(message)
+        .font(.system(size: 15))
+        .foregroundStyle(theme.text3)
+        .multilineTextAlignment(.center)
+      Spacer()
+    }
+    .padding(.horizontal, 40)
+    .frame(maxWidth: .infinity)
+  }
+
+  private var pageBackground: some View {
+    Group {
+      if theme.isDark {
+        RadialGradient(
+          gradient: Gradient(colors: theme.pageGradient),
+          center: UnitPoint(x: 0.5, y: -0.08),
+          startRadius: 0,
+          endRadius: 900
+        )
+      } else {
+        LinearGradient(
+          gradient: Gradient(colors: theme.pageGradient),
+          startPoint: .top,
+          endPoint: .bottom
+        )
+      }
+    }
   }
 }
 
-// MARK: - NoteRow
+// MARK: - Card
 
-private struct NoteRow: View {
+/// One note in the list. The prototype puts a capture-mode dot beside the
+/// title; notes don't record how they were captured, so rather than tint
+/// every card the same fake colour the dot is omitted — the Active pill
+/// and pin carry the state that's actually real.
+private struct NoteListCard: View {
   let note: Note
   let isActive: Bool
   let onTap: () -> Void
   let onRename: () -> Void
   let onDelete: () -> Void
-  var onTogglePin: (() -> Void)? = nil
+  let onTogglePin: () -> Void
+
   @Environment(\.colorScheme) private var colorScheme
+  private var theme: QuillTheme { .of(colorScheme) }
+
+  private var accent: Color { QuillDesign.brand.color() }
 
   var body: some View {
     Button(action: onTap) {
       VStack(alignment: .leading, spacing: 0) {
-        // Body preview + title
-        VStack(alignment: .leading, spacing: 6) {
-          HStack(spacing: 8) {
-            if note.isPinned {
-              Image(systemName: "pin.fill")
-                .font(.caption)
-                .foregroundStyle(.purple)
-                .rotationEffect(.degrees(45))
+        VStack(alignment: .leading, spacing: 5) {
+          HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 5) {
+              titleRow
+              preview
             }
-            Text(note.displayTitle)
-              .font(.headline)
-              .lineLimit(1)
-              .foregroundStyle(.primary)
-            if isActive {
-              Text("Active")
-                .font(.caption2.weight(.semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(
-                  Capsule().fill(Color.purple.opacity(0.18))
-                )
-                .foregroundStyle(.purple)
-            }
-            Spacer()
-            // Visible edit + delete affordances — circular 38pt white
-            // pills with soft shadows. Swipe-to-delete only works inside
-            // a `List`, and our LazyVStack-in-ScrollView layout doesn't
-            // support it — so visible buttons are the only reliable way
-            // to surface the actions. Long-press contextMenu also still
-            // works for the same actions.
-            Button(action: onRename) {
-              rowActionGlyph("pencil", tint: .purple)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Rename note")
 
-            Button(action: onDelete) {
-              rowActionGlyph("trash", tint: .red)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Delete note")
-          }
+            Spacer(minLength: 0)
 
-          if !note.body.isEmpty {
-            let preview = NoteContent.stripPhotos(from: note.body)
-            if preview.isEmpty {
-              Label("\(note.photoCount) photo\(note.photoCount == 1 ? "" : "s")",
-                    systemImage: "photo")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            } else {
-              Text(preview)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
+            HStack(spacing: 8) {
+              cardButton("square.and.pencil", "Rename note", tint: accent, action: onRename)
+              cardButton(
+                "trash",
+                "Delete note",
+                tint: OKLCH(0.62, 0.19, 22).color(),
+                action: onDelete
+              )
             }
-          } else {
-            Text("Empty")
-              .font(.subheadline)
-              .foregroundStyle(.tertiary)
-              .italic()
           }
         }
-        .padding(12)
+        .padding(.horizontal, 16)
+        .padding(.top, 15)
+        .padding(.bottom, 13)
 
-        Divider()
+        Rectangle()
+          .fill(theme.hair)
+          .frame(height: 0.5)
 
-        // Metadata footer — location · relative date · time · word count
-        HStack(spacing: 6) {
-          if let place = note.location?.placeName {
-            Image(systemName: "location.fill")
-            Text(place).lineLimit(1)
-            Text("·")
-          }
-          Image(systemName: "clock")
-          Text(note.updatedAt.quillRelativeFormatted())
-          Text("·")
-          Text(note.updatedAt.formatted(date: .omitted, time: .shortened))
-          Text("·")
-          Text("\(note.wordCount) words")
-          if note.photoCount > 0 {
-            Text("·")
-            Image(systemName: "photo")
-            Text("\(note.photoCount)")
-          }
-          Spacer()
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        QuillNoteMeta(note: note)
+          .padding(.horizontal, 16)
+          .padding(.vertical, 10)
       }
-      // Active row lifts off the lavender app bg with a fully white
-      // fill and a brighter #c084fc border at 1.5px. Inactive rows
-      // sit flush in the secondary system background.
+      .frame(maxWidth: .infinity, alignment: .leading)
       .background(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-          .fill(isActive ? Color(.systemBackground) : Color(.secondarySystemBackground))
-      )
-      .overlay(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-          .stroke(
-            isActive ? Color(red: 0.753, green: 0.518, blue: 0.988)
-                     : Color.secondary.opacity(0.15),
-            lineWidth: isActive ? 1.5 : 1
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
+          .fill(theme.card)
+          .overlay(
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
+              .strokeBorder(
+                isActive ? accent.opacity(0.7) : theme.hair,
+                lineWidth: isActive ? 1.5 : 0.5
+              )
           )
       )
-      .shadow(color: isActive ? Color.purple.opacity(0.10) : .clear, radius: 6, y: 2)
+      .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
-    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-      Button(role: .destructive, action: onDelete) {
-        Label("Delete", systemImage: "trash")
-      }
-    }
-    // SwiftUI's swipeActions only work inside List, but VStack/ScrollView
-    // users expect swipe-to-delete too. Fall back to a long-press menu for
-    // consistent discoverability.
+    .buttonStyle(QuillPressStyle())
     .contextMenu {
-      if let onTogglePin {
-        Button(action: onTogglePin) {
-          Label(note.isPinned ? "Unpin" : "Pin", systemImage: note.isPinned ? "pin.slash" : "pin")
-        }
+      Button(action: onTogglePin) {
+        Label(note.isPinned ? "Unpin" : "Pin", systemImage: note.isPinned ? "pin.slash" : "pin")
       }
       Button(action: onRename) {
         Label("Rename", systemImage: "pencil")
@@ -428,36 +329,78 @@ private struct NoteRow: View {
     }
   }
 
-  /// Shared style for the rename / delete pills at the top of every
-  /// row. 38pt white circle, tinted glyph, soft drop shadow, faint
-  /// tint hairline so each pill has a distinct edge against the row
-  /// background regardless of the active state.
-  private func rowActionGlyph(_ systemName: String, tint: Color) -> some View {
-    Image(systemName: systemName)
-      .font(.subheadline.weight(.semibold))
-      .foregroundStyle(tint)
-      .frame(width: 38, height: 38)
-      .background(Circle().fill(Color(.systemBackground)))
-      .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
-      .overlay(
-        Circle().stroke(tint.opacity(0.15), lineWidth: 0.5)
-      )
-  }
-}
+  private var titleRow: some View {
+    HStack(spacing: 8) {
+      if note.isPinned {
+        Image(systemName: "pin.fill")
+          .font(.system(size: 11))
+          .foregroundStyle(accent)
+          .rotationEffect(.degrees(45))
+      }
 
-// MARK: - Date formatting (mirrors macOS Date.relativeFormatted)
+      Text(note.displayTitle)
+        .font(.system(size: 17, weight: .semibold))
+        .tracking(-0.3)
+        .foregroundStyle(theme.text)
+        .lineLimit(1)
 
-extension Date {
-  func quillRelativeFormatted() -> String {
-    let calendar = Calendar.current
-    if calendar.isDateInToday(self) { return "Today" }
-    if calendar.isDateInYesterday(self) { return "Yesterday" }
-    if let daysAgo = calendar.dateComponents([.day], from: self, to: Date()).day,
-       daysAgo < 7 {
-      let f = DateFormatter()
-      f.dateFormat = "EEEE"
-      return f.string(from: self)
+      if isActive {
+        Text("ACTIVE")
+          .font(.system(size: 10.5, weight: .bold))
+          .tracking(0.3)
+          .foregroundStyle(accent)
+          .padding(.horizontal, 7)
+          .padding(.vertical, 2)
+          .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(accent.opacity(0.14)))
+      }
     }
-    return self.formatted(date: .abbreviated, time: .omitted)
+  }
+
+  @ViewBuilder
+  private var preview: some View {
+    let text = NoteContent.stripPhotos(from: note.body)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    if !text.isEmpty {
+      Text(text)
+        .font(.system(size: 14.5))
+        .foregroundStyle(theme.text2)
+        .lineLimit(2)
+        .multilineTextAlignment(.leading)
+    } else if note.photoCount > 0 {
+      Label(
+        "\(note.photoCount) photo\(note.photoCount == 1 ? "" : "s")",
+        systemImage: "photo"
+      )
+      .font(.system(size: 14.5))
+      .foregroundStyle(theme.text2)
+    } else {
+      Text("Empty")
+        .font(.system(size: 14.5))
+        .italic()
+        .foregroundStyle(theme.text3)
+    }
+  }
+
+  private func cardButton(
+    _ symbol: String,
+    _ label: String,
+    tint: Color,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      Image(systemName: symbol)
+        .font(.system(size: 15, weight: .medium))
+        .foregroundStyle(tint)
+        .frame(width: 36, height: 36)
+        .background(
+          Circle()
+            .fill(theme.chip)
+            .overlay(Circle().strokeBorder(theme.hair, lineWidth: 0.5))
+        )
+        .contentShape(Circle())
+    }
+    .buttonStyle(QuillPressStyle())
+    .accessibilityLabel(label)
   }
 }

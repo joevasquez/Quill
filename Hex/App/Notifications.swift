@@ -17,6 +17,23 @@ extension NSNotification.Name {
   /// Posted when the display mode changes (HUD ↔ Orb ↔ Chip) so the
   /// AppKit-side status item can swap its label.
   static let displayModeChanged = NSNotification.Name("DisplayModeChanged")
+  /// Posted when the user switches transcription mode (cycle hotkey or the
+  /// menu Mode submenu). Carries the new mode's rawValue so the AppKit-side
+  /// mode-switch HUD can show a brief bubble when the menu bar is hidden
+  /// (full-screen app) and the status-item feather/chip isn't visible.
+  static let modeDidChange = NSNotification.Name("ModeDidChange")
+}
+
+enum ModeChangeNotification {
+  static let modeNameKey = "modeName"
+
+  static func post(modeName: String) {
+    NotificationCenter.default.post(
+      name: .modeDidChange,
+      object: nil,
+      userInfo: [modeNameKey: modeName]
+    )
+  }
 }
 
 enum ActionConfirmationNotification {

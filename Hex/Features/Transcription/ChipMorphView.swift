@@ -15,7 +15,7 @@
 //    status item: mode badge + status string, live transcript, Act-mode
 //    destination rows, the edit Accept/Undo pill, and error banners.
 //
-//  Geometry, hues (OKLCH 248/305/188/150 ≈ shared OrbHue), and timings
+//  Geometry, hues (the shared QuillDesign.ModePalette), and timings
 //  follow the spec exactly at menu-bar scale. Both views observe the
 //  TranscriptionFeature store directly, so the AppKit controller stays
 //  dumb: it only installs views, positions the panel, and shows/hides it
@@ -78,10 +78,6 @@ struct MenuBarChipView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @StateObject private var flash = ResultFlash()
   @State private var breathe = false
-  /// Non-nil while the transient "you're now in X" mode label is shown
-  /// after a hotkey/menu mode switch.
-  @State private var revealMode: TranscriptionIndicatorView.Mode?
-  @State private var revealTask: Task<Void, Never>?
 
   private var status: TranscriptionIndicatorView.Status { liveStatus(store) }
   private var isListening: Bool { status == .recording }
@@ -90,40 +86,41 @@ struct MenuBarChipView: View {
     status != .idle || flash.active || store.pendingEditResult != nil
   }
 
-  private var hue: Double {
-    if flash.active || store.pendingEditResult != nil { return OrbHue.success }
+  private var palette: OKLCH {
+    if flash.active || store.pendingEditResult != nil { return QuillDesign.ModePalette.resolved }
     let mode = store.selectedMode
     if mode == .auto {
-      return status != .idle ? store.autoDetectedMode.orbHue : OrbHue.auto
+      return status != .idle ? store.autoDetectedMode.orbPalette : QuillDesign.ModePalette.auto
     }
-    return mode.orbHue
+    return mode.orbPalette
   }
 
   private var orbColor: Color {
-    Color(hue: hue / 360.0, saturation: live ? 0.72 : 0.28, brightness: 0.92)
+    palette.chromaScaled(live ? 1 : Self.restingChromaScale).color()
   }
+
+  /// The chip sits in the menu bar all day, so at rest its orb is muted
+  /// well below the mode's full chroma.
+  private static let restingChromaScale: Double = 0.39
 
   private var level: Double {
     isListening ? min(1.0, store.meter.averagePower * 2.5) : 0
   }
 
   var body: some View {
-    HStack(spacing: revealMode == nil ? 0 : ChipSpec.labelGap) {
+    HStack(spacing: ChipSpec.labelGap) {
       glyph
         .frame(width: ChipSpec.glyphSlot, height: ChipSpec.glyphSlot)
 
-      // Transient mode label after a hotkey/menu mode switch.
-      if let reveal = revealMode {
-        Text(reveal.rawValue)
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(.white)
-          .fixedSize()
-          .lineLimit(1)
-          .transition(.asymmetric(
-            insertion: .opacity.combined(with: .offset(x: -6)),
-            removal: .opacity
-          ))
-      }
+      // Persistent mode label so the current mode is always legible in the
+      // menu bar (not just a transient flash on switch). Keeping it always-on
+      // also removes the grow/shrink status-item resize that made switching
+      // look glitchy. White on the dark pill for maximum legibility.
+      Text(store.selectedMode.rawValue)
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(ChipStyle.fg)
+        .fixedSize()
+        .lineLimit(1)
     }
     .padding(.horizontal, ChipSpec.chipHPad)
     // Fill the button height so the pill matches the system mic pill,
@@ -138,12 +135,14 @@ struct MenuBarChipView: View {
     .padding(.vertical, ChipSpec.chipVMargin)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .animation(reduceMotion ? .easeInOut(duration: 0.18)
-               : .spring(response: 0.32, dampingFraction: 0.82), value: revealMode)
-    .onAppear { if !reduceMotion { breathe = true } }
+               : .spring(response: 0.32, dampingFraction: 0.82), value: store.selectedMode)
+    .onAppear {
+      if !reduceMotion { breathe = true }
+      onDesiredLengthChanged(Self.itemLength(for: store.selectedMode))
+    }
     .onChange(of: status) { old, new in flash.statusChanged(from: old, to: new) }
-    .onChange(of: store.selectedMode) { old, new in
-      guard old != new else { return }
-      showModeReveal(new)
+    .onChange(of: store.selectedMode) { _, new in
+      onDesiredLengthChanged(Self.itemLength(for: new))
     }
     .accessibilityLabel("Quill, \(store.selectedMode.rawValue), \(accessibilityStatus)")
   }
@@ -198,35 +197,13 @@ struct MenuBarChipView: View {
       reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: 0.4, dampingFraction: 0.62),
       value: live
     )
-    .animation(.easeInOut(duration: 0.3), value: hue)
+    .animation(.easeInOut(duration: 0.3), value: palette)
   }
 
-  // MARK: Mode-name reveal
-
-  /// Show the mode name for ~1.6s after a hotkey/menu switch, growing the
-  /// status item to fit, then collapse it back. Rapid cycling resets the
-  /// timer and re-sizes to the newest mode.
-  private func showModeReveal(_ mode: TranscriptionIndicatorView.Mode) {
-    revealTask?.cancel()
-    // Grow the status item first so the label has room to slide in.
-    onDesiredLengthChanged(revealItemLength(mode))
-    withAnimation(reduceMotion ? .easeInOut(duration: 0.18)
-                  : .spring(response: 0.32, dampingFraction: 0.82)) {
-      revealMode = mode
-    }
-    revealTask = Task { @MainActor in
-      try? await Task.sleep(for: .milliseconds(1600))
-      guard !Task.isCancelled else { return }
-      withAnimation(.easeInOut(duration: 0.25)) { revealMode = nil }
-      // Shrink only after the label has faded out, so it isn't clipped.
-      try? await Task.sleep(for: .milliseconds(300))
-      guard !Task.isCancelled else { return }
-      onDesiredLengthChanged(ChipSpec.itemLength)
-    }
-  }
-
-  /// Status-item width needed to show the chip + the mode label.
-  private func revealItemLength(_ mode: TranscriptionIndicatorView.Mode) -> CGFloat {
+  /// Status-item width needed to show the chip + the (persistent) mode
+  /// label. Static so the controller can size the item on install without
+  /// waiting for the SwiftUI onAppear.
+  static func itemLength(for mode: TranscriptionIndicatorView.Mode) -> CGFloat {
     let font = NSFont.systemFont(ofSize: 11, weight: .semibold)
     let textW = (mode.rawValue as NSString).size(withAttributes: [.font: font]).width
     let chip = ChipSpec.chipHPad * 2 + ChipSpec.glyphSlot + ChipSpec.labelGap + ceil(textW)
@@ -248,16 +225,17 @@ struct MenuBarChipView: View {
 /// by construction, rather than a fixed height that could differ per Mac.
 enum ChipSpec {
   static let orb: CGFloat = 16
-  static let feather = CGSize(width: 21, height: 21)
+  static let feather = CGSize(width: 17, height: 17)
   /// Fixed slot the orb/feather/meter render in (widest glyph state).
-  static let glyphSlot: CGFloat = 22
+  static let glyphSlot: CGFloat = 20
   static let chipHPad: CGFloat = 9
-  /// Inset from the top/bottom bar edges — the pill fills the rest.
-    static let chipVMargin: CGFloat = 0
-  /// Gap between the glyph and the transient mode label.
+  /// Inset from the top/bottom bar edges — the pill fills the rest. A few
+  /// points of margin keeps the pill from sitting flush against the bar
+  /// edges, giving it a bit of breathing room top and bottom.
+  static let chipVMargin: CGFloat = 3
+  /// Gap between the glyph and the persistent mode label.
   static let labelGap: CGFloat = 5
-  static let itemLength: CGFloat = 44  // NSStatusItem length at rest (chip + breathing room)
-  /// Extra room around the chip within the status-item slot during a reveal.
+  /// Extra room around the chip within the status-item slot.
   static let slotSlack: CGFloat = 8
   static let bloomWidth: CGFloat = 232
 }
@@ -313,17 +291,17 @@ struct CornerBloomHost: View {
     status != .idle || showResult || store.editNeedsSelectionMessage != nil
   }
 
-  private var hue: Double {
-    if showResult { return OrbHue.success }
+  private var palette: OKLCH {
+    if showResult { return QuillDesign.ModePalette.resolved }
     let mode = store.selectedMode
     if mode == .auto {
-      return status != .idle ? store.autoDetectedMode.orbHue : OrbHue.auto
+      return status != .idle ? store.autoDetectedMode.orbPalette : QuillDesign.ModePalette.auto
     }
-    return mode.orbHue
+    return mode.orbPalette
   }
 
   private var accent: Color {
-    Color(hue: hue / 360.0, saturation: 0.72, brightness: 0.92)
+    palette.color()
   }
 
   private var activeTarget: Integration.Identifier? {

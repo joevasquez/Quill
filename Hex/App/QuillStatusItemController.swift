@@ -45,6 +45,10 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
   /// Shadow margin baked into the hosted bloom view (see CornerBloomHost).
   private let bloomMargin: CGFloat = 30
 
+  /// Flashes the current mode from the top of the screen when the menu bar
+  /// is hidden (full-screen app) and the status item isn't visible.
+  private let modeSwitchHUD = ModeSwitchHUDController()
+
   @Shared(.hexSettings) private var hexSettings: HexSettings
 
   init(store: StoreOf<AppFeature>, onOpenSettings: @escaping () -> Void) {
@@ -68,6 +72,10 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
       name: .displayModeChanged, object: nil
     )
     NotificationCenter.default.addObserver(
+      self, selector: #selector(modeDidChange),
+      name: .modeDidChange, object: nil
+    )
+    NotificationCenter.default.addObserver(
       self, selector: #selector(screenParamsChanged),
       name: NSApplication.didChangeScreenParametersNotification, object: nil
     )
@@ -83,6 +91,7 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
     guard let button = statusItem.button else { return }
     if hexSettings.displayMode == .chip {
       button.image = nil
+      button.attributedTitle = NSAttributedString(string: "")  // chip host draws its own label
       if chipHostView == nil {
         let host = NSHostingView(rootView: MenuBarChipView(
           store: transcriptionStore,
@@ -108,14 +117,40 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
         ])
         chipHostView = host
       }
-      statusItem.length = ChipSpec.itemLength
+      // Size to the persistent label straight away (the chip's onAppear
+      // also reports this, but setting it here avoids a first-frame jump).
+      statusItem.length = MenuBarChipView.itemLength(for: store.state.transcription.selectedMode)
     } else {
       chipHostView?.removeFromSuperview()
       chipHostView = nil
       button.image = HexApp.menuBarIcon
-      statusItem.length = NSStatusItem.squareLength
+      button.imagePosition = .imageLeading
+      statusItem.length = NSStatusItem.variableLength
+      updateStaticModeLabel()
       setBloomVisible(false)
     }
+  }
+
+  /// Persistent "feather + colored mode name" for the HUD/Orb display modes
+  /// (Chip draws its own label). Keeps the current mode legible in the menu
+  /// bar at all times, not just during a capture.
+  private func updateStaticModeLabel() {
+    guard hexSettings.displayMode != .chip, let button = statusItem.button else { return }
+    let mode = store.state.transcription.selectedMode
+    // Adaptive label color (not white) — the HUD/Orb label sits directly on
+    // the menu bar with no pill behind it, so it must stay legible on a
+    // light menu bar too. `labelColor` renders like native menu-bar text.
+    button.attributedTitle = NSAttributedString(
+      string: " \(mode.rawValue)",
+      attributes: [
+        .foregroundColor: NSColor.labelColor,
+        .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+      ]
+    )
+  }
+
+  @objc private func modeDidChange() {
+    updateStaticModeLabel()
   }
 
   // MARK: - Click handling
@@ -206,9 +241,7 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
       string: "   \(mode.rawValue)",
       attributes: [
         .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
-        .foregroundColor: NSColor(
-          hue: mode.orbHue / 360.0, saturation: 0.6, brightness: 0.9, alpha: 1
-        ),
+        .foregroundColor: NSColor(mode.orbPalette.color()),
       ]
     ))
     headerItem.attributedTitle = header

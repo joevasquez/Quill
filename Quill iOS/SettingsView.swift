@@ -13,6 +13,10 @@ struct SettingsView: View {
   @Environment(\.dismiss) private var dismiss
 
   @AppStorage(QuillIOSSettingsKey.selectedModel) private var selectedModel: String = QuillIOSSettingsKey.defaultModel
+  @AppStorage(QuillIOSSettingsKey.appearance) private var appearanceRaw: String = QuillAppearance.system.rawValue
+  /// Doubles as "last mode used on the home rail" — the rail writes back
+  /// here so a relaunch reopens where the user left off.
+  @AppStorage(QuillIOSSettingsKey.defaultCaptureMode) private var defaultCaptureModeRaw: String = QuillIOSSettingsKey.defaultCaptureModeValue
   @AppStorage(QuillIOSSettingsKey.aiProvider) private var aiProviderRaw: String = QuillIOSSettingsKey.defaultProvider
   @AppStorage(QuillIOSSettingsKey.voiceCommandsEnabled) private var voiceCommandsEnabled: Bool = QuillIOSSettingsKey.defaultVoiceCommandsEnabled
   @AppStorage(QuillIOSSettingsKey.autoActionRouting) private var autoActionRouting: Bool = QuillIOSSettingsKey.defaultAutoActionRouting
@@ -75,6 +79,32 @@ struct SettingsView: View {
   var body: some View {
     NavigationStack {
       Form {
+        Section {
+          Picker("Theme", selection: $appearanceRaw) {
+            ForEach(QuillAppearance.allCases) { appearance in
+              Text(appearance.label).tag(appearance.rawValue)
+            }
+          }
+          .pickerStyle(.segmented)
+        } header: {
+          Text("Appearance")
+        } footer: {
+          Text("Auto follows your device. The orb keeps its mode colors in both themes.")
+        }
+
+        Section {
+          Picker("Default mode", selection: $defaultCaptureModeRaw) {
+            ForEach(QuillMode.homeOrder) { mode in
+              Text(mode.label).tag(mode.rawValue)
+            }
+          }
+          .pickerStyle(.segmented)
+        } header: {
+          Text("Capture")
+        } footer: {
+          Text("What a fresh capture starts in. Switching modes on the home rail updates this too, so Quill reopens in whatever you used last.")
+        }
+
         Section("Transcription Model") {
           Picker("Model", selection: $selectedModel) {
             ForEach(availableModels, id: \.id) { model in
@@ -166,9 +196,18 @@ struct SettingsView: View {
           // transformations they actually use.
           ForEach(builtInToggleableModes, id: \.rawValue) { mode in
             Toggle(isOn: builtInModeBinding(for: mode)) {
-              VStack(alignment: .leading, spacing: 1) {
-                Label(mode.displayName, systemImage: builtInModeIcon(mode))
-                  .font(.body)
+              VStack(alignment: .leading, spacing: 2) {
+                // Explicit HStack rather than a Label: inside a Toggle's
+                // label the icon and title were breaking onto separate
+                // lines.
+                HStack(spacing: 7) {
+                  Image(systemName: builtInModeIcon(mode))
+                    .font(.body)
+                    .foregroundStyle(QuillDesign.brand.color())
+                    .frame(width: 22)
+                  Text(mode.displayName)
+                    .font(.body)
+                }
                 Text(builtInModeDescription(mode))
                   .font(.caption)
                   .foregroundStyle(.secondary)

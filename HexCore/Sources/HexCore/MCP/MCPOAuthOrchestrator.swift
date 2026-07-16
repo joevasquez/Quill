@@ -142,6 +142,31 @@ public struct MCPOAuthOrchestrator: Sendable {
     mcpOAuthLogger.info("MCP OAuth complete for \(server.name, privacy: .private)")
   }
 
+  /// Whether the server publishes OAuth protected-resource metadata
+  /// (RFC 9728). Some servers (Dex among them) answer `initialize` and
+  /// `tools/list` anonymously and only 401 the actual tool calls — so
+  /// "the first request succeeded" is NOT proof that no sign-in is
+  /// needed. This probe lets callers offer the browser sign-in at
+  /// add time instead of surprising the user at first execution.
+  public func advertisesOAuth(server: MCPServerConfig) async -> Bool {
+    guard let serverURL = URL(string: server.url) else { return false }
+    var candidates = MCPOAuth.resourceMetadataCandidates(for: serverURL)
+    if let (_, response) = try? await probe(serverURL),
+       let http = response as? HTTPURLResponse,
+       let header = http.value(forHTTPHeaderField: "WWW-Authenticate"),
+       let url = MCPOAuth.resourceMetadataURL(fromWWWAuthenticate: header) {
+      candidates.insert(url, at: 0)
+    }
+    for url in candidates {
+      if let (data, response) = try? await URLSession.shared.data(from: url),
+         (response as? HTTPURLResponse)?.statusCode == 200,
+         (try? MCPOAuth.decoder().decode(MCPProtectedResourceMetadata.self, from: data)) != nil {
+        return true
+      }
+    }
+    return false
+  }
+
   // MARK: - Discovery
 
   private func discoverAuthorizationServer(serverURL: URL) async throws -> URL {

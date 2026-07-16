@@ -44,6 +44,12 @@ enum IOSMCPOAuthClient {
     try await orchestrator.signIn(server: server)
   }
 
+  /// Whether the server publishes OAuth metadata (i.e. supports browser
+  /// sign-in) even if it doesn't 401 anonymous catalog requests.
+  static func advertisesOAuth(_ server: MCPServerConfig) async -> Bool {
+    await orchestrator.advertisesOAuth(server: server)
+  }
+
   /// Remove every stored credential for a server (OAuth blob + static
   /// token) — used when the user deletes the server row.
   static func deleteAllCredentials(for server: MCPServerConfig) {

@@ -133,3 +133,20 @@ private struct PulsingOpacity: ViewModifier {
       }
   }
 }
+
+// MARK: - Date formatting (mirrors macOS Date.relativeFormatted)
+
+extension Date {
+  func quillRelativeFormatted() -> String {
+    let calendar = Calendar.current
+    if calendar.isDateInToday(self) { return "Today" }
+    if calendar.isDateInYesterday(self) { return "Yesterday" }
+    if let daysAgo = calendar.dateComponents([.day], from: self, to: Date()).day,
+       daysAgo < 7 {
+      let f = DateFormatter()
+      f.dateFormat = "EEEE"
+      return f.string(from: self)
+    }
+    return self.formatted(date: .abbreviated, time: .omitted)
+  }
+}

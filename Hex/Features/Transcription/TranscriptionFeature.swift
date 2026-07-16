@@ -292,18 +292,27 @@ struct TranscriptionFeature {
         return .send(.setMode(state.selectedMode.next))
 
       case let .setMode(newMode):
+        let modeChanged = state.selectedMode != newMode
         state.selectedMode = newMode
         transcriptionFeatureLogger.info("Mode set to \(newMode.rawValue)")
         // Reset auto-detected mode when entering Auto.
         if state.selectedMode == .auto {
           state.autoDetectedMode = .dictate
         }
+        // Announce the switch so the mode-switch HUD can flash a bubble
+        // when the menu bar is hidden (full-screen app). Only on an actual
+        // change — re-selecting the current mode shouldn't flash anything.
+        let announce: Effect<Action> = modeChanged
+          ? .run { [name = newMode.rawValue] _ in
+              await MainActor.run { ModeChangeNotification.post(modeName: name) }
+            }
+          : .none
         // Refresh available integrations for Action or Auto (Auto may
         // resolve to Action at stop time).
         if state.selectedMode == .action || state.selectedMode == .auto {
-          return .send(.loadActionIntegrations)
+          return .merge(announce, .send(.loadActionIntegrations))
         }
-        return .none
+        return announce
 
       // MARK: - Edit Mode
 
@@ -832,6 +841,20 @@ private extension TranscriptionFeature {
 
 private extension TranscriptionFeature {
   func handleStartRecording(_ state: inout State) -> Effect<Action> {
+    // Starting is idempotent: ignore a start while a recording is already in
+    // flight. Without this, a stray duplicate `.startRecording` (e.g. the
+    // hotkey processor re-emitting a press mid-hold) silently DESTROYS the
+    // take — `beginRecording` resets `recordingStartTime` and makes the
+    // capture controller re-open the audio file, truncating everything
+    // spoken so far. Observed as a 75s dictation landing as 13s of audio
+    // with only the closing sentence transcribed.
+    guard !state.isRecording else {
+      transcriptionFeatureLogger.notice(
+        "Ignoring duplicate startRecording — a recording is already in flight"
+      )
+      return .none
+    }
+
     guard state.modelBootstrapState.isModelReady else {
       return .merge(
         .send(.modelMissing),

@@ -54,6 +54,12 @@ final class RecordingViewModel: ObservableObject {
   @Published var routineDraft: RoutineDraft?
   /// True when the current recording was started via the Action FAB.
   var isActionRecording: Bool = false
+  /// True while an Edit-mode revision is in flight against the model.
+  @Published var isEditingNote: Bool = false
+  /// Why the last note edit didn't land. Separate from `aiErrorMessage`
+  /// because that one is rendered by the home screen's status pill, which
+  /// is invisible from the pushed note detail where edits are triggered.
+  @Published var noteEditError: String?
   /// True while the WhisperKit model is loading (first launch, or
   /// after the user changes models in Settings). Surfaced in the
   /// status area so the user knows why the first transcription is
@@ -117,7 +123,8 @@ final class RecordingViewModel: ObservableObject {
     mode: AIProcessingMode,
     provider: AIProvider,
     voiceCommandsEnabled: Bool,
-    customSystemPrompt: String? = nil
+    customSystemPrompt: String? = nil,
+    captureMode: QuillMode = .auto
   ) async {
     switch phase {
     case .idle, .done, .error:
@@ -133,12 +140,34 @@ final class RecordingViewModel: ObservableObject {
           mode: mode,
           provider: provider,
           voiceCommandsEnabled: voiceCommandsEnabled,
-          customSystemPrompt: customSystemPrompt
+          customSystemPrompt: customSystemPrompt,
+          captureMode: captureMode
         )
       }
     default:
       break
     }
+  }
+
+  /// Throw the take away — the capture sheet's ×. Stops the recorder and
+  /// drops the audio without transcribing it.
+  func discardRecording() {
+    guard phase == .recording else { return }
+    timerTask?.cancel()
+    transcriptionTask?.cancel()
+    // Invalidating the session id makes any in-flight transcription
+    // callback a no-op if one is somehow already running.
+    recordingSessionID = UUID()
+    if let url = recorder.stopRecording() {
+      try? FileManager.default.removeItem(at: url)
+    }
+    rawTranscript = ""
+    processedTranscript = ""
+    livePartial = ""
+    isActionRecording = false
+    wasAutoRouted = false
+    phase = .idle
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
   }
 
   func toggleActionRecording(
@@ -211,7 +240,8 @@ final class RecordingViewModel: ObservableObject {
     mode: AIProcessingMode,
     provider: AIProvider,
     voiceCommandsEnabled: Bool,
-    customSystemPrompt: String? = nil
+    customSystemPrompt: String? = nil,
+    captureMode: QuillMode = .auto
   ) async {
     timerTask?.cancel()
     let url = recorder.stopRecording()
@@ -277,15 +307,18 @@ final class RecordingViewModel: ObservableObject {
           return
         }
 
-        // Auto routing (mirrors macOS Auto mode): when the dictation
-        // sounds like a command ("remind me…", "add to todoist…"), hand
-        // it to the agent pipeline instead of appending to the note.
-        // Apple Reminders/Calendar need no setup, so action capability is
-        // always present on iOS — the classifier's keywords decide.
-        // The bolt FAB still forces Action; this covers the mic path.
+        // Auto routing: when the dictation sounds like a command ("remind
+        // me…", "add to todoist…"), hand it to the agent pipeline instead
+        // of appending to the note. Apple Reminders/Calendar need no
+        // setup, so action capability is always present on iOS — the
+        // classifier's keywords decide.
+        //
+        // Only Auto routes. Picking Dictate explicitly is the user saying
+        // "this is a note" — a command-shaped sentence stays a note.
+        // Act never reaches here (it starts as an action recording).
         let autoRouting = UserDefaults.standard.object(forKey: QuillIOSSettingsKey.autoActionRouting) as? Bool
           ?? QuillIOSSettingsKey.defaultAutoActionRouting
-        if autoRouting, !isActionRecording,
+        if autoRouting, captureMode == .auto, !isActionRecording,
            AutoModeClassifier.resolve(
              transcript: text,
              hasSelection: false,
@@ -508,6 +541,9 @@ struct ContentView: View {
   @AppStorage(QuillIOSSettingsKey.voiceCommandsEnabled) private var voiceCommandsEnabled: Bool = QuillIOSSettingsKey.defaultVoiceCommandsEnabled
   @AppStorage(CustomAIModesStorage.userDefaultsKey) private var customModesData: Data = Data()
   @AppStorage(QuillIOSSettingsKey.disabledBuiltInModes) private var disabledBuiltInModesData: Data = Data()
+  @AppStorage(QuillIOSSettingsKey.defaultCaptureMode) private var defaultCaptureModeRaw: String = QuillIOSSettingsKey.defaultCaptureModeValue
+  @AppStorage(IntegrationConnectionStore.userDefaultsKey) private var connectedIntegrationsData: Data = Data()
+  @AppStorage(MCPServersStorage.userDefaultsKey) private var mcpServersData: Data = Data()
 
   @StateObject private var vm = RecordingViewModel()
   @StateObject private var notes = NotesStore.shared
@@ -521,7 +557,6 @@ struct ContentView: View {
   @EnvironmentObject private var deepLinks: QuillDeepLinkRouter
   @State private var showingSettings = false
   @State private var showingNotesList = false
-  @State private var idlePulse = false
   @State private var lastAppendedTranscript: String = ""
   @State private var showCopied = false
   @State private var copyResetTask: Task<Void, Never>?
@@ -537,11 +572,30 @@ struct ContentView: View {
   @State private var showingMultiActionConfirmation = false
   @State private var showingRoutineSave = false
   @State private var showingTypedAction = false
+  @State private var showingConnections = false
+  @State private var showingCustomModes = false
+  @AppStorage(QuillIOSSettingsKey.editCommandUsage) private var editCommandUsageData: Data = Data()
   @StateObject private var multiActionVM = MultiActionConfirmationViewModel()
   /// Transient banner state — set true when an action mode item is queued
   /// because we're offline. Auto-clears after a few seconds via the task
   /// kicked off in `.onReceive`.
   @State private var showOfflineQueuedBanner = false
+
+  /// The mode this capture runs in. Seeded from — and written back to —
+  /// `defaultCaptureMode`, so picking Act on the rail is still Act the
+  /// next time the app opens.
+  @State private var captureMode: QuillMode = .auto
+  /// Act destinations the user has switched off for this capture.
+  @State private var mutedDestinations: Set<String> = []
+  /// Set when the user corrects the routing preview, which stops the live
+  /// keyword intuition for the rest of the utterance.
+  @State private var lockedDestinationID: String?
+  /// The note composer's mode. Separate from `captureMode` because the
+  /// note rail offers Edit where home offers Auto — sharing one value
+  /// would strand the rail on a mode its own rail can't show.
+  @State private var noteMode: QuillMode = .dictate
+  /// Navigation. Home is the root; a note pushes its detail.
+  @State private var path: [UUID] = []
   @State private var offlineBannerDismissTask: Task<Void, Never>?
 
   /// The currently-selected mode, which may be either a built-in
@@ -573,67 +627,167 @@ struct ContentView: View {
   }
 
   var body: some View {
-    NavigationStack {
-      ZStack(alignment: .bottomTrailing) {
+    NavigationStack(path: $path) {
+      ZStack(alignment: .bottom) {
         backgroundGradient
           .ignoresSafeArea()
 
         VStack(spacing: 0) {
           headerBar
-          activeNoteStrip
-
-          ScrollViewReader { proxy in
-            ScrollView {
-              VStack(spacing: 20) {
-                // Mode picker is no longer pinned to the canvas top —
-                // it floats up next to the dictate button when the user
-                // expands the FAB cluster (see `QuillFABCluster`).
-                resultArea
-                // Bottom-of-scroll buffer. During recording the safe-area
-                // inset (waveform card) already pads the scroll content,
-                // so we only need a small breath between the transcript
-                // card and the waveform — 24pt. When not recording, the
-                // FAB cluster sits in a separate ZStack overlay above
-                // the scroll, so we keep 140pt to ensure the last note
-                // line / action buttons aren't hidden behind it.
-                Color.clear
-                  .frame(height: vm.phase == .recording ? 24 : 140)
-                  .id("noteBottom")
-              }
-              .padding(.horizontal)
-              .padding(.top, 16)
-            }
-            // Animate the outer scroll so the newest transcript/photo
-            // lands just above the FAB cluster rather than off-screen.
-            .onChange(of: notes.activeNote?.body) { _, _ in
-              withAnimation(.easeOut(duration: 0.4)) {
-                proxy.scrollTo("noteBottom", anchor: .bottom)
-              }
-            }
-            // Pin the waveform card just above the FAB cluster while
-            // recording. `safeAreaInset` is the cleanest way to do this:
-            // the scroll view's content automatically gets padded so it
-            // doesn't slide under the waveform.
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-              if vm.phase == .recording {
-                WaveformBottomBar(vm: vm)
-                  .padding(.bottom, 116) // clear the FAB cluster + push up a bit per the spec
-                  .transition(.move(edge: .bottom).combined(with: .opacity))
-              }
-            }
-          }
+          home
         }
 
-        bottomActionCluster
-          .padding(.trailing, 20)
-          .padding(.bottom, 24)
+        statusCard
+          .padding(.bottom, 12)
+      }
+      .navigationDestination(for: UUID.self) { id in
+        noteDetail(for: id)
       }
       .toolbar(.hidden, for: .navigationBar)
+      .onAppear {
+        // Pre-warm the Whisper model immediately on first appear so
+        // the initial transcription doesn't block on a long
+        // download + load. Happens in the background — user can
+        // still interact with everything else.
+        Task { await vm.prewarmModel(selectedModel) }
+      }
+      .onChange(of: selectedModel) { _, newModel in
+        Task { await vm.prewarmModel(newModel) }
+      }
+      .onChange(of: deepLinks.pendingLink) { _, link in
+        guard let link else { return }
+        switch link.link {
+        case .record:
+          // Widget tap: always start a FRESH note, then begin
+          // recording. Appending to an existing active note would
+          // feel surprising to a user who just tapped a home-screen
+          // widget — they expect a dedicated new capture.
+          Task {
+            let loc = await LocationClient.shared.currentPlace()
+            _ = notes.startNewNote(location: loc)
+            // Delay briefly to let the app finish becoming active so
+            // the mic permission prompt (if any) and recording
+            // startup don't race UIKit window transitions.
+            try? await Task.sleep(for: .milliseconds(300))
+            await vm.toggleRecording(
+              model: selectedModel,
+              mode: aiMode,
+              provider: aiProvider,
+              voiceCommandsEnabled: voiceCommandsEnabled
+            )
+            deepLinks.consume()
+          }
+        case .notes:
+          showingNotesList = true
+          deepLinks.consume()
+        }
+      }
+      .onChange(of: vm.phase) { _, newPhase in
+        if case .done = newPhase, !vm.isActionRecording {
+          // Finishing a capture from home opens the note it just made.
+          appendTranscriptToActiveNote(navigate: path.isEmpty)
+        }
+        // Open the confirmation sheet the moment we start parsing —
+        // the user sees their captured transcript in HEARD with a
+        // skeleton card where WILL DO will land. `applyParsedIntents`
+        // fills it in place when the parse returns.
+        if case .actionParsing = newPhase, !showingMultiActionConfirmation {
+          multiActionVM.onSaveToNote = { appendTranscriptToActiveNote() }
+          multiActionVM.startParsing(
+            transcript: vm.rawTranscript,
+            wasAutoRouted: vm.wasAutoRouted
+          )
+          showingMultiActionConfirmation = true
+        }
+        // Parse failed (queue path or hard error) without intents ever
+        // landing → close the parsing sheet so the offline banner /
+        // error pill in the main UI can take over.
+        if case .done = newPhase,
+           vm.isActionRecording,
+           vm.parsedMultiIntents == nil,
+           showingMultiActionConfirmation,
+           multiActionVM.isParsing {
+          showingMultiActionConfirmation = false
+        }
+        if case .error = newPhase,
+           showingMultiActionConfirmation,
+           multiActionVM.isParsing {
+          showingMultiActionConfirmation = false
+        }
+      }
+      .onChange(of: vm.parsedMultiIntents) { _, intents in
+        guard let intents, !intents.isEmpty else { return }
+        // Routine trust ladder: an auto-run routine skips the confirmation —
+        // the sheet opens straight into execution progress.
+        let autoRun = vm.matchedRoutine?.autoRun ?? false
+        multiActionVM.onSaveToNote = { appendTranscriptToActiveNote() }
+        multiActionVM.applyParsedIntents(
+          intents,
+          rawTranscript: vm.rawTranscript,
+          autoExecute: autoRun
+        )
+        showingMultiActionConfirmation = true
+      }
+      .onChange(of: vm.routineDraft) { _, draft in
+        guard draft != nil else { return }
+        showingRoutineSave = true
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .quillActionQueuedOffline)) { _ in
+        // Show a transient pill above the FAB cluster acknowledging the
+        // queue. Auto-dismiss after 3s — long enough to read, short
+        // enough not to nag.
+        offlineBannerDismissTask?.cancel()
+        withAnimation(.spring(duration: 0.3, bounce: 0.2)) {
+          showOfflineQueuedBanner = true
+        }
+        offlineBannerDismissTask = Task { @MainActor in
+          try? await Task.sleep(for: .seconds(3))
+          guard !Task.isCancelled else { return }
+          withAnimation(.easeOut(duration: 0.3)) {
+            showOfflineQueuedBanner = false
+          }
+        }
+      }
+    }
+      // Presentations attach to the STACK, not to the root screen —
+      // otherwise a pushed note covers them: the capture sheet is a ZStack
+      // overlay so it drew *under* the detail view, and the .sheets fired
+      // against a screen that was no longer visible.
+      .quillCaptureSheet(
+        isPresented: isCapturing,
+        reduceMotion: reduceMotion,
+        onScrimTap: cancelCapture
+      ) {
+        captureSheet
+      }
       .sheet(isPresented: $showingSettings) {
         SettingsView()
       }
       .sheet(isPresented: $showingNotesList) {
         NotesListView(store: notes)
+      }
+      // "+ Connect an app" / "+ Add" on the mode sub-rows go straight to
+      // the screen that does the thing, rather than dropping the user at
+      // the top of Settings to find it.
+      .sheet(isPresented: $showingConnections) {
+        NavigationStack {
+          ConnectionsView()
+            .toolbar {
+              ToolbarItem(placement: .topBarLeading) {
+                Button("Done") { showingConnections = false }
+              }
+            }
+        }
+      }
+      .sheet(isPresented: $showingCustomModes) {
+        NavigationStack {
+          CustomModesView()
+            .toolbar {
+              ToolbarItem(placement: .topBarLeading) {
+                Button("Done") { showingCustomModes = false }
+              }
+            }
+        }
       }
       .sheet(isPresented: $showingCamera) {
         CameraPicker { image in
@@ -703,111 +857,6 @@ struct ContentView: View {
           NoteEditSheet(note: note)
         }
       }
-      .onAppear {
-        idlePulse = true
-        // Pre-warm the Whisper model immediately on first appear so
-        // the initial transcription doesn't block on a long
-        // download + load. Happens in the background — user can
-        // still interact with everything else.
-        Task { await vm.prewarmModel(selectedModel) }
-      }
-      .onChange(of: selectedModel) { _, newModel in
-        Task { await vm.prewarmModel(newModel) }
-      }
-      .onChange(of: deepLinks.pendingLink) { _, link in
-        guard let link else { return }
-        switch link.link {
-        case .record:
-          // Widget tap: always start a FRESH note, then begin
-          // recording. Appending to an existing active note would
-          // feel surprising to a user who just tapped a home-screen
-          // widget — they expect a dedicated new capture.
-          Task {
-            let loc = await LocationClient.shared.currentPlace()
-            _ = notes.startNewNote(location: loc)
-            // Delay briefly to let the app finish becoming active so
-            // the mic permission prompt (if any) and recording
-            // startup don't race UIKit window transitions.
-            try? await Task.sleep(for: .milliseconds(300))
-            await vm.toggleRecording(
-              model: selectedModel,
-              mode: aiMode,
-              provider: aiProvider,
-              voiceCommandsEnabled: voiceCommandsEnabled
-            )
-            deepLinks.consume()
-          }
-        case .notes:
-          showingNotesList = true
-          deepLinks.consume()
-        }
-      }
-      .onChange(of: vm.phase) { _, newPhase in
-        if case .done = newPhase, !vm.isActionRecording {
-          appendTranscriptToActiveNote()
-        }
-        // Open the confirmation sheet the moment we start parsing —
-        // the user sees their captured transcript in HEARD with a
-        // skeleton card where WILL DO will land. `applyParsedIntents`
-        // fills it in place when the parse returns.
-        if case .actionParsing = newPhase, !showingMultiActionConfirmation {
-          multiActionVM.onSaveToNote = { appendTranscriptToActiveNote() }
-          multiActionVM.startParsing(
-            transcript: vm.rawTranscript,
-            wasAutoRouted: vm.wasAutoRouted
-          )
-          showingMultiActionConfirmation = true
-        }
-        // Parse failed (queue path or hard error) without intents ever
-        // landing → close the parsing sheet so the offline banner /
-        // error pill in the main UI can take over.
-        if case .done = newPhase,
-           vm.isActionRecording,
-           vm.parsedMultiIntents == nil,
-           showingMultiActionConfirmation,
-           multiActionVM.isParsing {
-          showingMultiActionConfirmation = false
-        }
-        if case .error = newPhase,
-           showingMultiActionConfirmation,
-           multiActionVM.isParsing {
-          showingMultiActionConfirmation = false
-        }
-      }
-      .onChange(of: vm.parsedMultiIntents) { _, intents in
-        guard let intents, !intents.isEmpty else { return }
-        // Routine trust ladder: an auto-run routine skips the confirmation —
-        // the sheet opens straight into execution progress.
-        let autoRun = vm.matchedRoutine?.autoRun ?? false
-        multiActionVM.onSaveToNote = { appendTranscriptToActiveNote() }
-        multiActionVM.applyParsedIntents(
-          intents,
-          rawTranscript: vm.rawTranscript,
-          autoExecute: autoRun
-        )
-        showingMultiActionConfirmation = true
-      }
-      .onChange(of: vm.routineDraft) { _, draft in
-        guard draft != nil else { return }
-        showingRoutineSave = true
-      }
-      .onReceive(NotificationCenter.default.publisher(for: .quillActionQueuedOffline)) { _ in
-        // Show a transient pill above the FAB cluster acknowledging the
-        // queue. Auto-dismiss after 3s — long enough to read, short
-        // enough not to nag.
-        offlineBannerDismissTask?.cancel()
-        withAnimation(.spring(duration: 0.3, bounce: 0.2)) {
-          showOfflineQueuedBanner = true
-        }
-        offlineBannerDismissTask = Task { @MainActor in
-          try? await Task.sleep(for: .seconds(3))
-          guard !Task.isCancelled else { return }
-          withAnimation(.easeOut(duration: 0.3)) {
-            showOfflineQueuedBanner = false
-          }
-        }
-      }
-    }
   }
 
   // MARK: - Photo flow
@@ -890,37 +939,332 @@ struct ContentView: View {
     }
   }
 
+  // MARK: - Home
+
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  private var home: some View {
+    QuillHome(
+      mode: $captureMode,
+      format: Binding(
+        get: { aiMode },
+        set: { aiModeRaw = AIModeSelection.builtIn($0).rawValue }
+      ),
+      mutedDestinations: $mutedDestinations,
+      notes: notes.sortedNotes,
+      destinations: actDestinations,
+      hiddenFormats: disabledBuiltInModes,
+      onTapTrigger: { Task { await beginCapture() } },
+      onHoldTrigger: { Task { await beginCapture() } },
+      onReleaseTrigger: { Task { await endCapture() } },
+      onTapKeyboard: { showingTypedAction = true },
+      onOpenNote: { note in
+        notes.setActiveNote(id: note.id)
+        path = [note.id]
+      },
+      onAddFormat: { showingCustomModes = true },
+      onAddDestination: { showingConnections = true }
+    )
+    .onAppear {
+      captureMode = QuillMode(rawValue: defaultCaptureModeRaw) ?? .auto
+    }
+    // The rail is the primary way the mode gets set, so it's also what
+    // decides the stored default — otherwise the choice evaporated on
+    // relaunch. Settings edits flow the other way via the second handler.
+    .onChange(of: captureMode) { _, newMode in
+      defaultCaptureModeRaw = newMode.rawValue
+    }
+    .onChange(of: defaultCaptureModeRaw) { _, newRaw in
+      captureMode = QuillMode(rawValue: newRaw) ?? .auto
+    }
+  }
+
+  /// Everything currently connected, minus anything muted for this capture.
+  private var actDestinations: [QuillActDestination] {
+    QuillActDestination.connected(
+      integrationData: connectedIntegrationsData,
+      mcpData: mcpServersData
+    )
+  }
+
+  private var routableDestinations: [QuillActDestination] {
+    actDestinations.filter { !mutedDestinations.contains($0.id) }
+  }
+
+  // MARK: - Capture
+
+  private var isCapturing: Bool {
+    switch vm.phase {
+    case .recording, .transcribing, .aiProcessing, .actionParsing: true
+    case .done: vm.noteTargetBanner != nil
+    case .idle, .requestingPermission, .error: false
+    }
+  }
+
+  private var capturePhase: QuillOrb.Phase {
+    switch vm.phase {
+    case .recording: .listening
+    case .transcribing, .aiProcessing, .actionParsing: .transcribing
+    case .done: .result
+    default: .idle
+    }
+  }
+
+  private var captureSheet: QuillCaptureSheet {
+    QuillCaptureSheet(
+      mode: captureMode,
+      format: aiMode,
+      phase: capturePhase,
+      transcript: vm.livePartial,
+      level: Double(vm.meterLevel),
+      statusText: captureStatusText,
+      resultText: vm.noteTargetBanner,
+      routing: captureMode == .act ? routingPreview : nil,
+      onStop: { Task { await endCapture() } },
+      onCancel: cancelCapture,
+      onPickDestination: { d in
+        lockedDestinationID = d.id
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      }
+    )
+  }
+
+  private var captureStatusText: String {
+    switch vm.phase {
+    case .recording:
+      if captureMode == .act, let target = intuitedDestination {
+        return "routing → \(target.name)"
+      }
+      return "listening…"
+    case .transcribing: return "transcribing…"
+    case .aiProcessing: return "enhancing…"
+    case .actionParsing: return "parsing…"
+    case .done: return "done"
+    default: return ""
+    }
+  }
+
+  /// The destination the live transcript points at — the user's pick wins,
+  /// otherwise keyword intuition, re-run as words arrive.
+  private var intuitedDestination: QuillActDestination? {
+    if let lockedDestinationID {
+      return routableDestinations.first { $0.id == lockedDestinationID }
+    }
+    return QuillActDestination.intuit(from: vm.livePartial, among: routableDestinations)
+  }
+
+  private var routingPreview: QuillCaptureSheet.RoutingPreview {
+    QuillCaptureSheet.RoutingPreview(
+      target: intuitedDestination,
+      options: routableDestinations,
+      isLocked: lockedDestinationID != nil
+    )
+  }
+
+  /// Home always starts a fresh note: clearing the active note means the
+  /// append-on-done creates one rather than extending whatever was last
+  /// open. Appending to an existing note happens from its own composer.
+  private func beginCapture() async {
+    guard vm.phase != .recording else { return }
+    lockedDestinationID = nil
+    if path.isEmpty { notes.setActiveNote(id: nil) }
+
+    switch captureMode {
+    case .act:
+      await vm.toggleActionRecording(model: selectedModel, provider: aiProvider)
+    case .auto, .dictate, .edit:
+      await vm.toggleRecording(
+        model: selectedModel,
+        mode: aiMode,
+        provider: aiProvider,
+        voiceCommandsEnabled: voiceCommandsEnabled,
+        customSystemPrompt: micCustomSystemPrompt,
+        captureMode: captureMode
+      )
+    }
+  }
+
+  private func endCapture() async {
+    guard vm.phase == .recording else { return }
+    switch captureMode {
+    case .act:
+      await vm.toggleActionRecording(model: selectedModel, provider: aiProvider)
+    case .auto, .dictate, .edit:
+      await vm.toggleRecording(
+        model: selectedModel,
+        mode: aiMode,
+        provider: aiProvider,
+        voiceCommandsEnabled: voiceCommandsEnabled,
+        customSystemPrompt: micCustomSystemPrompt,
+        captureMode: captureMode
+      )
+    }
+  }
+
+  private func cancelCapture() {
+    vm.discardRecording()
+    lockedDestinationID = nil
+  }
+
+  // MARK: - Note detail
+
+  @ViewBuilder
+  private func noteDetail(for id: UUID) -> some View {
+    if let note = notes.notes.first(where: { $0.id == id }) {
+      NoteDetailView(
+        note: note,
+        mode: $noteMode,
+        format: Binding(
+          get: { aiMode },
+          set: { aiModeRaw = AIModeSelection.builtIn($0).rawValue }
+        ),
+        mutedDestinations: $mutedDestinations,
+        destinations: actDestinations,
+        hiddenFormats: disabledBuiltInModes,
+        learnedEditCommands: EditCommandUsage.mostUsed(
+          EditCommandUsage.decode(editCommandUsageData)
+        ),
+        onTapTrigger: { Task { await beginNoteCapture(noteID: id) } },
+        onHoldTrigger: { Task { await beginNoteCapture(noteID: id) } },
+        onReleaseTrigger: { Task { await endNoteCapture() } },
+        onSendText: { text in
+          notes.setActiveNote(id: id)
+          if noteMode == .act {
+            Task { await vm.runTypedAction(text, provider: aiProvider) }
+          } else {
+            notes.appendToNote(id: id, text: text)
+          }
+        },
+        onEditCommand: { command in
+          notes.setActiveNote(id: id)
+          Task { await runNoteEdit(command, noteID: id) }
+        },
+        onAddPhoto: {
+          notes.setActiveNote(id: id)
+          tapAddPhoto()
+        },
+        onEditBody: { editingNoteID = id },
+        onRename: {
+          notes.setActiveNote(id: id)
+          tapRenameTitle()
+        },
+        onAddDestination: { showingConnections = true },
+        onAddFormat: { showingCustomModes = true },
+        isEditing: vm.isEditingNote,
+        editError: vm.noteEditError,
+        onDismissEditError: { vm.noteEditError = nil }
+      )
+    }
+  }
+
+  /// Revise a note from a spoken/typed instruction. Replaces the demo
+  /// transform engine in the design prototype with a real model call,
+  /// keeping the diff + Undo affordance that makes edits feel safe.
+  private func runNoteEdit(_ command: String, noteID: UUID) async {
+    guard let note = notes.notes.first(where: { $0.id == noteID }) else { return }
+    vm.noteEditError = nil
+    let body = note.body.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !body.isEmpty else {
+      vm.noteEditError = "Nothing to edit yet — add something to the note first."
+      return
+    }
+
+    // Learn what the user actually reaches for so it floats to the front.
+    var counts = EditCommandUsage.decode(editCommandUsageData)
+    counts[command, default: 0] += 1
+    editCommandUsageData = EditCommandUsage.encode(counts)
+
+    vm.isEditingNote = true
+    defer { vm.isEditingNote = false }
+
+    do {
+      let revised = try await TextAIClient.process(
+        text: InlineEditPrompt.userMessage(instruction: command, selection: body),
+        mode: .clean,
+        provider: aiProvider,
+        customSystemPrompt: InlineEditPrompt.systemPrompt
+      )
+      let cleaned = revised.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !cleaned.isEmpty, cleaned != body else {
+        // The model handed back the note unchanged (or nothing at all).
+        // Say so — silently returning here is indistinguishable from a
+        // dead button.
+        vm.noteEditError = "The model returned the note unchanged. Try rewording the command."
+        return
+      }
+
+      notes.applyEdit(id: noteID, newBody: cleaned, label: editLabel(for: command))
+      UINotificationFeedbackGenerator().notificationOccurred(.success)
+    } catch {
+      vm.noteEditError = error.localizedDescription
+      UINotificationFeedbackGenerator().notificationOccurred(.error)
+    }
+  }
+
+  /// A short past-tense label for the diff banner.
+  private func editLabel(for command: String) -> String {
+    let c = command.lowercased()
+    if c.contains("shorten") || c.contains("tighten") { return "Shortened" }
+    if c.contains("bullet") { return "Reformatted as bullets" }
+    if c.contains("summar") { return "Summarized" }
+    if c.contains("email") { return "Turned into email" }
+    if c.contains("action item") { return "Extracted action items" }
+    if c.contains("formal") { return "Tone adjusted" }
+    if c.contains("grammar") { return "Grammar polished" }
+    return "Note revised"
+  }
+
+  /// A capture started from inside a note appends to THAT note rather than
+  /// creating a new one.
+  private func beginNoteCapture(noteID: UUID) async {
+    guard vm.phase != .recording else { return }
+    notes.setActiveNote(id: noteID)
+    lockedDestinationID = nil
+    switch noteMode {
+    case .act:
+      await vm.toggleActionRecording(model: selectedModel, provider: aiProvider)
+    case .auto, .dictate, .edit:
+      await vm.toggleRecording(
+        model: selectedModel,
+        mode: aiMode,
+        provider: aiProvider,
+        voiceCommandsEnabled: voiceCommandsEnabled,
+        customSystemPrompt: micCustomSystemPrompt,
+        captureMode: noteMode
+      )
+    }
+  }
+
+  private func endNoteCapture() async {
+    guard vm.phase == .recording else { return }
+    switch noteMode {
+    case .act:
+      await vm.toggleActionRecording(model: selectedModel, provider: aiProvider)
+    case .auto, .dictate, .edit:
+      await vm.toggleRecording(
+        model: selectedModel,
+        mode: aiMode,
+        provider: aiProvider,
+        voiceCommandsEnabled: voiceCommandsEnabled,
+        customSystemPrompt: micCustomSystemPrompt,
+        captureMode: noteMode
+      )
+    }
+  }
+
   // MARK: - Custom header
 
-  /// Reusable purple header. The component lives in
-  /// `Views/QuillHeaderBar.swift` so future screens (empty home,
-  /// recording state, action confirmation) drop it in identically.
   private var headerBar: some View {
-    QuillHeaderBar(
+    QuillTopBar(
       onTapList: { showingNotesList = true },
       onTapNewNote: {
         Task {
           let loc = await LocationClient.shared.currentPlace()
-          _ = notes.startNewNote(location: loc)
+          let note = notes.startNewNote(location: loc)
+          path = [note.id]
         }
       },
       onTapSettings: { showingSettings = true }
-    )
-  }
-
-  // MARK: - Active-note strip
-
-  /// Reusable "you're working on this note" strip. Lives in
-  /// `Views/QuillActiveNoteStrip.swift` so attached screens render
-  /// identical context framing without duplicating the metadata logic.
-  private var activeNoteStrip: some View {
-    QuillActiveNoteStrip(
-      activeNote: notes.activeNote,
-      onTapRename: tapRenameTitle,
-      // Live timer + red dot when actively recording. Hidden during
-      // post-recording phases (transcribing, AI, action parsing) so
-      // the strip falls back to its normal metadata footprint.
-      recordingElapsed: vm.phase == .recording ? vm.elapsedSeconds : nil
     )
   }
 
@@ -931,7 +1275,10 @@ struct ContentView: View {
   /// to the active note, creating a new one with a location tag if none
   /// exists yet. Guards against double-append by tracking the last
   /// transcript we consumed.
-  private func appendTranscriptToActiveNote() {
+  /// - Parameter navigate: open the note when the append lands. True for
+  ///   captures started from home, which always produce a new note; false
+  ///   when appending from a note's own composer (we're already there).
+  private func appendTranscriptToActiveNote(navigate: Bool = false) {
     let text = vm.displayedText.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty, text != lastAppendedTranscript else { return }
     lastAppendedTranscript = text
@@ -945,10 +1292,12 @@ struct ContentView: View {
         // the note already has a locked-in title (user-renamed or
         // previously AI-titled) — see `generateTitleIfNeeded`.
         notes.generateTitleIfNeeded(noteID: note.id, provider: aiProvider)
+        if navigate { path = [note.id] }
       }
     } else {
       let note = notes.appendToActiveNote(text, locationIfCreating: nil)
       notes.generateTitleIfNeeded(noteID: note.id, provider: aiProvider)
+      if navigate { path = [note.id] }
     }
   }
 
@@ -956,12 +1305,24 @@ struct ContentView: View {
 
   @Environment(\.colorScheme) private var colorScheme
 
+  /// The page gradient from the design tokens: a soft vertical wash in
+  /// light, a radial glow from above in dark.
   private var backgroundGradient: some View {
-    Group {
-      if colorScheme == .dark {
-        Color(red: 0.11, green: 0.11, blue: 0.12)
+    let theme = QuillTheme.of(colorScheme)
+    return Group {
+      if theme.isDark {
+        RadialGradient(
+          gradient: Gradient(colors: theme.pageGradient),
+          center: UnitPoint(x: 0.5, y: -0.08),
+          startRadius: 0,
+          endRadius: 900
+        )
       } else {
-        Color(red: 0.957, green: 0.945, blue: 0.973)
+        LinearGradient(
+          gradient: Gradient(colors: theme.pageGradient),
+          startPoint: .top,
+          endPoint: .bottom
+        )
       }
     }
   }
@@ -973,53 +1334,6 @@ struct ContentView: View {
   /// Raw, even if every other mode is disabled.
   private var disabledBuiltInModes: Set<AIProcessingMode> {
     BuiltInModeVisibility.decode(disabledBuiltInModesData)
-  }
-
-  /// Built-in modes to render in the pill row — always includes `.off`,
-  /// then any other mode the user hasn't toggled off.
-  private var visibleBuiltInModes: [AIProcessingMode] {
-    AIProcessingMode.allCases.filter { mode in
-      mode == .off || !disabledBuiltInModes.contains(mode)
-    }
-  }
-
-  // MARK: - Bottom action cluster (single + button → expands to a
-  // vertical fan of dictate / photo / action, with the mode dropdown
-  // floating in next to dictate)
-
-  private var bottomActionCluster: some View {
-    VStack(alignment: .trailing, spacing: 12) {
-      statusCard
-      QuillFABCluster(
-        vm: vm,
-        modeSelectionRaw: $aiModeRaw,
-        customModes: customModes,
-        visibleBuiltInModes: visibleBuiltInModes,
-        hasAPIKey: aiProvider.hasAPIKey,
-        onTapCamera: tapAddPhoto,
-        onTapAction: {
-          Task {
-            await vm.toggleActionRecording(
-              model: selectedModel,
-              provider: aiProvider
-            )
-          }
-        },
-        onTapMic: {
-          Task {
-            await vm.toggleRecording(
-              model: selectedModel,
-              mode: aiMode,
-              provider: aiProvider,
-              voiceCommandsEnabled: voiceCommandsEnabled,
-              customSystemPrompt: micCustomSystemPrompt
-            )
-          }
-        },
-        onTapType: { showingTypedAction = true },
-        onRequestSettings: { showingSettings = true }
-      )
-    }
   }
 
   /// Resolved custom prompt to thread through `vm.toggleRecording`. Pulls
@@ -1102,47 +1416,6 @@ struct ContentView: View {
   }
 
   // MARK: - Result
-
-  /// The main content canvas below the record button. Shows the full
-  /// active note's body (not just the latest recording's transcript) so
-  /// successive recordings visibly stitch into a single continuous note —
-  /// e.g. recording a few sections of a conference talk with a pause
-  /// between them, you see the full composite transcript grow downward.
-  /// Auto-scrolls to the bottom on every body change so the newest
-  /// content is always in view.
-  @ViewBuilder
-  private var resultArea: some View {
-    // Three states drive what shows in the canvas region:
-    // 1. Recording — full-bleed live transcript card + waveform card
-    //    + 1-2 line caption. Replaces whatever was there.
-    // 2. Active note with content — the existing note canvas (the
-    //    user's actual writing).
-    // 3. No active note (or empty active note) — pre-recording
-    //    landing: feather mic + "Ready when you are." + example chips
-    //    that map to the FAB cluster.
-    if vm.phase == .recording {
-      QuillRecordingTranscriptCard(transcript: recordingTranscript)
-        .transition(.opacity)
-    } else if let note = notes.activeNote, !note.body.isEmpty {
-      noteCanvas(for: note)
-        .transition(.opacity.combined(with: .move(edge: .bottom)))
-    } else {
-      QuillEmptyHome()
-        .transition(.opacity)
-    }
-  }
-
-  /// What QuillRecordingState should show in its big card. Falls back
-  /// to whatever the active note already had (if any) appended with
-  /// the recognizer's running partial — so a long ongoing note stays
-  /// visible while the user adds more.
-  private var recordingTranscript: String {
-    let partial = vm.livePartial.trimmingCharacters(in: .whitespacesAndNewlines)
-    let existing = notes.activeNote?.body.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    if existing.isEmpty { return partial }
-    if partial.isEmpty { return existing }
-    return existing + "\n\n" + partial
-  }
 
   /// Flip a `- [ ]` / `- [x]` marker tapped in the note canvas. The
   /// canvas renders body *segments* (text between photo tokens), so the

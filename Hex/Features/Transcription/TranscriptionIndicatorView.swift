@@ -39,7 +39,9 @@ struct TranscriptionIndicatorView: View {
       case .auto:    return "sparkles"
       case .dictate: return "waveform"
       case .edit:    return "pencil"
-      case .action:  return "bolt.fill"
+      // Outline `bolt` (not `bolt.fill`) so the four mode glyphs share one
+      // light stroke weight — a consistent set.
+      case .action:  return "bolt"
       }
     }
 

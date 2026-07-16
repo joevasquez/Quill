@@ -19,6 +19,12 @@ struct QuilliOSApp: App {
   @AppStorage(QuillIOSSettingsKey.hasCompletedOnboarding)
   private var hasCompletedOnboarding: Bool = false
 
+  /// Theme override, applied to the whole scene. Empty (the default) is
+  /// Auto — `QuillAppearance.colorScheme` hands `nil` back to SwiftUI so
+  /// the device decides.
+  @AppStorage(QuillIOSSettingsKey.appearance)
+  private var appearanceRaw: String = QuillAppearance.system.rawValue
+
   init() {
     // Install Sentry-backed error monitoring up front so launch-time
     // crashes get captured (it stays inert until the user opts in via
@@ -105,6 +111,9 @@ struct QuilliOSApp: App {
         )) {
           OnboardingView(hasCompletedOnboarding: $hasCompletedOnboarding)
         }
+        .preferredColorScheme(
+          (QuillAppearance(rawValue: appearanceRaw) ?? .system).colorScheme
+        )
     }
     .onChange(of: scenePhase) { _, newPhase in
       // Cloud sync runs on every foregrounding rather than just first

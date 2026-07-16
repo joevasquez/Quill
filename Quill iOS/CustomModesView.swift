@@ -19,7 +19,6 @@ import HexCore
 import SwiftUI
 
 struct CustomModesView: View {
-  @Environment(\.dismiss) private var dismiss
   @AppStorage(CustomAIModesStorage.userDefaultsKey) private var storedModesData: Data = Data()
 
   @State private var editingMode: CustomAIMode?
@@ -29,8 +28,11 @@ struct CustomModesView: View {
     CustomAIModesStorage.decode(storedModesData)
   }
 
+  // Deliberately no NavigationStack / Done of its own: this screen is both
+  // pushed (Settings → Formatting) and presented as a sheet (home's
+  // "+ Add" format chip). The presenter owns the chrome — owning it here
+  // too put a second Done in the sheet's bar.
   var body: some View {
-    NavigationStack {
       Group {
         if modes.isEmpty {
           ContentUnavailableView {
@@ -90,9 +92,6 @@ struct CustomModesView: View {
       .navigationTitle("Custom Modes")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
-        ToolbarItem(placement: .topBarLeading) {
-          Button("Done") { dismiss() }
-        }
         ToolbarItem(placement: .topBarTrailing) {
           Button {
             showingCreate = true
@@ -117,7 +116,6 @@ struct CustomModesView: View {
           }
         }
       }
-    }
   }
 }
 

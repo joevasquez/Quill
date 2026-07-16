@@ -1,0 +1,315 @@
+//
+//  QuillCaptureSheet.swift
+//  Quill (iOS)
+//
+//  The capture surface — iOS's answer to the Mac's Corner Bloom. Slides up
+//  over a scrim carrying the focal orb, the live transcript, and whatever
+//  the active mode needs.
+//
+//  It's the recording UI in full: since home became a launcher, there's no
+//  canvas behind it to show progress. Tapping the orb stops and processes;
+//  the × discards.
+//
+
+import HexCore
+import SwiftUI
+
+struct QuillCaptureSheet: View {
+  var mode: QuillMode
+  var format: AIProcessingMode
+  var phase: QuillOrb.Phase
+  /// The live partial from the recognizer.
+  var transcript: String
+  var level: Double
+  var statusText: String
+  var resultText: String?
+
+  /// Act only: the destination we think this is heading for, and the
+  /// destinations the user can correct to.
+  var routing: RoutingPreview?
+
+  var onStop: () -> Void
+  var onCancel: () -> Void
+  var onPickDestination: (QuillActDestination) -> Void
+
+  struct RoutingPreview {
+    var target: QuillActDestination?
+    var options: [QuillActDestination]
+    /// True once the user has picked, which stops the live intuition.
+    var isLocked: Bool
+  }
+
+  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  private var theme: QuillTheme { .of(colorScheme) }
+
+  private var isResult: Bool { phase == .result }
+
+  /// Resolved green on completion, else the mode's colour.
+  private var accent: OKLCH {
+    isResult ? QuillDesign.ModePalette.resolved : mode.palette
+  }
+
+  private var badgeText: String {
+    switch mode {
+    case .auto: "Auto"
+    case .edit: "Edit"
+    case .act: "Act"
+    case .dictate: "Dictate · \(format.iosDisplayName)"
+    }
+  }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      grabber
+      header
+      orb
+      body_
+      if mode == .act, !isResult, let routing {
+        routingSection(routing)
+          .padding(.top, 16)
+      }
+    }
+    .padding(.horizontal, 16)
+    .padding(.top, 14)
+    .padding(.bottom, 18)
+    .background(
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.sheet, style: .continuous)
+        .fill(theme.glass)
+        .background(
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.sheet, style: .continuous)
+            .fill(.ultraThinMaterial)
+        )
+        .overlay(
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.sheet, style: .continuous)
+            .strokeBorder(theme.glassBorder, lineWidth: 0.5)
+        )
+    )
+    .padding(.horizontal, 10)
+    .padding(.bottom, 24)
+  }
+
+  // MARK: - Chrome
+
+  private var grabber: some View {
+    Capsule()
+      .fill(theme.hair)
+      .frame(width: 40, height: 5)
+      .padding(.bottom, 12)
+  }
+
+  private var header: some View {
+    HStack(spacing: 0) {
+      HStack(spacing: 7) {
+        Circle()
+          .fill(accent.color())
+          .frame(width: 7, height: 7)
+        Text(badgeText)
+          .font(.system(size: 13, weight: .bold))
+      }
+      .foregroundStyle(accent.lightnessCapped(at: theme.isDark ? 0.82 : 0.5).color())
+      .padding(.horizontal, 11)
+      .padding(.vertical, 4)
+      .background(
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+          .fill(accent.color(0.14))
+      )
+
+      Spacer(minLength: 8)
+
+      Text(statusText)
+        .font(.system(size: 11.5, design: .monospaced))
+        .tracking(0.3)
+        .foregroundStyle(theme.text3)
+
+      Button(action: onCancel) {
+        Image(systemName: "xmark")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(theme.text2)
+          .frame(width: 26, height: 26)
+          .background(Circle().fill(theme.chip))
+          .contentShape(Circle())
+      }
+      .buttonStyle(.plain)
+      .padding(.leading, 12)
+      .accessibilityLabel("Discard capture")
+    }
+    .padding(.bottom, 14)
+  }
+
+  private var orb: some View {
+    QuillOrb(
+      palette: mode.palette,
+      phase: phase,
+      size: QuillDesign.OrbSize.focal,
+      level: level,
+      glow: 1.1
+    )
+    .onTapGesture { if !isResult { onStop() } }
+    .accessibilityLabel(isResult ? "Capture complete" : "Stop and process")
+    .accessibilityAddTraits(.isButton)
+    .padding(.top, 4)
+    .padding(.bottom, 16)
+  }
+
+  // MARK: - Transcript / result
+
+  @ViewBuilder
+  private var body_: some View {
+    if isResult, let resultText {
+      HStack(spacing: 9) {
+        Image(systemName: "checkmark")
+          .font(.system(size: 12, weight: .bold))
+          .foregroundStyle(.white)
+          .frame(width: 24, height: 24)
+          .background(Circle().fill(QuillDesign.ModePalette.resolved.color()))
+        Text(resultText)
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(theme.text)
+      }
+      .frame(minHeight: 26)
+      .transition(.opacity)
+    } else {
+      transcriptView
+    }
+  }
+
+  /// Words fade in as the recognizer produces them. The prototype faked
+  /// this with a canned script on a timer; here the pacing is simply
+  /// whenever a word actually arrives.
+  private var transcriptView: some View {
+    let words = transcript.split(separator: " ").map(String.init)
+    return Group {
+      if words.isEmpty {
+        Text("Listening…")
+          .font(.system(size: 18))
+          .foregroundStyle(theme.text3)
+      } else {
+        QuillWrap(spacing: 5) {
+          ForEach(Array(words.enumerated()), id: \.offset) { _, word in
+            Text(word)
+              .font(.system(size: 18))
+              .foregroundStyle(theme.text)
+              .transition(.opacity)
+          }
+        }
+        .animation(reduceMotion ? nil : .easeIn(duration: 0.22), value: words.count)
+      }
+    }
+    .frame(minHeight: 50, alignment: .top)
+    .frame(maxWidth: .infinity, alignment: words.isEmpty ? .center : .leading)
+    .padding(.horizontal, 6)
+  }
+
+  // MARK: - Act routing
+
+  /// Where we think this is going, and a one-tap way to say otherwise.
+  ///
+  /// Deliberately no confidence percentage: the prototype's number was a
+  /// keyword-hit count dressed as model confidence, shown before the parse
+  /// that actually decides.
+  private func routingSection(_ routing: RoutingPreview) -> some View {
+    VStack(spacing: 8) {
+      HStack(spacing: 10) {
+        Image(systemName: routing.target?.systemImage ?? "sparkles")
+          .font(.system(size: 18))
+          .foregroundStyle(routing.target?.palette.color() ?? theme.text3)
+          .frame(width: 22)
+
+        VStack(alignment: .leading, spacing: 1) {
+          Text(routing.target?.name ?? "Listening for a destination…")
+            .font(.system(size: 15.5, weight: .semibold))
+            .foregroundStyle(theme.text)
+          Text(routingSubtitle(routing))
+            .font(.system(size: 12))
+            .foregroundStyle(theme.text3)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .padding(.horizontal, 13)
+      .padding(.vertical, 11)
+      .background(
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+          .fill(routing.target != nil ? accent.color(0.12) : theme.card)
+          .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+              .strokeBorder(routing.target != nil ? accent.color(0.5) : theme.hair, lineWidth: 1)
+          )
+      )
+
+      if !routing.options.isEmpty {
+        QuillWrap(spacing: 6) {
+          ForEach(routing.options) { d in
+            destinationChip(d, isOn: routing.target?.id == d.id)
+          }
+        }
+      }
+    }
+  }
+
+  private func routingSubtitle(_ routing: RoutingPreview) -> String {
+    guard routing.target != nil else { return "Quill will route automatically" }
+    return routing.isLocked ? "You picked this" : "Routing here — tap below to change"
+  }
+
+  private func destinationChip(_ d: QuillActDestination, isOn: Bool) -> some View {
+    Button {
+      onPickDestination(d)
+    } label: {
+      HStack(spacing: 7) {
+        Image(systemName: d.systemImage)
+          .font(.system(size: 13))
+          .foregroundStyle(d.palette.color())
+        Text(d.name)
+          .font(.system(size: 13.5, weight: isOn ? .semibold : .medium))
+          .foregroundStyle(isOn ? theme.text : theme.text2)
+      }
+      .padding(.horizontal, 11)
+      .padding(.vertical, 7)
+      .background(
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
+          .fill(isOn ? accent.color(0.12) : theme.card)
+          .overlay(
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
+              .strokeBorder(isOn ? accent.color(0.5) : theme.hair, lineWidth: 1)
+          )
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+  }
+}
+
+// MARK: - Presentation
+
+extension View {
+  /// Presents the capture sheet over a tap-to-dismiss scrim.
+  func quillCaptureSheet(
+    isPresented: Bool,
+    reduceMotion: Bool,
+    onScrimTap: @escaping () -> Void,
+    @ViewBuilder sheet: () -> QuillCaptureSheet
+  ) -> some View {
+    ZStack(alignment: .bottom) {
+      self
+
+      if isPresented {
+        Color.black.opacity(0.4)
+          .ignoresSafeArea()
+          .transition(.opacity)
+          .onTapGesture(perform: onScrimTap)
+
+        sheet()
+          .transition(
+            reduceMotion
+              ? .opacity
+              : .move(edge: .bottom).combined(with: .opacity)
+          )
+      }
+    }
+    .animation(
+      reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: 0.42, dampingFraction: 0.82),
+      value: isPresented
+    )
+  }
+}

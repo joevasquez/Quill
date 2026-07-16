@@ -193,6 +193,40 @@ final class NotesStore: ObservableObject {
     save(syncNoteID: id)
   }
 
+  // MARK: - Edit mode
+
+  /// Apply an Edit-mode revision, stashing the previous body so the user
+  /// can Undo. The note shows a diff until they Keep or Undo.
+  func applyEdit(id: UUID, newBody: String, label: String) {
+    guard let idx = notes.firstIndex(where: { $0.id == id }) else { return }
+    // Chained edits keep the ORIGINAL previous body, so Undo always
+    // returns to the last state the user actually approved rather than to
+    // an intermediate revision they never saw.
+    let previous = notes[idx].pendingEdit?.previousBody ?? notes[idx].body
+    notes[idx].pendingEdit = NoteEdit(previousBody: previous, label: label)
+    notes[idx].body = newBody
+    notes[idx].updatedAt = Date()
+    save(syncNoteID: id)
+  }
+
+  /// Accept the revision — drop the diff, keep the new body.
+  func keepEdit(id: UUID) {
+    guard let idx = notes.firstIndex(where: { $0.id == id }),
+          notes[idx].pendingEdit != nil else { return }
+    notes[idx].pendingEdit = nil
+    save(syncNoteID: id)
+  }
+
+  /// Revert to the body as it was before the revision.
+  func undoEdit(id: UUID) {
+    guard let idx = notes.firstIndex(where: { $0.id == id }),
+          let pending = notes[idx].pendingEdit else { return }
+    notes[idx].body = pending.previousBody
+    notes[idx].pendingEdit = nil
+    notes[idx].updatedAt = Date()
+    save(syncNoteID: id)
+  }
+
   func deleteNote(id: UUID) {
     let photoIDs: [UUID]
     if let note = notes.first(where: { $0.id == id }) {
