@@ -64,8 +64,24 @@ struct GeneralSectionView: View {
 			} icon: {
 				Image(systemName: "circle.circle")
 			}
+
+			Label {
+				Picker("Appearance", selection: Binding(
+					get: { store.hexSettings.appearance },
+					set: { store.send(.setAppearance($0)) }
+				)) {
+					ForEach(AppAppearance.allCases, id: \.self) { option in
+						Text(option.label).tag(option)
+					}
+				}
+				.pickerStyle(.segmented)
+			} icon: {
+				Image(systemName: "circle.lefthalf.filled")
+			}
 		} header: {
 			Text("App")
+		} footer: {
+			Text("Auto follows your Mac's system setting. The orb keeps its mode colors in both themes.")
 		}
 
 		Section {

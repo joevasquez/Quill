@@ -68,6 +68,15 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 			object: nil
 		)
 
+		// Apply the light/dark override now, and whenever it changes.
+		applyAppearance()
+		NotificationCenter.default.addObserver(
+			self,
+			selector: #selector(handleAppearanceChange),
+			name: .appearanceChanged,
+			object: nil
+		)
+
 		// Sync Google integration state from OAuth keychain on launch
 		syncGoogleIntegrationsFromOAuth()
 
@@ -98,6 +107,23 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 
 	private var shouldOpenForegroundUIOnLaunch: Bool {
 		!(launchedAtLogin && !hexSettings.showDockIcon)
+	}
+
+	@objc private func handleAppearanceChange() {
+		applyAppearance()
+	}
+
+	/// Map the user's appearance override onto `NSApp.appearance`, which
+	/// cascades to every window (Settings, Notes, HUD panels). `nil` hands
+	/// the decision back to the system.
+	private func applyAppearance() {
+		let appearance: NSAppearance?
+		switch hexSettings.appearance {
+		case .system: appearance = nil
+		case .light: appearance = NSAppearance(named: .aqua)
+		case .dark: appearance = NSAppearance(named: .darkAqua)
+		}
+		NSApp.appearance = appearance
 	}
 
 	private func wasLaunchedAtLogin() -> Bool {

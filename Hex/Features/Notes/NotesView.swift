@@ -424,6 +424,27 @@ private struct NoteEditorView: View {
   /// Persisted — it's a working style, not a per-recording choice.
   @AppStorage("quill.noteDictationCleanup") private var cleanupDictation = true
 
+  // ── AI Edit (mirrors the iOS note composer's Edit mode) ──
+  @Shared(.hexSettings) private var hexSettings: HexSettings
+  /// Per-command usage counts, so the user's go-to edits float to the
+  /// front. Same key + format as iOS (`quill.editCommandUsage`).
+  @AppStorage("quill.editCommandUsage") private var editUsageData: Data = Data()
+  @State private var editDraft: String = ""
+  /// Set while an AI revision awaits Undo/Keep — holds the pre-edit body so
+  /// Undo is lossless. Deliberately local (not on `SyncableNote`): a pending
+  /// review on the Mac shouldn't sync to the phone.
+  @State private var pendingEdit: PendingNoteEdit?
+  @State private var isEditingWithAI = false
+  @State private var editError: String?
+  @Environment(\.colorScheme) private var colorScheme
+
+  /// Readable amber for the Edit chips/labels — the mode hue is light, so
+  /// on a dark background it needs a high lightness to stay legible, and on
+  /// a light background a lower one for contrast.
+  private var editInk: Color {
+    QuillDesign.ModePalette.edit.lightnessCapped(at: colorScheme == .dark ? 0.86 : 0.42).color()
+  }
+
   var body: some View {
     VStack(spacing: 0) {
       editorToolbar
@@ -441,9 +462,18 @@ private struct NoteEditorView: View {
         VStack(alignment: .leading, spacing: 12) {
           titleField
           metadataRow
+          if let pending = pendingEdit {
+            editBanner(pending)
+          } else {
+            aiEditBar
+          }
           photoSegments
           Divider()
-          bodyEditor
+          if let pending = pendingEdit {
+            editDiffView(from: pending.previousBody, to: editingBody)
+          } else {
+            bodyEditor
+          }
         }
         .padding(.horizontal, 28)
         .padding(.top, 22)
@@ -597,6 +627,235 @@ private struct NoteEditorView: View {
     tv.undoManager?.endUndoGrouping()
     tv.setSelectedRange(NSRange(location: range.location + marker.count, length: range.length))
     editingBody = textStorage.string
+  }
+
+  // MARK: - AI Edit (chips + free-form command)
+
+  /// The Edit-mode command bar: learned + built-in chips and a free-form
+  /// field. Runs the same `InlineEditPrompt` pipeline as the iOS note
+  /// composer and the macOS system-wide inline edit.
+  @ViewBuilder
+  private var aiEditBar: some View {
+    let learned = NoteEditCommands.mostUsed(editUsageData)
+      .filter { !NoteEditCommands.suggestions.contains($0) }
+    let edit = QuillDesign.ModePalette.edit
+
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 6) {
+        Image(systemName: "sparkles")
+          .font(.caption)
+          .foregroundStyle(editInk)
+        Text("Edit with AI")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(editInk.opacity(0.85))
+        if isEditingWithAI {
+          ProgressView().controlSize(.small).padding(.leading, 4)
+          Text("Revising…").font(.caption).foregroundStyle(.secondary)
+        }
+      }
+
+      // Chips wrap across the readable column.
+      FlowLayout(spacing: 7) {
+        ForEach(learned, id: \.self) { editChip($0, isLearned: true) }
+        ForEach(NoteEditCommands.suggestions, id: \.self) {
+          editChip($0, isLearned: learned.contains($0))
+        }
+      }
+
+      HStack(spacing: 8) {
+        TextField("Edit this note — e.g. shorten by 20%", text: $editDraft)
+          .textFieldStyle(.roundedBorder)
+          .onSubmit { submitEditDraft() }
+          .disabled(isEditingWithAI)
+        Button("Run") { submitEditDraft() }
+          .keyboardShortcut(.return, modifiers: .command)
+          .disabled(editDraft.trimmingCharacters(in: .whitespaces).isEmpty || isEditingWithAI)
+      }
+
+      if let editError {
+        Label(editError, systemImage: "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(editInk)
+      }
+    }
+    .padding(10)
+    .background(
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .fill(edit.color(0.08))
+        .overlay(
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(edit.color(0.25), lineWidth: 1)
+        )
+    )
+  }
+
+  private func editChip(_ command: String, isLearned: Bool) -> some View {
+    let edit = QuillDesign.ModePalette.edit
+    return Button {
+      runEdit(command)
+    } label: {
+      HStack(spacing: 5) {
+        Image(systemName: isLearned ? "clock" : "sparkles")
+          .font(.system(size: 10, weight: .semibold))
+        Text(command)
+          .font(.system(size: 12, weight: .semibold))
+      }
+      .foregroundStyle(editInk)
+      .padding(.vertical, 5)
+      .padding(.horizontal, 10)
+      .background(
+        Capsule().fill(edit.color(colorScheme == .dark ? 0.24 : 0.14))
+          .overlay(Capsule().strokeBorder(edit.color(0.45), lineWidth: 0.75))
+      )
+    }
+    .buttonStyle(.plain)
+    .disabled(isEditingWithAI)
+  }
+
+  /// Banner shown while a revision awaits Undo / Keep.
+  private func editBanner(_ pending: PendingNoteEdit) -> some View {
+    let edit = QuillDesign.ModePalette.edit
+    return HStack(spacing: 10) {
+      Image(systemName: "sparkles")
+        .font(.system(size: 12))
+        .foregroundStyle(.white)
+        .frame(width: 22, height: 22)
+        .background(Circle().fill(edit.color()))
+      VStack(alignment: .leading, spacing: 1) {
+        Text(pending.label).font(.subheadline.weight(.semibold))
+        Text("Review the changes below").font(.caption).foregroundStyle(.secondary)
+      }
+      Spacer()
+      Button("Undo") { undoEdit() }
+        .controlSize(.regular)
+      Button("Keep") { keepEdit() }
+        .controlSize(.regular)
+        .buttonStyle(.borderedProminent)
+        .tint(edit.color())
+        .keyboardShortcut(.return, modifiers: [])
+    }
+    .padding(10)
+    .background(
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .fill(edit.color(0.10))
+        .overlay(
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(edit.color(0.4), lineWidth: 1)
+        )
+    )
+  }
+
+  /// Removed lines struck through in red with a `−` gutter; additions
+  /// highlighted green with a `+`. Uses the shared `LineDiff`.
+  private func editDiffView(from before: String, to after: String) -> some View {
+    let removed = OKLCH(0.6, 0.17, 25)
+    let added = QuillDesign.ModePalette.resolved
+    return ScrollView {
+      VStack(alignment: .leading, spacing: 5) {
+        ForEach(LineDiff.rows(from: before, to: after)) { row in
+          if row.text.trimmingCharacters(in: .whitespaces).isEmpty {
+            Color.clear.frame(height: 7)
+          } else {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+              Text(row.kind == .removed ? "−" : (row.kind == .added ? "+" : " "))
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(row.kind == .removed ? removed.color()
+                  : (row.kind == .added ? added.lightnessCapped(at: 0.5).color() : .secondary))
+                .frame(width: 12, alignment: .leading)
+              Text(row.text.replacingOccurrences(of: "**", with: ""))
+                .font(.system(size: NSFont.systemFontSize + 1, weight: row.text.hasPrefix("**") ? .bold : .regular))
+                .foregroundStyle(row.kind == .removed ? removed.color() : Color.primary)
+                .strikethrough(row.kind == .removed)
+                .opacity(row.kind == .removed ? 0.7 : 1)
+                .padding(.horizontal, row.kind == .added ? 4 : 0)
+                .padding(.vertical, row.kind == .added ? 1 : 0)
+                .background(
+                  RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(row.kind == .added ? added.color(0.16) : .clear)
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+            }
+          }
+        }
+      }
+      .padding(.vertical, 4)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  // MARK: - AI Edit actions
+
+  private func submitEditDraft() {
+    let text = editDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return }
+    editDraft = ""
+    runEdit(text)
+  }
+
+  private func runEdit(_ command: String) {
+    Task { await performEdit(command) }
+  }
+
+  @MainActor
+  private func performEdit(_ command: String) async {
+    let body = editingBody.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !body.isEmpty else {
+      editError = "Nothing to edit yet — add something to the note first."
+      return
+    }
+    editError = nil
+    editUsageData = NoteEditCommands.recordUsage(command, in: editUsageData)
+
+    isEditingWithAI = true
+    defer { isEditingWithAI = false }
+
+    @Dependency(\.aiProcessing) var aiProcessing
+    @Dependency(\.keychain) var keychain
+    let provider = hexSettings.aiProvider
+    let isPro = hexSettings.selectedPlan == "pro"
+
+    // Pre-check the key: `AIProcessingClient.process` returns the input
+    // UNCHANGED on a missing key, which for an edit would paste the raw
+    // prompt over the note. Pro routes through the proxy, no local key.
+    if !isPro {
+      let keychainKey = provider == .openAI ? KeychainKey.openAIAPIKey : KeychainKey.anthropicAPIKey
+      guard let apiKey = await keychain.read(keychainKey), !apiKey.isEmpty else {
+        editError = "Add an API key in Settings → AI to use AI editing."
+        return
+      }
+    }
+
+    do {
+      let userMessage = InlineEditPrompt.userMessage(instruction: command, selection: body)
+      // skipTranscriptWrapping = true: the message is already an instruction
+      // + selection, not a raw transcript to wrap in <transcript> tags.
+      let revised = try await aiProcessing.process(
+        userMessage, .clean, provider, nil, InlineEditPrompt.systemPrompt, true
+      )
+      let cleaned = revised.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !cleaned.isEmpty, cleaned != body else {
+        editError = "The model returned the note unchanged. Try rewording the command."
+        return
+      }
+      // Stash the pre-edit body for a lossless Undo, then apply. Setting
+      // `editingBody` runs the editor's onChange → note.body + dirty + sync.
+      pendingEdit = PendingNoteEdit(previousBody: editingBody, label: NoteEditCommands.label(for: command))
+      editingBody = cleaned
+    } catch {
+      editError = "Edit failed: \(error.localizedDescription)"
+    }
+  }
+
+  private func keepEdit() {
+    // The new body is already applied + marked dirty; just drop the review.
+    pendingEdit = nil
+  }
+
+  private func undoEdit() {
+    guard let pending = pendingEdit else { return }
+    editingBody = pending.previousBody  // onChange reverts note.body + re-syncs
+    pendingEdit = nil
   }
 
   @ViewBuilder
@@ -765,6 +1024,11 @@ private struct NoteEditorView: View {
     hasInitialized = false
     editingTitle = note.title
     editingBody = note.body
+    // Reset the AI-edit review state — a pending diff belongs to the note
+    // it was made on, not whatever note we're switching to.
+    pendingEdit = nil
+    editDraft = ""
+    editError = nil
     // Delay flipping the flag so the onChange handlers triggered by
     // the assignments above don't mark the note dirty on load.
     DispatchQueue.main.async {
@@ -876,6 +1140,61 @@ private struct MarkdownTextEditor: NSViewRepresentable {
       case .none:
         return false
       }
+    }
+  }
+}
+
+// MARK: - AI Edit support types
+
+/// A pending AI revision awaiting Undo / Keep. Local to the editor — never
+/// synced (a review in progress on the Mac shouldn't follow you to iOS).
+private struct PendingNoteEdit: Equatable {
+  var previousBody: String
+  var label: String
+}
+
+/// Minimal wrapping layout for the edit-command chips — flows children left
+/// to right, wrapping to the next row when the current one is full.
+private struct FlowLayout: Layout {
+  var spacing: CGFloat = 7
+
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    let maxWidth = proposal.width ?? .infinity
+    var rowWidth: CGFloat = 0
+    var rowHeight: CGFloat = 0
+    var totalHeight: CGFloat = 0
+    var totalWidth: CGFloat = 0
+    for view in subviews {
+      let size = view.sizeThatFits(.unspecified)
+      if rowWidth > 0, rowWidth + spacing + size.width > maxWidth {
+        totalWidth = max(totalWidth, rowWidth)
+        totalHeight += rowHeight + spacing
+        rowWidth = size.width
+        rowHeight = size.height
+      } else {
+        rowWidth += (rowWidth > 0 ? spacing : 0) + size.width
+        rowHeight = max(rowHeight, size.height)
+      }
+    }
+    totalWidth = max(totalWidth, rowWidth)
+    totalHeight += rowHeight
+    return CGSize(width: min(totalWidth, maxWidth), height: totalHeight)
+  }
+
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    var x = bounds.minX
+    var y = bounds.minY
+    var rowHeight: CGFloat = 0
+    for view in subviews {
+      let size = view.sizeThatFits(.unspecified)
+      if x > bounds.minX, x + size.width > bounds.maxX {
+        x = bounds.minX
+        y += rowHeight + spacing
+        rowHeight = 0
+      }
+      view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+      x += size.width + spacing
+      rowHeight = max(rowHeight, size.height)
     }
   }
 }

@@ -95,6 +95,7 @@ struct SettingsFeature {
     case toggleShowDockIcon(Bool)
     case toggleHudPinnedToTop(Bool)
     case setDisplayMode(DisplayMode)
+    case setAppearance(AppAppearance)
     case togglePreventSystemSleep(Bool)
     case setRecordingAudioBehavior(RecordingAudioBehavior)
     case toggleSuperFastMode(Bool)
@@ -575,6 +576,16 @@ struct SettingsFeature {
         return .run { _ in
           await MainActor.run {
             NotificationCenter.default.post(name: .displayModeChanged, object: nil)
+          }
+        }
+
+      case let .setAppearance(appearance):
+        state.$hexSettings.withLock { $0.appearance = appearance }
+        // `NSApp.appearance` is AppKit-global; the app delegate applies it
+        // across every window (Settings, Notes, HUD panels).
+        return .run { _ in
+          await MainActor.run {
+            NotificationCenter.default.post(name: .appearanceChanged, object: nil)
           }
         }
 

@@ -341,10 +341,8 @@ struct QuillEditChips: View {
   var learned: [String]
   var onCommand: (String) -> Void
 
-  static let suggestions = [
-    "Shorten by 20%", "Make it bullets", "Summarize", "Turn into email",
-    "Extract action items", "More formal", "Fix grammar",
-  ]
+  // Shared with macOS via HexCore so both platforms offer the same chips.
+  static let suggestions = NoteEditCommands.suggestions
 
   private var extras: [String] {
     learned.filter { !Self.suggestions.contains($0) }.prefix(3).map { $0 }

@@ -16,6 +16,23 @@ public enum DisplayMode: String, Codable, CaseIterable, Equatable, Sendable {
 	case chip
 }
 
+/// App-wide light/dark override. `system` follows the OS. The AppKit
+/// `NSAppearance` mapping lives in the app target (HexCore can't import
+/// AppKit cross-platform). Mirrors the iOS `QuillAppearance` control.
+public enum AppAppearance: String, Codable, CaseIterable, Equatable, Sendable {
+	case system = ""
+	case light
+	case dark
+
+	public var label: String {
+		switch self {
+		case .system: return "Auto"
+		case .light: return "Light"
+		case .dark: return "Dark"
+		}
+	}
+}
+
 /// User-configurable settings saved to disk.
 public struct HexSettings: Codable, Equatable, Sendable {
 	public static let defaultPasteLastTranscriptHotkey = HotKey(key: .v, modifiers: [.option, .shift])
@@ -87,6 +104,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 	public var cloudSyncEnabled: Bool
 	public var hudPinnedToTop: Bool
 	public var displayMode: DisplayMode
+	public var appearance: AppAppearance
 	public var appPasteDelays: [AppPasteDelay]
 	/// The user-chosen name for their personal agent ("Hermes" by default).
 	/// Used in Action-mode copy, the confirmation panel, and Settings.
@@ -151,6 +169,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		cloudSyncEnabled: Bool = false,
 		hudPinnedToTop: Bool = false,
 		displayMode: DisplayMode = .hud,
+		appearance: AppAppearance = .system,
 		appPasteDelays: [AppPasteDelay] = AppPasteDelay.defaults,
 		agentName: String = "Hermes",
 		mcpServers: [MCPServerConfig] = [],
@@ -196,6 +215,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		self.cloudSyncEnabled = cloudSyncEnabled
 		self.hudPinnedToTop = hudPinnedToTop
 		self.displayMode = displayMode
+		self.appearance = appearance
 		self.appPasteDelays = appPasteDelays
 		self.agentName = agentName
 		self.mcpServers = mcpServers
@@ -264,6 +284,7 @@ private enum HexSettingKey: String, CodingKey, CaseIterable {
 	case cloudSyncEnabled
 	case hudPinnedToTop
 	case displayMode
+	case appearance
 	case appPasteDelays
 	case agentName
 	case mcpServers
@@ -424,6 +445,7 @@ private enum HexSettingsSchema {
 		SettingsField(.cloudSyncEnabled, keyPath: \.cloudSyncEnabled, default: defaults.cloudSyncEnabled).eraseToAny(),
 		SettingsField(.hudPinnedToTop, keyPath: \.hudPinnedToTop, default: defaults.hudPinnedToTop).eraseToAny(),
 		SettingsField(.displayMode, keyPath: \.displayMode, default: defaults.displayMode).eraseToAny(),
+		SettingsField(.appearance, keyPath: \.appearance, default: defaults.appearance).eraseToAny(),
 		SettingsField(.appPasteDelays, keyPath: \.appPasteDelays, default: defaults.appPasteDelays).eraseToAny(),
 		SettingsField(.agentName, keyPath: \.agentName, default: defaults.agentName).eraseToAny(),
 		SettingsField(.mcpServers, keyPath: \.mcpServers, default: defaults.mcpServers).eraseToAny(),

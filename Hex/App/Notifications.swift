@@ -17,6 +17,9 @@ extension NSNotification.Name {
   /// Posted when the display mode changes (HUD ↔ Orb ↔ Chip) so the
   /// AppKit-side status item can swap its label.
   static let displayModeChanged = NSNotification.Name("DisplayModeChanged")
+  /// Posted when the light/dark appearance override changes so the AppKit
+  /// side can apply `NSApp.appearance` across every window.
+  static let appearanceChanged = NSNotification.Name("AppearanceChanged")
   /// Posted when the user switches transcription mode (cycle hotkey or the
   /// menu Mode submenu). Carries the new mode's rawValue so the AppKit-side
   /// mode-switch HUD can show a brief bubble when the menu bar is hidden

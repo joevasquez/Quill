@@ -1234,17 +1234,9 @@ struct ContentView: View {
     }
   }
 
-  /// A short past-tense label for the diff banner.
+  /// A short past-tense label for the diff banner. Shared with macOS.
   private func editLabel(for command: String) -> String {
-    let c = command.lowercased()
-    if c.contains("shorten") || c.contains("tighten") { return "Shortened" }
-    if c.contains("bullet") { return "Reformatted as bullets" }
-    if c.contains("summar") { return "Summarized" }
-    if c.contains("email") { return "Turned into email" }
-    if c.contains("action item") { return "Extracted action items" }
-    if c.contains("formal") { return "Tone adjusted" }
-    if c.contains("grammar") { return "Grammar polished" }
-    return "Note revised"
+    NoteEditCommands.label(for: command)
   }
 
   /// A capture started from inside a note appends to THAT note rather than
