@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.24.0
+
+### Minor Changes
+
+- 911afb6: macOS: add an Appearance control (Auto/Light/Dark) in Settings → General, matching iOS — Auto follows your Mac's system setting, and the override applies across every window (Settings, Notes, the HUD/orb).
+- 911afb6: macOS: bring the iOS in-note AI editing to the Mac Notes editor — one-tap Edit chips (Shorten by 20%, Make it bullets, Summarize, Turn into email, Extract action items, More formal, Fix grammar) plus a free-form command field, with an inline red/green diff and Undo/Keep before anything is committed. Your most-used commands float to the front, and the command list is shared with iOS so both platforms stay in sync.
+- d432d35: iOS: the capture sheet now has clear Pause and Stop buttons — tapping the orb to stop wasn't discoverable. Pause suspends the recording (resume to continue); Stop finishes and processes. The keyboard (type-a-command) button is hidden in Dictate mode, where typing a command doesn't apply.
+- d432d35: Mac Connections pane catches up with iOS: click any row to expand its tools/actions, search filter that matches tool names, one alphabetical list, tighter rows, and the add-time OAuth probe for servers like Dex that serve their catalog anonymously
+
+### Patch Changes
+
+- d432d35: iOS: tapping a note in the notes list now opens the note — it used to set it active and drop you back on the home screen (a leftover from before home became a launcher). The list's compose button opens the new note too.
+- 911afb6: macOS: brighten the Edit-with-AI command chips so they're legible on dark backgrounds (they were amber-on-dark and hard to read)
+- d432d35: Detail lookups now chain automatically: asking for a contact's email runs the search, then fetches the full record with the found id — search tools only return summaries, so single-step lookups couldn't answer detail questions
+- d432d35: iOS: copy button on every action result card, not just the extracted answer
+- d432d35: iOS: fix an intermittent "No speech detected" right after recording — the audio format was read a beat too early (while the mic route was still settling), which could hand back a 0 Hz placeholder and write a silent file. The recording format is now taken from the real audio buffers, so the first take is as reliable as the retry.
+
 ## 0.23.0
 
 ### Minor Changes
