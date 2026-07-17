@@ -28,7 +28,14 @@ struct QuillCaptureSheet: View {
   /// destinations the user can correct to.
   var routing: RoutingPreview?
 
+  /// True while audio is actively being captured (drives the Pause/Stop
+  /// control row — hidden once we're transcribing/parsing, which can't be
+  /// paused or stopped).
+  var isRecording: Bool = false
+  var isPaused: Bool = false
+
   var onStop: () -> Void
+  var onTogglePause: () -> Void = {}
   var onCancel: () -> Void
   var onPickDestination: (QuillActDestination) -> Void
 
@@ -68,6 +75,10 @@ struct QuillCaptureSheet: View {
       if mode == .act, !isResult, let routing {
         routingSection(routing)
           .padding(.top, 16)
+      }
+      if isRecording {
+        controls
+          .padding(.top, 18)
       }
     }
     .padding(.horizontal, 16)
@@ -140,16 +151,63 @@ struct QuillCaptureSheet: View {
   private var orb: some View {
     QuillOrb(
       palette: mode.palette,
-      phase: phase,
+      // A paused capture reads as calm: drop the listening motion back to
+      // the idle sphere so "paused" is legible at a glance.
+      phase: isPaused ? .idle : phase,
       size: QuillDesign.OrbSize.focal,
-      level: level,
+      level: isPaused ? 0 : level,
       glow: 1.1
     )
-    .onTapGesture { if !isResult { onStop() } }
-    .accessibilityLabel(isResult ? "Capture complete" : "Stop and process")
-    .accessibilityAddTraits(.isButton)
+    .accessibilityLabel(orbAccessibilityLabel)
     .padding(.top, 4)
     .padding(.bottom, 16)
+  }
+
+  private var orbAccessibilityLabel: String {
+    if isResult { return "Capture complete" }
+    if isPaused { return "Paused" }
+    return isRecording ? "Recording" : "Processing"
+  }
+
+  // MARK: - Recording controls
+
+  /// Explicit Pause + Stop — the orb no longer doubles as a hidden stop
+  /// button, since "tap the orb to stop" wasn't discoverable.
+  private var controls: some View {
+    HStack(spacing: 14) {
+      Button(action: onTogglePause) {
+        VStack(spacing: 5) {
+          Image(systemName: isPaused ? "play.fill" : "pause.fill")
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(theme.text)
+            .frame(width: 58, height: 58)
+            .background(Circle().fill(theme.chip))
+            .overlay(Circle().strokeBorder(theme.hair, lineWidth: 1))
+          Text(isPaused ? "Resume" : "Pause")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(theme.text2)
+        }
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(isPaused ? "Resume recording" : "Pause recording")
+
+      Button(action: onStop) {
+        VStack(spacing: 5) {
+          Image(systemName: "stop.fill")
+            .font(.system(size: 22, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 58, height: 58)
+            .background(Circle().fill(accent.color()))
+          Text("Stop")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(accent.lightnessCapped(at: theme.isDark ? 0.82 : 0.5).color())
+        }
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Stop and process")
+    }
   }
 
   // MARK: - Transcript / result
@@ -181,7 +239,9 @@ struct QuillCaptureSheet: View {
     let words = transcript.split(separator: " ").map(String.init)
     return Group {
       if words.isEmpty {
-        Text("Listening…")
+        // Once Stop is pressed we're no longer listening — say so, rather
+        // than leaving "Listening…" up through the transcription pass.
+        Text(isRecording ? "Listening…" : "Transcribing…")
           .font(.system(size: 18))
           .foregroundStyle(theme.text3)
       } else {

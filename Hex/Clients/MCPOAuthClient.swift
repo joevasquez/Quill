@@ -46,6 +46,12 @@ enum MCPOAuthClient {
     try await orchestrator.signIn(server: server)
   }
 
+  /// Whether the server publishes OAuth metadata (i.e. supports browser
+  /// sign-in) even if it doesn't 401 anonymous catalog requests.
+  static func advertisesOAuth(_ server: MCPServerConfig) async -> Bool {
+    await orchestrator.advertisesOAuth(server: server)
+  }
+
   // MARK: - Browser session
 
   @MainActor

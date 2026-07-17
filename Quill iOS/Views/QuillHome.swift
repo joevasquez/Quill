@@ -143,7 +143,12 @@ struct QuillHome: View {
   private var triggerPair: some View {
     VStack(spacing: 8) {
       HStack(spacing: 16) {
-        keyboardButton
+        // The keyboard opens a TYPED command for the agent — meaningful in
+        // Auto and Act, but not Dictate (dictation is pure voice-to-note,
+        // there's nothing to type a command about).
+        if mode != .dictate {
+          keyboardButton
+        }
         QuillTriggerButton(
           mode: mode,
           onTap: onTapTrigger,

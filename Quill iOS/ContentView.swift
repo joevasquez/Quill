@@ -31,6 +31,9 @@ final class RecordingViewModel: ObservableObject {
   @Published var livePartial: String = ""
   @Published var meterLevel: Float = 0
   @Published var elapsedSeconds: TimeInterval = 0
+  /// True while the recording is paused (engine suspended, file kept open).
+  /// Only meaningful during `.recording`.
+  @Published var isPaused = false
   /// Set when an AI post-processing call failed and we fell back to
   /// the raw transcript. Cleared on the next successful run.
   @Published var aiErrorMessage: String?
@@ -166,8 +169,27 @@ final class RecordingViewModel: ObservableObject {
     livePartial = ""
     isActionRecording = false
     wasAutoRouted = false
+    isPaused = false
     phase = .idle
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
+  }
+
+  /// Pause or resume the in-progress recording. No-op unless we're
+  /// actively recording. If the engine fails to resume, we leave it
+  /// paused rather than silently losing audio.
+  func togglePause() {
+    guard phase == .recording else { return }
+    if isPaused {
+      if recorder.resume() {
+        isPaused = false
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+      }
+    } else {
+      recorder.pause()
+      isPaused = true
+      meterLevel = 0
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
   }
 
   func toggleActionRecording(
@@ -210,6 +232,7 @@ final class RecordingViewModel: ObservableObject {
     rawTranscript = ""
     processedTranscript = ""
     livePartial = ""
+    isPaused = false
     aiErrorMessage = nil
 
     do {
@@ -223,9 +246,11 @@ final class RecordingViewModel: ObservableObject {
       timerTask = Task { [weak self] in
         while !Task.isCancelled {
           guard let self else { return }
-          self.meterLevel = self.recorder.averagePower
-          if let start = self.recordingStartedAt {
-            self.elapsedSeconds = Date().timeIntervalSince(start)
+          if !self.isPaused {
+            self.meterLevel = self.recorder.averagePower
+            if let start = self.recordingStartedAt {
+              self.elapsedSeconds = Date().timeIntervalSince(start)
+            }
           }
           try? await Task.sleep(for: .milliseconds(100))
         }
@@ -764,7 +789,11 @@ struct ContentView: View {
         SettingsView()
       }
       .sheet(isPresented: $showingNotesList) {
-        NotesListView(store: notes)
+        NotesListView(store: notes, onOpenNote: { id in
+          // The sheet dismisses itself; push the detail so the picked
+          // note actually opens (home is just a launcher).
+          path = [id]
+        })
       }
       // "+ Connect an app" / "+ Add" on the mode sub-rows go straight to
       // the screen that does the thing, rather than dropping the user at
@@ -1020,7 +1049,10 @@ struct ContentView: View {
       statusText: captureStatusText,
       resultText: vm.noteTargetBanner,
       routing: captureMode == .act ? routingPreview : nil,
+      isRecording: vm.phase == .recording,
+      isPaused: vm.isPaused,
       onStop: { Task { await endCapture() } },
+      onTogglePause: { vm.togglePause() },
       onCancel: cancelCapture,
       onPickDestination: { d in
         lockedDestinationID = d.id
@@ -1032,6 +1064,7 @@ struct ContentView: View {
   private var captureStatusText: String {
     switch vm.phase {
     case .recording:
+      if vm.isPaused { return "paused" }
       if captureMode == .act, let target = intuitedDestination {
         return "routing → \(target.name)"
       }

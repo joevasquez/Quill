@@ -202,40 +202,14 @@ struct ConnectionsView: View {
     UISelectionFeedbackGenerator().selectionChanged()
   }
 
-  /// What each native integration can do in Action mode. Static — these
-  /// are the adapters we ship, not a live tool list.
-  static func nativeActions(_ id: Integration.Identifier) -> [(symbol: String, label: String)] {
-    switch id {
-    case .appleReminders:
-      [("checklist", "Create reminders — due date, list, priority")]
-    case .calendar:
-      [("calendar.badge.plus", "Create calendar events — title, start & end, calendar")]
-    case .todoist:
-      [("checkmark.circle", "Create tasks — project, due date, priority")]
-    case .gmail:
-      [("square.and.pencil", "Draft emails — recipient, subject, body")]
-    case .googleCalendar:
-      [("calendar.badge.plus", "Create events — title, time, attendees")]
-    default:
-      []
-    }
+  /// What each native integration can do in Action mode — shared table in
+  /// HexCore so the Mac Connections pane lists the identical capabilities.
+  static func nativeActions(_ id: Integration.Identifier) -> [ConnectionCapabilities.Capability] {
+    ConnectionCapabilities.native(id)
   }
 
-  /// "dex_create_contact" → "Create contact" (the server prefix is noise
-  /// when it's sitting under that server's own row). Split on both
-  /// underscores and hyphens first, THEN drop the leading server word —
-  /// tool names vary in separator style across servers.
   private func prettyToolName(_ raw: String, serverName: String) -> String {
-    var words = raw
-      .replacingOccurrences(of: "_", with: " ")
-      .replacingOccurrences(of: "-", with: " ")
-      .split(separator: " ")
-      .map(String.init)
-    if words.count > 1, words[0].lowercased() == serverName.lowercased() {
-      words.removeFirst()
-    }
-    let joined = words.joined(separator: " ")
-    return joined.prefix(1).uppercased() + joined.dropFirst()
+    ConnectionCapabilities.prettyToolName(raw, serverName: serverName)
   }
 
   /// Expanded content for an MCP-backed row: the live tool list, a

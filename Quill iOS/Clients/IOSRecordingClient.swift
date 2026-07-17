@@ -84,7 +84,6 @@ final class IOSRecordingClient {
     // Build engine
     let engine = AVAudioEngine()
     let inputNode = engine.inputNode
-    let inputFormat = inputNode.outputFormat(forBus: 0)
 
     // Optionally set up SFSpeechRecognizer for live partial transcripts.
     // Failures here are non-fatal — recording continues without live preview.
@@ -108,16 +107,28 @@ final class IOSRecordingClient {
     )
     self.audioFile = audioFile
 
-    // Converter from input format to target format
-    let converter = AVAudioConverter(from: inputFormat, to: targetFormat)
-    self.converter = converter
+    // The converter is built lazily from the FIRST real buffer (below), not
+    // from a format read here. `inputNode.outputFormat(forBus:)` can hand
+    // back a 0 Hz placeholder in the moment right after `setActive(true)`
+    // while the audio route is still settling — building the converter (and
+    // installing the tap) with that bogus format writes a silent WAV, which
+    // surfaces as an intermittent "No speech detected" on the first take.
+    self.converter = nil
 
-    inputNode.installTap(onBus: 0, bufferSize: 2048, format: inputFormat) { [weak self] buffer, _ in
-      guard let self, let converter = self.converter else { return }
+    // `format: nil` → the tap uses the bus's actual format at capture time,
+    // so `buffer.format` is always the true hardware format, 0 Hz race and all.
+    inputNode.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
+      guard let self, buffer.format.sampleRate > 0 else { return }
 
       // Feed the native-format buffer to SFSpeechRecognizer for live preview.
       // SFSpeech accepts the input node's format directly — no conversion needed.
       Task { @MainActor in self.speechRequest?.append(buffer) }
+
+      // Build the converter from the first buffer's real format.
+      if self.converter == nil {
+        self.converter = AVAudioConverter(from: buffer.format, to: self.targetFormat)
+      }
+      guard let converter = self.converter else { return }
 
       // Convert to 16kHz mono for the recorded WAV (what Whisper will transcribe)
       let frameCapacity = AVAudioFrameCount(Double(buffer.frameLength) * (self.targetSampleRate / buffer.format.sampleRate))
@@ -155,6 +166,28 @@ final class IOSRecordingClient {
     try engine.start()
     self.engine = engine
     return url
+  }
+
+  /// Suspend capture without tearing anything down. `AVAudioEngine.pause()`
+  /// stops the render loop, so the input tap stops firing — no buffers are
+  /// written and the live recognizer simply goes quiet — while the file,
+  /// converter, and recognition request stay open for `resume()`.
+  func pause() {
+    engine?.pause()
+    averagePower = 0
+  }
+
+  /// Resume after `pause()`. Returns false if the engine couldn't restart
+  /// (the caller then treats it as a hard stop).
+  @discardableResult
+  func resume() -> Bool {
+    guard let engine else { return false }
+    do {
+      try engine.start()
+      return true
+    } catch {
+      return false
+    }
   }
 
   func stopRecording() -> URL? {

@@ -31,11 +31,19 @@ struct ConnectionsSectionView: View {
   @State private var showingGoogleOAuthSheet = false
 
   @State private var mcpToolCounts: [UUID: Int] = [:]
+  /// Full cached tool lists, so an expanded row can show what a server
+  /// actually offers (not just the count).
+  @State private var mcpToolLists: [UUID: [MCPTool]] = [:]
   @State private var mcpErrors: [UUID: String] = [:]
   @State private var mcpSignedIn: [UUID: Bool] = [:]
   @State private var busyServers: Set<UUID> = []
   @State private var showAddMCPServer = false
   @State private var editingMCP: MCPEditContext?
+
+  /// Rows the user has expanded to inspect tools/actions. Keyed by a
+  /// stable per-row string (integration rawValue / brand id / server UUID).
+  @State private var expandedRows: Set<String> = []
+  @State private var searchText = ""
 
   /// Native integrations with a working send adapter. Everything else
   /// connects through MCP.
@@ -45,6 +53,53 @@ struct ConnectionsSectionView: View {
 
   private var nativeIntegrations: [Integration] {
     Integration.all.filter { Self.nativeIdentifiers.contains($0.identifier) }
+  }
+
+  // MARK: - Search + merged alphabetical list (mirrors iOS ConnectionsView)
+
+  /// A row matches when the query hits its name OR one of its tool/action
+  /// names — so "contact" finds Dex even though the row just says "Dex".
+  private func matchesSearch(_ name: String, extras: [String] = []) -> Bool {
+    let q = searchText.trimmingCharacters(in: .whitespaces)
+    guard !q.isEmpty else { return true }
+    if name.localizedCaseInsensitiveContains(q) { return true }
+    return extras.contains { $0.localizedCaseInsensitiveContains(q) }
+  }
+
+  /// Natives and featured brands interleaved into ONE alphabetical list —
+  /// the user shouldn't have to know which protocol a row uses to guess
+  /// where it sorts.
+  private enum AppsListItem: Identifiable {
+    case native(Integration)
+    case brand(ConnectionBrand)
+
+    var id: String {
+      switch self {
+      case .native(let i): "native-\(i.identifier.rawValue)"
+      case .brand(let b): "brand-\(b.id)"
+      }
+    }
+
+    var sortName: String {
+      switch self {
+      case .native(let i): i.name
+      case .brand(let b): b.name
+      }
+    }
+  }
+
+  private var visibleAppsItems: [AppsListItem] {
+    let natives = nativeIntegrations
+      .filter { matchesSearch($0.name, extras: ConnectionCapabilities.native($0.identifier).map(\.label)) }
+      .map(AppsListItem.native)
+    let brands = ConnectionDirectory.featured
+      .filter { brand in
+        let tools = server(for: brand).flatMap { mcpToolLists[$0.id] } ?? []
+        return matchesSearch(brand.name, extras: tools.map(\.name))
+      }
+      .map(AppsListItem.brand)
+    return (natives + brands)
+      .sorted { $0.sortName.localizedCaseInsensitiveCompare($1.sortName) == .orderedAscending }
   }
 
   var body: some View {
@@ -86,13 +141,27 @@ struct ConnectionsSectionView: View {
 
   private var appsSection: some View {
     Section {
-      ForEach(nativeIntegrations) { integration in
-        nativeRow(integration)
-          .padding(.vertical, 2)
+      HStack(spacing: 6) {
+        Image(systemName: "magnifyingglass")
+          .foregroundStyle(.secondary)
+          .font(.caption)
+        TextField("Search connections and tools", text: $searchText)
+          .textFieldStyle(.plain)
+        if !searchText.isEmpty {
+          Button {
+            searchText = ""
+          } label: {
+            Image(systemName: "xmark.circle.fill")
+              .foregroundStyle(.secondary)
+          }
+          .buttonStyle(.plain)
+        }
       }
-      ForEach(ConnectionDirectory.featured) { brand in
-        featuredRow(brand)
-          .padding(.vertical, 2)
+      ForEach(visibleAppsItems) { item in
+        switch item {
+        case .native(let integration): nativeRow(integration).padding(.vertical, 2)
+        case .brand(let brand): featuredRow(brand).padding(.vertical, 2)
+        }
       }
       if connectedFreeCount >= IntegrationLimits.freeTierMaxConnections,
          nativeIntegrations.contains(where: { !isConnected($0) && !$0.requiresPro }) {
@@ -103,47 +172,135 @@ struct ConnectionsSectionView: View {
     } header: {
       Text("Apps & services")
     } footer: {
-      Text("Everything here becomes voice actions — \u{201C}remind me Friday to review the launch deck\u{201D} becomes a Todoist task; \u{201C}log a note on Joe in Dex\u{201D} calls the service directly. Rows without a native adapter connect through each service\u{2019}s MCP server (usually a quick browser sign-in).")
+      Text("Click a row to see what it can do. Everything here becomes voice actions — rows without a native adapter connect through each service\u{2019}s MCP server (usually a quick browser sign-in).")
         .settingsCaption()
     }
+  }
+
+  // MARK: - Row expansion
+
+  private func toggleExpanded(_ key: String) {
+    if expandedRows.contains(key) {
+      expandedRows.remove(key)
+    } else {
+      expandedRows.insert(key)
+    }
+  }
+
+  /// One capability/tool line inside an expanded row.
+  private func expansionLine(symbol: String, title: String, detail: String?) -> some View {
+    HStack(alignment: .top, spacing: 8) {
+      Image(systemName: symbol)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(width: 16)
+        .padding(.top, 1)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(title)
+          .font(.caption.weight(.medium))
+        if let detail, !detail.isEmpty {
+          Text(detail)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+        }
+      }
+      Spacer(minLength: 0)
+    }
+  }
+
+  /// Expanded content for an MCP-backed row: the live tool list, a
+  /// loading state while it fetches, or a hint when not connected.
+  @ViewBuilder
+  private func mcpExpansion(server: MCPServerConfig?) -> some View {
+    if let server {
+      if let tools = mcpToolLists[server.id], !tools.isEmpty {
+        ForEach(tools, id: \.name) { tool in
+          expansionLine(
+            symbol: "wrench.and.screwdriver",
+            title: ConnectionCapabilities.prettyToolName(tool.name, serverName: server.name),
+            detail: tool.description
+          )
+        }
+      } else if busyServers.contains(server.id) {
+        HStack(spacing: 6) {
+          ProgressView().controlSize(.mini)
+          Text("Loading tools…")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      } else if let error = mcpErrors[server.id] {
+        Text(error)
+          .font(.caption)
+          .foregroundStyle(.orange)
+      } else {
+        Text("No tools reported. Use Refresh to re-fetch.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    } else {
+      Text("Connect to see this service's tools.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private func chevron(_ expanded: Bool) -> some View {
+    Image(systemName: "chevron.right")
+      .font(.caption2.weight(.semibold))
+      .foregroundStyle(.tertiary)
+      .rotationEffect(.degrees(expanded ? 90 : 0))
   }
 
   // MARK: - Native integration rows
 
   private func nativeRow(_ integration: Integration) -> some View {
-    HStack(alignment: .center, spacing: 10) {
-      RoundedRectangle(cornerRadius: 6, style: .continuous)
-        .fill(Color(hex: integration.tintHex) ?? .secondary)
-        .frame(width: 26, height: 26)
-        .overlay(
-          Image(systemName: integration.systemImage)
-            .foregroundStyle(.white)
-            .font(.system(size: 13, weight: .semibold))
-        )
-      VStack(alignment: .leading, spacing: 2) {
-        HStack(spacing: 6) {
-          Text(integration.name)
-            .font(.subheadline.weight(.medium))
-          if integration.requiresPro {
-            Text("PRO")
-              .font(.caption2.weight(.bold))
+    let key = integration.identifier.rawValue
+    return VStack(alignment: .leading, spacing: 0) {
+      HStack(alignment: .center, spacing: 8) {
+        chevron(expandedRows.contains(key))
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+          .fill(Color(hex: integration.tintHex) ?? .secondary)
+          .frame(width: 24, height: 24)
+          .overlay(
+            Image(systemName: integration.systemImage)
               .foregroundStyle(.white)
-              .padding(.horizontal, 6)
-              .padding(.vertical, 1)
-              .background(Capsule().fill(Color.purple))
+              .font(.system(size: 12, weight: .semibold))
+          )
+        Text(integration.name)
+          .font(.subheadline.weight(.medium))
+        if integration.requiresPro {
+          Text("PRO")
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(Color.purple))
+        }
+        if isConnected(integration) {
+          Image(systemName: "checkmark.circle.fill")
+            .font(.caption)
+            .foregroundStyle(.green)
+        }
+        Spacer()
+        Button(isConnected(integration) ? "Disconnect" : "Connect") {
+          toggle(integration)
+        }
+        .controlSize(.small)
+        .disabled(!canConnect(integration) && !isConnected(integration))
+      }
+      .contentShape(Rectangle())
+      .onTapGesture { toggleExpanded(key) }
+
+      if expandedRows.contains(key) {
+        VStack(alignment: .leading, spacing: 2) {
+          ForEach(ConnectionCapabilities.native(integration.identifier)) { capability in
+            expansionLine(symbol: capability.symbol, title: capability.label, detail: nil)
           }
         }
-        Text(isConnected(integration) ? "Connected" : integration.tagline)
-          .font(.caption)
-          .foregroundStyle(isConnected(integration) ? .green : .secondary)
-          .lineLimit(2)
+        .padding(.top, 6)
+        .padding(.leading, 16)
       }
-      Spacer()
-      Button(isConnected(integration) ? "Disconnect" : "Connect") {
-        toggle(integration)
-      }
-      .controlSize(.small)
-      .disabled(!canConnect(integration) && !isConnected(integration))
     }
   }
 
@@ -248,66 +405,78 @@ struct ConnectionsSectionView: View {
 
   private func featuredRow(_ brand: ConnectionBrand) -> some View {
     let existing = server(for: brand)
-    return HStack(alignment: .center, spacing: 10) {
-      RoundedRectangle(cornerRadius: 6, style: .continuous)
-        .fill(Color(hex: brand.tintHex) ?? .gray)
-        .frame(width: 26, height: 26)
-        .overlay(
-          Image(systemName: brand.systemImage)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white)
-        )
-      VStack(alignment: .leading, spacing: 2) {
+    return VStack(alignment: .leading, spacing: 0) {
+      HStack(alignment: .center, spacing: 8) {
+        chevron(expandedRows.contains(brand.id))
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+          .fill(Color(hex: brand.tintHex) ?? .gray)
+          .frame(width: 24, height: 24)
+          .overlay(
+            Image(systemName: brand.systemImage)
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundStyle(.white)
+          )
         Text(brand.name.capitalized)
           .font(.subheadline.weight(.medium))
-        Text(featuredStatus(existing) ?? brand.tagline)
-          .font(.caption)
-          .foregroundStyle(featuredStatusColor(existing))
-          .lineLimit(2)
-      }
-      Spacer()
-      if let existing, busyServers.contains(existing.id) {
-        ProgressView()
-          .controlSize(.small)
-      } else if let existing {
-        Button("Refresh") { Task { await refreshServer(existing) } }
-          .controlSize(.small)
-        Button("Disconnect") { Task { await deleteMCPServer(existing) } }
-          .controlSize(.small)
-      } else {
-        Button("Connect") {
-          Task { await addMCPServer(name: brand.name, url: brand.mcpURL, token: "") }
+        if let existing, let count = mcpToolCounts[existing.id] {
+          Text("\(count)")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(Color.secondary.opacity(0.15)))
         }
-        .controlSize(.small)
-        .buttonStyle(.borderedProminent)
-        .tint(.purple)
+        if let existing, let error = mcpErrors[existing.id] {
+          Text(error)
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .lineLimit(1)
+        }
+        Spacer()
+        if let existing, busyServers.contains(existing.id) {
+          ProgressView()
+            .controlSize(.small)
+        } else if let existing {
+          Button("Refresh") { Task { await refreshServer(existing) } }
+            .controlSize(.small)
+          Button("Disconnect") { Task { await deleteMCPServer(existing) } }
+            .controlSize(.small)
+        } else {
+          Button("Connect") {
+            Task { await addMCPServer(name: brand.name, url: brand.mcpURL, token: "") }
+          }
+          .controlSize(.small)
+          .buttonStyle(.borderedProminent)
+          .tint(.purple)
+        }
+      }
+      .contentShape(Rectangle())
+      .onTapGesture {
+        toggleExpanded(brand.id)
+        // First expansion of a connected server with a cold cache: fetch.
+        if expandedRows.contains(brand.id), let existing, mcpToolLists[existing.id] == nil {
+          Task { await refreshServer(existing) }
+        }
+      }
+
+      if expandedRows.contains(brand.id) {
+        VStack(alignment: .leading, spacing: 2) {
+          mcpExpansion(server: existing)
+        }
+        .padding(.top, 6)
+        .padding(.leading, 16)
       }
     }
-  }
-
-  private func featuredStatus(_ server: MCPServerConfig?) -> String? {
-    guard let server else { return nil }
-    if let error = mcpErrors[server.id] { return error }
-    if let count = mcpToolCounts[server.id] {
-      return "Connected · \(count) tool\(count == 1 ? "" : "s")\(mcpSignedIn[server.id] == true ? " · signed in" : "")"
-    }
-    return "Connected"
-  }
-
-  private func featuredStatusColor(_ server: MCPServerConfig?) -> Color {
-    guard let server else { return .secondary }
-    if mcpErrors[server.id] != nil { return .red }
-    if mcpToolCounts[server.id] != nil { return .green }
-    return .secondary
   }
 
   // MARK: - Custom servers
 
   /// Servers that don't match a featured brand.
   private var customServers: [MCPServerConfig] {
-    hexSettings.mcpServers.filter {
-      ConnectionDirectory.brand(forServerNamed: $0.name, url: $0.url) == nil
-    }
+    hexSettings.mcpServers
+      .filter { ConnectionDirectory.brand(forServerNamed: $0.name, url: $0.url) == nil }
+      .filter { matchesSearch($0.name, extras: (mcpToolLists[$0.id] ?? []).map(\.name)) }
+      .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
   }
 
   private var customSection: some View {
@@ -342,24 +511,43 @@ struct ConnectionsSectionView: View {
 
   // Extracted so the Section body stays small enough for the type-checker.
   private func mcpServerRow(_ server: MCPServerConfig) -> some View {
-    MCPServerRow(
-      server: server,
-      toolCount: mcpToolCounts[server.id],
-      error: mcpErrors[server.id],
-      isSignedIn: mcpSignedIn[server.id] ?? false,
-      onSignIn: { Task { await signInMCPServer(server) } },
-      onToggleEnabled: { enabled in
-        $hexSettings.withLock { settings in
-          if let idx = settings.mcpServers.firstIndex(where: { $0.id == server.id }) {
-            settings.mcpServers[idx].isEnabled = enabled
+    let key = server.id.uuidString
+    return VStack(alignment: .leading, spacing: 0) {
+      MCPServerRow(
+        server: server,
+        toolCount: mcpToolCounts[server.id],
+        error: mcpErrors[server.id],
+        isSignedIn: mcpSignedIn[server.id] ?? false,
+        isExpanded: expandedRows.contains(key),
+        onSignIn: { Task { await signInMCPServer(server) } },
+        onToggleEnabled: { enabled in
+          $hexSettings.withLock { settings in
+            if let idx = settings.mcpServers.firstIndex(where: { $0.id == server.id }) {
+              settings.mcpServers[idx].isEnabled = enabled
+            }
           }
+          if enabled { Task { await refreshServer(server) } }
+        },
+        onRefresh: { Task { await refreshServer(server) } },
+        onEdit: { Task { await beginEditMCPServer(server) } },
+        onDelete: { Task { await deleteMCPServer(server) } }
+      )
+      .contentShape(Rectangle())
+      .onTapGesture {
+        toggleExpanded(key)
+        if expandedRows.contains(key), mcpToolLists[server.id] == nil {
+          Task { await refreshServer(server) }
         }
-        if enabled { Task { await refreshServer(server) } }
-      },
-      onRefresh: { Task { await refreshServer(server) } },
-      onEdit: { Task { await beginEditMCPServer(server) } },
-      onDelete: { Task { await deleteMCPServer(server) } }
-    )
+      }
+
+      if expandedRows.contains(key) {
+        VStack(alignment: .leading, spacing: 2) {
+          mcpExpansion(server: server)
+        }
+        .padding(.top, 6)
+        .padding(.leading, 16)
+      }
+    }
   }
 
   // MARK: - Server management
@@ -372,9 +560,15 @@ struct ConnectionsSectionView: View {
     }
     $hexSettings.withLock { $0.mcpServers.append(server) }
     let error = await refreshServer(server)
+    guard token.isEmpty else { return }
     // No static token + server demands auth → kick off the browser sign-in
     // automatically (matches how OAuth MCP servers expect to be added).
-    if token.isEmpty, isAuthError(error) {
+    if isAuthError(error) {
+      await signInMCPServer(server)
+    } else if error == nil, await MCPOAuthClient.advertisesOAuth(server) {
+      // The catalog fetch succeeded anonymously, but the server publishes
+      // OAuth metadata — some (Dex) only 401 the actual tool calls. Sign in
+      // NOW so the first voice action doesn't fail with an auth error.
       await signInMCPServer(server)
     }
   }
@@ -387,6 +581,7 @@ struct ConnectionsSectionView: View {
     do {
       let tools = try await MCPToolCatalog.shared.refresh(server: server, authToken: token)
       mcpToolCounts[server.id] = tools.count
+      mcpToolLists[server.id] = tools
       mcpErrors[server.id] = nil
       return nil
     } catch {
@@ -458,6 +653,7 @@ struct ConnectionsSectionView: View {
     for server in hexSettings.mcpServers {
       if let entry = await MCPToolCatalog.shared.cachedTools(for: server.id) {
         mcpToolCounts[server.id] = entry.tools.count
+        mcpToolLists[server.id] = entry.tools
       }
       mcpSignedIn[server.id] = await MCPOAuthClient.isSignedIn(server)
     }
@@ -475,6 +671,7 @@ private struct MCPServerRow: View {
   let toolCount: Int?
   let error: String?
   let isSignedIn: Bool
+  var isExpanded: Bool = false
   let onSignIn: () -> Void
   let onToggleEnabled: (Bool) -> Void
   let onRefresh: () -> Void
@@ -483,6 +680,10 @@ private struct MCPServerRow: View {
 
   var body: some View {
     HStack(alignment: .center, spacing: 10) {
+      Image(systemName: "chevron.right")
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.tertiary)
+        .rotationEffect(.degrees(isExpanded ? 90 : 0))
       Image(systemName: "point.3.connected.trianglepath.dotted")
         .foregroundStyle(server.isEnabled ? Color.purple : Color.secondary)
         .frame(width: 16)

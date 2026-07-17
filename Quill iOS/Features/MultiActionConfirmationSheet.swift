@@ -851,6 +851,22 @@ struct MultiActionConfirmationSheet: View {
         }
       }
       Spacer(minLength: 0)
+      // Lookup results are the point of a read step — make them takeable.
+      // Text selection alone was too fiddly for "grab this email".
+      if !step.detail.isEmpty {
+        Button {
+          UIPasteboard.general.string = step.detail
+          UINotificationFeedbackGenerator().notificationOccurred(.success)
+        } label: {
+          Image(systemName: "doc.on.doc")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(width: 30, height: 30)
+            .background(Circle().fill(Color.secondary.opacity(0.12)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Copy result")
+      }
     }
     .padding(12)
     .frame(maxWidth: .infinity, alignment: .leading)

@@ -16,6 +16,11 @@ import SwiftUI
 
 struct NotesListView: View {
   @ObservedObject var store: NotesStore
+  /// Called with the picked (or freshly created) note's id. The presenter
+  /// pushes the note detail — home is a launcher now, so just setting the
+  /// active note and dismissing lands the user on a screen that doesn't
+  /// show the note at all.
+  var onOpenNote: ((UUID) -> Void)?
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var colorScheme
   private var theme: QuillTheme { .of(colorScheme) }
@@ -91,9 +96,10 @@ struct NotesListView: View {
     VStack(spacing: 13) {
       HStack {
         roundButton("square.and.pencil", "New note") {
-          _ = store.startNewNote(location: nil)
+          let new = store.startNewNote(location: nil)
           UINotificationFeedbackGenerator().notificationOccurred(.success)
           dismiss()
+          onOpenNote?(new.id)
         }
 
         Spacer()
@@ -189,6 +195,7 @@ struct NotesListView: View {
                 store.setActiveNote(id: note.id)
                 UISelectionFeedbackGenerator().selectionChanged()
                 dismiss()
+                onOpenNote?(note.id)
               },
               onRename: {
                 renameDraft = note.title

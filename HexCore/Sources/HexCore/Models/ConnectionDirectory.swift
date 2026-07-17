@@ -175,3 +175,54 @@ public enum ConnectionTarget: Equatable, Sendable {
     }
   }
 }
+
+// MARK: - Connection capability display (shared by both platforms' Connections UIs)
+
+/// What each native integration can do in Action mode — static, since these
+/// are the adapters we ship (MCP servers advertise theirs live instead).
+public enum ConnectionCapabilities {
+  public struct Capability: Identifiable, Sendable {
+    public let symbol: String
+    public let label: String
+    public var id: String { label }
+
+    public init(symbol: String, label: String) {
+      self.symbol = symbol
+      self.label = label
+    }
+  }
+
+  public static func native(_ id: Integration.Identifier) -> [Capability] {
+    switch id {
+    case .appleReminders:
+      [Capability(symbol: "checklist", label: "Create reminders — due date, list, priority")]
+    case .calendar:
+      [Capability(symbol: "calendar.badge.plus", label: "Create calendar events — title, start & end, calendar")]
+    case .todoist:
+      [Capability(symbol: "checkmark.circle", label: "Create tasks — project, due date, priority")]
+    case .gmail:
+      [Capability(symbol: "square.and.pencil", label: "Draft emails — recipient, subject, body")]
+    case .googleCalendar:
+      [Capability(symbol: "calendar.badge.plus", label: "Create events — title, time, attendees")]
+    default:
+      []
+    }
+  }
+
+  /// "dex_create_contact" → "Create contact" (the server prefix is noise
+  /// when the tool sits under that server's own row). Splits on both
+  /// underscores and hyphens FIRST, then drops the leading server word —
+  /// tool names vary in separator style across servers.
+  public static func prettyToolName(_ raw: String, serverName: String) -> String {
+    var words = raw
+      .replacingOccurrences(of: "_", with: " ")
+      .replacingOccurrences(of: "-", with: " ")
+      .split(separator: " ")
+      .map(String.init)
+    if words.count > 1, words[0].lowercased() == serverName.lowercased() {
+      words.removeFirst()
+    }
+    let joined = words.joined(separator: " ")
+    return joined.prefix(1).uppercased() + joined.dropFirst()
+  }
+}

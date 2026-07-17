@@ -22,6 +22,7 @@ Return ONLY the updated JSON action object — the same shape and keys as ACTION
 
 What to do:
 - Fill the linking field(s) the INSTRUCTION names — e.g. set `recipient` to the email address found in PRIOR RESULT.
+- For an mcpCall action, the linking fields live inside `mcpArguments` — add or overwrite the named argument key(s) there (e.g. set `mcpArguments.contact_id` to the id found in PRIOR RESULT). All argument values are strings.
 - PERSONALIZE the action's text using facts from PRIOR RESULT when the REQUEST implies it: address people by the name found (rewrite a generic "Happy birthday!" into "Happy birthday, Joe!"), and weave in relevant details the prior result provides. Update `subject`/`notes`/`title` as needed to reflect that personalization.
 - Keep the message's intent and tone from ACTION/REQUEST — you are personalizing it, not rewriting the whole thing from scratch.
 
