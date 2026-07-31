@@ -64,7 +64,8 @@ public enum LLMTransport {
       return try await callProProxy(
         userMessage: userMessage,
         systemPrompt: systemPrompt,
-        accessToken: accessToken
+        accessToken: accessToken,
+        maxTokens: maxTokens
       )
     case .byok(let apiKey, let provider):
       let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -104,7 +105,8 @@ public enum LLMTransport {
   static func callProProxy(
     userMessage: String,
     systemPrompt: String,
-    accessToken: String
+    accessToken: String,
+    maxTokens: Int = 2048
   ) async throws -> String {
     let url = URL(string: proProxyURL)!
     var request = URLRequest(url: url)
@@ -116,6 +118,9 @@ public enum LLMTransport {
     let body: [String: Any] = [
       "systemPrompt": systemPrompt,
       "userMessage": userMessage,
+      // Honored by the proxy (clamped server-side); older deployments
+      // ignore it and use their built-in default.
+      "maxTokens": maxTokens,
     ]
     request.httpBody = try JSONSerialization.data(withJSONObject: body)
 

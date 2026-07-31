@@ -125,6 +125,13 @@ functions.http("quill-ai-proxy", async (req, res) => {
     res.status(400).json({ error: "Missing systemPrompt or userMessage" });
     return;
   }
+  // Client-requested output budget, clamped. Long structured outputs
+  // (the suggestion engine's multi-draft JSON) need more than the old
+  // hard-coded 2048, which truncated mid-JSON.
+  const requestedMax = Number(req.body.maxTokens);
+  const maxTokens = Number.isFinite(requestedMax)
+    ? Math.min(Math.max(Math.trunc(requestedMax), 1), 8192)
+    : 2048;
   if (typeof systemPrompt !== "string" || typeof userMessage !== "string" ||
       systemPrompt.length + userMessage.length > MAX_INPUT_CHARS) {
     res.status(413).json({ error: "Input too large" });
@@ -143,7 +150,7 @@ functions.http("quill-ai-proxy", async (req, res) => {
         model: ANTHROPIC_MODEL,
         system: systemPrompt,
         messages: [{ role: "user", content: userMessage }],
-        max_tokens: 2048,
+        max_tokens: maxTokens,
       }),
     });
 

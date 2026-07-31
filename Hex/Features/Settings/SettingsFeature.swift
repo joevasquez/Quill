@@ -203,6 +203,25 @@ struct SettingsFeature {
     }
   }
 
+  private enum CancelID { case hotKeyCapture }
+
+  /// Listens for the keypresses that define a new hotkey.
+  ///
+  /// This deliberately does NOT live inside the `.task` effect. That one
+  /// is guarded by `hasRunTask` so it fires once, but TCA cancels it when
+  /// the view that sent it disappears — so the first settings tab switch
+  /// killed the listener and the guard stopped it ever restarting,
+  /// leaving hotkey capture dead until relaunch. Scoped to the capture
+  /// itself, it can't outlive or under-live its purpose.
+  private func startKeyCaptureEffect() -> Effect<Action> {
+    .run { send in
+      for try await keyEvent in await keyEventMonitor.listenForKeyPress() {
+        await send(.keyEvent(keyEvent))
+      }
+    }
+    .cancellable(id: CancelID.hotKeyCapture, cancelInFlight: true)
+  }
+
   private func beginCapture(_ target: HotKeyCaptureTarget, state: inout State) {
     switch target {
     case .recording:
@@ -276,7 +295,7 @@ struct SettingsFeature {
   private func handleCapture(_ keyEvent: KeyEvent, for target: HotKeyCaptureTarget, state: inout State) -> Effect<Action> {
     if keyEvent.key == .escape {
       endCapture(target, state: &state)
-      return .none
+      return .cancel(id: CancelID.hotKeyCapture)
     }
 
     let updatedModifiers = keyEvent.modifiers.union(captureModifiers(for: target, state: state))
@@ -289,12 +308,13 @@ struct SettingsFeature {
     if let key = keyEvent.key {
       applyCapturedHotKey(key: key, modifiers: updatedModifiers, for: target, state: &state)
       endCapture(target, state: &state)
-      return .none
+      return .cancel(id: CancelID.hotKeyCapture)
     }
 
     if target == .recording, keyEvent.modifiers.isEmpty {
       applyCapturedHotKey(key: nil, modifiers: updatedModifiers, for: target, state: &state)
       endCapture(target, state: &state)
+      return .cancel(id: CancelID.hotKeyCapture)
     }
 
     return .none
@@ -458,16 +478,20 @@ struct SettingsFeature {
             }
           }
 
-          for try await keyEvent in await keyEventMonitor.listenForKeyPress() {
-            await send(.keyEvent(keyEvent))
+          // Park until this effect is cancelled (view teardown) so the
+          // audio-device observers installed above stay alive. Hotkey
+          // capture used to hang off the end of this loop; it's now its
+          // own on-demand effect (`startKeyCaptureEffect`).
+          while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(60))
           }
-          
+
           deviceRefreshTask.cancel()
         }
 
       case .startSettingHotKey:
         beginCapture(.recording, state: &state)
-        return .none
+        return startKeyCaptureEffect()
 
       case .addWordRemoval:
         state.$hexSettings.withLock {
@@ -513,7 +537,7 @@ struct SettingsFeature {
 
       case .startSettingPasteLastTranscriptHotkey:
         beginCapture(.pasteLastTranscript, state: &state)
-        return .none
+        return startKeyCaptureEffect()
 
       case .clearPasteLastTranscriptHotkey:
         state.$hexSettings.withLock { $0.pasteLastTranscriptHotkey = nil }
@@ -521,7 +545,7 @@ struct SettingsFeature {
 
       case .startSettingCycleModeHotkey:
         beginCapture(.cycleMode, state: &state)
-        return .none
+        return startKeyCaptureEffect()
 
       case .clearCycleModeHotkey:
         state.$hexSettings.withLock { $0.cycleModeHotkey = nil }

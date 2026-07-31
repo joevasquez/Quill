@@ -33,9 +33,11 @@ private func digitValue(for key: Key) -> Int? {
 @Reducer
 struct AppFeature {
   enum ActiveTab: Equatable {
+    /// The landing pane: proactive suggestions (Pro) + recent
+    /// cloud-synced notes — the macOS mirror of the iOS home.
+    case home
     /// General settings: permissions, sound, general (login, dock,
-    /// sleep), and history-retention configuration. The "catchall"
-    /// landing tab.
+    /// sleep), and history-retention configuration.
     case general
     /// The personal agent hub: identity (name), saved routines,
     /// learned memory, and pending offline actions.
@@ -46,6 +48,8 @@ struct AppFeature {
     /// AI post-processing settings: API keys, modes, voice commands,
     /// inline edit, custom user-authored modes.
     case ai
+    /// Free vs Pro comparison + plan activation.
+    case plan
     /// Integration connections (Todoist, Apple Reminders, Notion,
     /// Things, Slack, Linear). Frontend-only as of 0.9.x — connection
     /// state is persisted but send adapters land in a follow-up.
@@ -61,7 +65,7 @@ struct AppFeature {
 		var transcription: TranscriptionFeature.State = .init()
 		var settings: SettingsFeature.State = .init()
 		var history: HistoryFeature.State = .init()
-		var activeTab: ActiveTab = .general
+		var activeTab: ActiveTab = .home
 		@Shared(.hexSettings) var hexSettings: HexSettings
 		@Shared(.modelBootstrapState) var modelBootstrapState: ModelBootstrapState
 
@@ -182,8 +186,13 @@ struct AppFeature {
         return .none
 
       case .appActivated:
-        // App became active - re-check permissions
-        return .send(.checkPermissions)
+        // App became active — re-check permissions, and refresh the Home
+        // suggestions feed (self-gating: Pro + 30-min TTL) so a window
+        // reopened after lunch isn't showing a stale morning feed.
+        return .merge(
+          .send(.checkPermissions),
+          .run { _ in await MacSuggestionsController.shared.refreshOnAppear() }
+        )
 
       case .requestMicrophone:
         return .run { send in
@@ -399,79 +408,8 @@ struct AppFeature {
 /// when History is selected the sidebar collapses so the transcript
 /// list and detail get the full window width.
 private enum SidebarMode: String, CaseIterable, Identifiable {
-  case settings, history, notes
+  case home, settings, history, notes
   var id: String { rawValue }
-  var title: String {
-    switch self {
-    case .settings: "Settings"
-    case .history: "History"
-    case .notes: "Notes"
-    }
-  }
-  var icon: String {
-    switch self {
-    case .settings: "gearshape.fill"
-    case .history:  "clock.fill"
-    case .notes:    "note.text"
-    }
-  }
-}
-
-/// Custom two-segment toggle for switching between Settings and
-/// History modes. Text-only — earlier revision included SF Symbols
-/// next to each label, but at typical sidebar widths the icons
-/// crowded the labels enough to force them onto two lines
-/// ("Setti / ngs"). Dropping the icons gave each pill enough
-/// horizontal room to read cleanly while matching the
-/// minimalist look of macOS sidebar tab pickers.
-///
-/// A `matchedGeometryEffect` "thumb" slides between the two
-/// options on selection. The active pill uses a softened purple
-/// gradient that harmonizes with the rest of the app's brand tint
-/// without screaming.
-private struct SidebarModeToggle: View {
-  let mode: SidebarMode
-  let onSelect: (SidebarMode) -> Void
-  /// Geometry IDs for the matched-geometry "thumb" animation.
-  @Namespace private var thumbNamespace
-
-  var body: some View {
-    HStack(spacing: 0) {
-      ForEach(SidebarMode.allCases) { option in
-        let isSelected = option == mode
-        Button {
-          guard option != mode else { return }
-          withAnimation(.spring(duration: 0.32, bounce: 0.18)) {
-            onSelect(option)
-          }
-        } label: {
-          Text(option.title)
-            .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
-            .foregroundStyle(isSelected ? Color.white : Color.primary.opacity(0.78))
-            .lineLimit(1)
-            .minimumScaleFactor(0.9)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 7)
-            .background {
-              if isSelected {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                  .fill(Color.accentColor)
-                  .shadow(color: Color.accentColor.opacity(0.25), radius: 5, y: 2)
-                  .matchedGeometryEffect(id: "thumb", in: thumbNamespace)
-              }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-      }
-    }
-    .padding(2)
-    .background(
-      RoundedRectangle(cornerRadius: 9, style: .continuous)
-        .fill(Color.primary.opacity(0.08))
-    )
-    .frame(maxWidth: .infinity)
-  }
 }
 
 struct AppView: View {
@@ -481,68 +419,93 @@ struct AppView: View {
   /// sidebar in the right mode without an extra source of truth.
   private var sidebarMode: SidebarMode {
     switch store.state.activeTab {
+    case .home: .home
     case .history: .history
     case .notes: .notes
     default: .settings
     }
   }
 
+  /// "← Home" for every non-home pane — with the sidebar toggle gone,
+  /// Home is the hub and this is the way back.
+  private var backToHome: some ToolbarContent {
+    ToolbarItem(placement: .navigation) {
+      Button {
+        store.send(.setActiveTab(.home))
+      } label: {
+        Label("Home", systemImage: "chevron.left")
+      }
+      .help("Back to Home")
+    }
+  }
+
   var body: some View {
     NavigationSplitView(columnVisibility: $columnVisibility) {
-      VStack(alignment: .leading, spacing: 0) {
-        // Mode pills — custom segmented control with brand-tinted
-        // selection, animated thumb, and SF Symbols on each side.
-        // Replaces the default `.segmented` picker style which felt
-        // utilitarian and didn't visually center within the
-        // sidebar's leading-aligned VStack.
-        SidebarModeToggle(
-          mode: sidebarMode,
-          onSelect: { newMode in
-            switch newMode {
-            case .settings:
-              if store.state.activeTab == .history || store.state.activeTab == .notes {
-                store.send(.setActiveTab(.general))
+      // Home is the navigation hub (toolbar icons + back buttons replace
+      // the old segmented mode toggle), so the sidebar only exists where
+      // it carries real content: Settings sub-tabs and the note list.
+      // Home and History collapse it entirely via `columnVisibility`.
+      Group {
+        // Home and History have no sidebar at all — also drop the
+        // window's sidebar-toggle button there so an empty column can't
+        // be summoned.
+        if sidebarMode == .home || sidebarMode == .history {
+          VStack(alignment: .leading, spacing: 0) {}
+            .toolbar(removing: .sidebarToggle)
+        } else {
+          VStack(alignment: .leading, spacing: 0) {
+            if sidebarMode == .settings {
+              List(selection: $store.activeTab) {
+                tabRow(.general, label: "General", icon: "gearshape.fill", tint: .gray)
+                tabRow(.agent, label: agentTabLabel, icon: "sparkles", tint: .purple)
+                tabRow(.recording, label: "Recording", icon: "mic.fill", tint: .red)
+                tabRow(.ai, label: "AI Processing", icon: "wand.and.stars", tint: .blue)
+                tabRow(.integrations, label: "Integrations", icon: "app.connected.to.app.below.fill", tint: .teal)
+                tabRow(.plan, label: "Subscription", icon: "crown.fill", tint: .yellow)
               }
-            case .history:
-              store.send(.setActiveTab(.history))
-            case .notes:
-              store.send(.setActiveTab(.notes))
+              .listStyle(.sidebar)
+            } else {
+              NotesSidebarList()
             }
           }
-        )
-        .padding(.horizontal, 14)
-        .padding(.top, 16)
-        .padding(.bottom, 12)
-
-        // Sub-tabs — only meaningful in Settings mode. Notes mode
-        // shows the cloud-synced note list here so the detail
-        // pane gets the full window width for the editor.
-        if sidebarMode == .settings {
-          List(selection: $store.activeTab) {
-            tabRow(.general, label: "General", icon: "gearshape.fill", tint: .gray)
-            tabRow(.agent, label: agentTabLabel, icon: "sparkles", tint: .purple)
-            tabRow(.recording, label: "Recording", icon: "mic.fill", tint: .red)
-            tabRow(.ai, label: "AI Processing", icon: "wand.and.stars", tint: .blue)
-            tabRow(.integrations, label: "Integrations", icon: "app.connected.to.app.below.fill", tint: .teal)
-          }
-          .listStyle(.sidebar)
-        } else if sidebarMode == .notes {
-          NotesSidebarList()
-        } else {
-          Spacer()
-          HStack {
-            Spacer()
-            Text("Showing all transcripts")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-            Spacer()
-          }
-          .padding(.bottom, 16)
         }
       }
       .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 280)
     } detail: {
       switch store.state.activeTab {
+      case .home:
+        HomeView(
+          openNote: { id in
+            NoteSelectionState.shared.selectedNoteID = id
+            store.send(.setActiveTab(.notes))
+          },
+          openSettings: { store.send(.setActiveTab(.general)) },
+          openIntegrations: { store.send(.setActiveTab(.integrations)) },
+          openNotesPane: { store.send(.setActiveTab(.notes)) }
+        )
+        .navigationTitle("Home")
+        .toolbar {
+          ToolbarItemGroup(placement: .primaryAction) {
+            Button {
+              store.send(.setActiveTab(.notes))
+            } label: {
+              Label("Notes", systemImage: "list.bullet")
+            }
+            .help("Notes")
+            Button {
+              store.send(.setActiveTab(.history))
+            } label: {
+              Label("History", systemImage: "chart.bar.xaxis")
+            }
+            .help("History")
+            Button {
+              store.send(.setActiveTab(.general))
+            } label: {
+              Label("Settings", systemImage: "gearshape")
+            }
+            .help("Settings")
+          }
+        }
       case .general:
         GeneralSettingsTabView(
           store: store.scope(state: \.settings, action: \.settings),
@@ -551,28 +514,49 @@ struct AppView: View {
           inputMonitoringPermission: store.inputMonitoringPermission
         )
         .navigationTitle("General")
+        .toolbar { backToHome }
       case .agent:
         AgentSettingsTabView(store: store.scope(state: \.settings, action: \.settings))
           .navigationTitle(agentTabLabel)
+          .toolbar { backToHome }
       case .recording:
         RecordingSettingsTabView(
           store: store.scope(state: \.settings, action: \.settings),
           microphonePermission: store.microphonePermission
         )
         .navigationTitle("Recording")
+        .toolbar { backToHome }
       case .ai:
         AISettingsTabView(store: store.scope(state: \.settings, action: \.settings))
           .navigationTitle("AI")
+          .toolbar { backToHome }
       case .integrations:
         IntegrationsSettingsTabView(store: store.scope(state: \.settings, action: \.settings))
           .navigationTitle("Integrations")
+          .toolbar { backToHome }
+      case .plan:
+        PlanSettingsTabView(store: store.scope(state: \.settings, action: \.settings))
+          .navigationTitle("Subscription")
+          .toolbar { backToHome }
       case .history:
         HistoryView(store: store.scope(state: \.history, action: \.history))
           .navigationTitle("History")
+          .toolbar { backToHome }
       case .notes:
         NotesView()
           .navigationTitle("Notes")
+          .toolbar { backToHome }
       }
+    }
+    // The shortcut summary in General posts this so its "Change
+    // shortcuts…" row lands on the actual editor.
+    .onReceive(NotificationCenter.default.publisher(for: .openRecordingSettings)) { _ in
+      store.send(.setActiveTab(.recording))
+    }
+    // Home and History have no sidebar content — collapse the column
+    // entirely there; Settings (sub-tabs) and Notes (note list) keep it.
+    .onChange(of: store.state.activeTab, initial: true) { _, newTab in
+      columnVisibility = (newTab == .home || newTab == .history) ? .detailOnly : .all
     }
     .sheet(isPresented: Binding(
       get: { !store.settings.hexSettings.hasCompletedOnboarding },

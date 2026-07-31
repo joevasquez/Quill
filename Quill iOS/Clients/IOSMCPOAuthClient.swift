@@ -25,15 +25,31 @@ enum IOSMCPOAuthClient {
     )
   }
 
+  /// Google-hosted MCP servers (gmailmcp.googleapis.com, …) don't support
+  /// the RFC 7591 dynamic client registration Quill's generic MCP OAuth
+  /// flow relies on — but they accept standard Google bearer tokens, so
+  /// they ride the app's own Google sign-in instead.
+  static func usesNativeGoogleAuth(_ server: MCPServerConfig) -> Bool {
+    guard let host = URL(string: server.url)?.host()?.lowercased() else { return false }
+    return host == "googleapis.com" || host.hasSuffix(".googleapis.com")
+  }
+
   /// The bearer token to authenticate an MCP request: a valid OAuth access
   /// token (refreshed if needed) when the server is OAuth-connected, else
   /// the static token, else nil.
   static func resolveAuthToken(for server: MCPServerConfig) async -> String? {
-    await orchestrator.resolveAuthToken(for: server)
+    if usesNativeGoogleAuth(server), IOSGoogleOAuthClient.isAuthorized(),
+       let token = try? await IOSGoogleOAuthClient.refreshIfNeeded() {
+      return token
+    }
+    return await orchestrator.resolveAuthToken(for: server)
   }
 
   static func isSignedIn(_ server: MCPServerConfig) async -> Bool {
-    await orchestrator.isSignedIn(server)
+    if usesNativeGoogleAuth(server) {
+      return IOSGoogleOAuthClient.isAuthorized()
+    }
+    return await orchestrator.isSignedIn(server)
   }
 
   static func signOut(_ server: MCPServerConfig) async {

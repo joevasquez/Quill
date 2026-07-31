@@ -22,6 +22,10 @@ struct QuillTopBar: View {
   var onTapList: () -> Void
   var onTapNewNote: () -> Void
   var onTapSettings: () -> Void
+  /// Shown when Pro + suggestions are on — the always-available way into
+  /// the Suggestions page (the peek bar only appears when the feed has
+  /// something to tease).
+  var onTapSuggestions: (() -> Void)?
 
   @Environment(\.colorScheme) private var colorScheme
   private var theme: QuillTheme { .of(colorScheme) }
@@ -42,6 +46,9 @@ struct QuillTopBar: View {
 
       Spacer()
 
+      if let onTapSuggestions {
+        button("lightbulb.max", "Suggestions", onTapSuggestions)
+      }
       button("list.bullet", "Notes", onTapList)
       button("square.and.pencil", "New note", onTapNewNote)
       button("gearshape", "Settings", onTapSettings)
@@ -78,6 +85,13 @@ struct QuillHome: View {
   var destinations: [QuillActDestination]
   var hiddenFormats: Set<AIProcessingMode>
 
+  // Proactive suggestions (Pro) + the Dictate calendar strip. The slot is
+  // mode-gated: Auto/Act show the peek bar, Dictate the meeting strip.
+  var suggestions: [Suggestion]
+  var suggestionsEnabled: Bool
+  var isPro: Bool
+  var meetings: [IOSSuggestionSources.UpcomingMeeting]
+
   var onTapTrigger: () -> Void
   var onHoldTrigger: () -> Void
   var onReleaseTrigger: () -> Void
@@ -85,6 +99,8 @@ struct QuillHome: View {
   var onOpenNote: (Note) -> Void
   var onAddFormat: () -> Void
   var onAddDestination: () -> Void
+  var onOpenSuggestions: () -> Void
+  var onDictateMeeting: (IOSSuggestionSources.UpcomingMeeting) -> Void
 
   @Environment(\.colorScheme) private var colorScheme
   private var theme: QuillTheme { .of(colorScheme) }
@@ -112,9 +128,36 @@ struct QuillHome: View {
 
       Spacer(minLength: 12)
 
+      suggestSlot
+
       if !notes.isEmpty {
         recentRail
       }
+    }
+  }
+
+  // MARK: - Suggestions / calendar slot
+
+  /// Sits just above Recent Notes, below the trigger — present but never
+  /// competing with the capture button. Mode-gated: Auto/Act show the
+  /// suggestions peek bar, Dictate the meeting strip. The peek renders
+  /// NOTHING when Pro is off or there are no suggestions — home is never
+  /// cluttered by empty or locked states (those live on the page).
+  @ViewBuilder
+  private var suggestSlot: some View {
+    switch mode {
+    case .auto, .act:
+      if suggestionsEnabled, isPro, !suggestions.isEmpty {
+        QuillSuggestPeekBar(suggestions: suggestions, onOpen: onOpenSuggestions)
+          .padding(.bottom, 14)
+      }
+    case .dictate:
+      if !meetings.isEmpty {
+        QuillDictateCalendarStrip(meetings: meetings, onDictate: onDictateMeeting)
+          .padding(.bottom, 14)
+      }
+    case .edit:
+      EmptyView()
     }
   }
 
@@ -187,7 +230,7 @@ struct QuillHome: View {
 
   private var recentRail: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("Recent")
+      Text("Recent Notes")
         .font(.system(size: 13, weight: .semibold))
         .tracking(0.3)
         .textCase(.uppercase)

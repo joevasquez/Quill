@@ -93,6 +93,10 @@ struct ConnectionsSectionView: View {
       .filter { matchesSearch($0.name, extras: ConnectionCapabilities.native($0.identifier).map(\.label)) }
       .map(AppsListItem.native)
     let brands = ConnectionDirectory.featured
+      // Gmail is merged into the native Gmail row (compose = native OAuth,
+      // reading = its MCP server on the same sign-in) — two "Gmail" rows
+      // read as a bug.
+      .filter { $0.name != "gmail" }
       .filter { brand in
         let tools = server(for: brand).flatMap { mcpToolLists[$0.id] } ?? []
         return matchesSearch(brand.name, extras: tools.map(\.name))
@@ -163,7 +167,8 @@ struct ConnectionsSectionView: View {
         case .brand(let brand): featuredRow(brand).padding(.vertical, 2)
         }
       }
-      if connectedFreeCount >= IntegrationLimits.freeTierMaxConnections,
+      if !isProPlan,
+         connectedFreeCount >= IntegrationLimits.freeTierMaxConnections,
          nativeIntegrations.contains(where: { !isConnected($0) && !$0.requiresPro }) {
         Text("Free plan is capped at \(IntegrationLimits.freeTierMaxConnections) connected integrations. Disconnect one to swap, or upgrade to Pro for unlimited.")
           .font(.caption)
@@ -301,6 +306,49 @@ struct ConnectionsSectionView: View {
         .padding(.top, 6)
         .padding(.leading, 16)
       }
+
+      // Gmail's second half: inbox READING rides Google's official Gmail
+      // MCP server on the same Google sign-in (compose is the native
+      // adapter above). One row, both capabilities.
+      if integration.identifier == .gmail, isConnected(integration) {
+        gmailReadingLine
+          .padding(.top, 6)
+          .padding(.leading, 32)
+      }
+    }
+  }
+
+  /// Status + one-click enable for the Gmail MCP reading connection.
+  @ViewBuilder
+  private var gmailReadingLine: some View {
+    if let brand = ConnectionDirectory.featured.first(where: { $0.name == "gmail" }) {
+      HStack(spacing: 6) {
+        Image(systemName: "envelope.open")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        if let existing = server(for: brand) {
+          Text("Inbox reading on")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          if let count = mcpToolCounts[existing.id] {
+            Text("\(count) tools")
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+              .padding(.horizontal, 5)
+              .padding(.vertical, 1)
+              .background(Capsule().fill(Color.secondary.opacity(0.15)))
+          }
+        } else {
+          Text("Inbox reading (for Suggestions) is off")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Button("Enable") {
+            Task { await addMCPServer(name: brand.name, url: brand.mcpURL, token: "") }
+          }
+          .controlSize(.mini)
+        }
+        Spacer()
+      }
     }
   }
 
@@ -321,8 +369,13 @@ struct ConnectionsSectionView: View {
     connected.contains(integration.identifier)
   }
 
+  private var isProPlan: Bool {
+    hexSettings.selectedPlan == "pro"
+  }
+
   private func canConnect(_ integration: Integration) -> Bool {
     if isConnected(integration) { return true }  // so they can still disconnect
+    if isProPlan { return true }  // Pro: unlimited, incl. Pro-only integrations
     if integration.requiresPro { return false }
     return connectedFreeCount < IntegrationLimits.freeTierMaxConnections
   }
@@ -561,6 +614,16 @@ struct ConnectionsSectionView: View {
     $hexSettings.withLock { $0.mcpServers.append(server) }
     let error = await refreshServer(server)
     guard token.isEmpty else { return }
+    // Google-hosted servers authenticate with the app's own Google
+    // sign-in (no dynamic client registration) — never start the generic
+    // MCP OAuth flow against accounts.google.com; it can't succeed.
+    if MCPOAuthClient.usesNativeGoogleAuth(server) {
+      let email = UserDefaults.standard.string(forKey: GoogleOAuthClient.googleAccountEmailDefaultsKey)
+      if email?.isEmpty != false {
+        mcpErrors[server.id] = "Sign in to Google first (Google Account above), then refresh this server."
+      }
+      return
+    }
     // No static token + server demands auth → kick off the browser sign-in
     // automatically (matches how OAuth MCP servers expect to be added).
     if isAuthError(error) {

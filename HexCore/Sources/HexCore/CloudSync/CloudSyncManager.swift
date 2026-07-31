@@ -18,6 +18,7 @@ public actor CloudSyncManager {
     do {
       try await firestore.uploadNote(note, userEmail: userEmail, accessToken: accessToken)
     } catch {
+      lastError = error.localizedDescription
       syncLogger.error("Failed to upload note: \(error.localizedDescription, privacy: .public)")
     }
   }
@@ -122,10 +123,18 @@ public actor CloudSyncManager {
 
   // MARK: - Transcripts
 
+  /// Why the most recent write failed, if it did. Sync methods swallow
+  /// errors so one bad record can't abort a batch — this is how the UI
+  /// still learns that nothing is reaching the cloud.
+  public private(set) var lastError: String?
+
+  public func clearLastError() { lastError = nil }
+
   public func uploadTranscript(_ transcript: SyncableTranscript, accessToken: String, userEmail: String) async {
     do {
       try await firestore.uploadTranscript(transcript, userEmail: userEmail, accessToken: accessToken)
     } catch {
+      lastError = error.localizedDescription
       syncLogger.error("Failed to upload transcript: \(error.localizedDescription, privacy: .public)")
     }
   }

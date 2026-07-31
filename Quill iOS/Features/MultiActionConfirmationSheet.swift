@@ -38,6 +38,18 @@ final class MultiActionConfirmationViewModel: ObservableObject {
   /// Escape hatch for auto-routed misfires: dismisses the action and
   /// appends the transcript to the active note instead.
   var onSaveToNote: (() -> Void)?
+  /// Set when the sheet was opened from a proactive suggestion. The card's
+  /// source identity + headline carry into the header — "your suggestion
+  /// became an editable action" — and the footer gains the reassurance line.
+  @Published var suggestionContext: SuggestionPresentation?
+  /// Called once when a suggestion-presented run finishes with no failures,
+  /// so the suggestion is consumed and never re-offered.
+  var onSuggestionRan: (() -> Void)?
+
+  struct SuggestionPresentation: Equatable {
+    let headline: String
+    let source: SuggestionSource
+  }
 
   private var results: [UUID: ItemResult] = [:]
   private var extractionTask: Task<Void, Never>?
@@ -208,6 +220,8 @@ final class MultiActionConfirmationViewModel: ObservableObject {
     self.isParsing = true
     self.autoExecute = false
     self.wasAutoRouted = wasAutoRouted
+    self.suggestionContext = nil
+    self.onSuggestionRan = nil
     self.results = [:]
     extractionTask?.cancel()
     extractionTask = nil
@@ -215,6 +229,10 @@ final class MultiActionConfirmationViewModel: ObservableObject {
 
   func applyParsedIntents(_ intents: [ActionIntent], rawTranscript: String, autoExecute: Bool = false) {
     self.rawTranscript = rawTranscript
+    // Voice-path fills reset any suggestion framing; `presentPrebuilt`
+    // re-applies it after this call.
+    self.suggestionContext = nil
+    self.onSuggestionRan = nil
     // Keep `wasAutoRouted` only when this parse continues a
     // `startParsing` session; direct presentations (routine triggers)
     // reset it.
@@ -235,6 +253,23 @@ final class MultiActionConfirmationViewModel: ObservableObject {
     self.autoExecute = autoExecute
     extractionTask?.cancel()
     extractionTask = nil
+  }
+
+  /// Opens the sheet already-filled from a proactive suggestion's pre-built
+  /// intents — no transcript, no parse skeleton, no auto-execute. The user
+  /// reviews/edits and taps Run; execution reuses the normal path unchanged.
+  func presentPrebuilt(
+    intents: [ActionIntent],
+    headline: String,
+    source: SuggestionSource,
+    onRan: (() -> Void)? = nil
+  ) {
+    isParsing = false
+    applyParsedIntents(intents, rawTranscript: "", autoExecute: false)
+    wasAutoRouted = false
+    onSaveToNote = nil
+    suggestionContext = SuggestionPresentation(headline: headline, source: source)
+    onSuggestionRan = onRan
   }
 
   func removeItem(at id: UUID) {
@@ -385,6 +420,13 @@ final class MultiActionConfirmationViewModel: ObservableObject {
       failureReasons: reasons, outputs: outputs, steps: steps
     )
 
+    // Running a suggestion consumes it — but only when nothing failed, so
+    // a partial failure leaves the nudge available to retry.
+    if failed == 0, suggestionContext != nil {
+      onSuggestionRan?()
+      onSuggestionRan = nil
+    }
+
     // Extract the specific answer the user asked for from each standalone
     // MCP result (best-effort, in the background).
     guard !toExtract.isEmpty else { return }
@@ -525,20 +567,37 @@ struct MultiActionConfirmationSheet: View {
 
   private var header: some View {
     HStack(spacing: 12) {
-      ZStack {
-        Circle()
-          .fill(QuillDesign.actionAccent.opacity(0.2))
-          .frame(width: 36, height: 36)
-        Image(systemName: "bolt.horizontal.fill")
-          .font(.system(size: 16, weight: .semibold))
-          .foregroundStyle(QuillDesign.actionAccent)
-      }
-      VStack(alignment: .leading, spacing: 2) {
-        Text(vm.items.count == 1 ? "Action detected" : "\(vm.items.count) actions detected")
-          .font(.system(size: 15, weight: .semibold))
-        Text(vm.wasAutoRouted ? "Auto-detected from your dictation" : (vm.items.count == 1 ? "Action mode" : "Multi-action mode"))
-          .font(.system(size: 12))
-          .foregroundStyle(.secondary)
+      if let suggestion = vm.suggestionContext {
+        // The card's identity carries into the sheet, so it reads as
+        // "your suggestion became an editable action."
+        QuillSourceMark(source: suggestion.source, size: 40)
+        VStack(alignment: .leading, spacing: 2) {
+          Text("From \(suggestion.source.displayName)")
+            .font(.system(size: 11, weight: .bold))
+            .tracking(0.2)
+            .textCase(.uppercase)
+            .foregroundStyle(QuillDesign.destination(hue: suggestion.source.hue).color())
+          Text(suggestion.headline)
+            .font(.system(size: 17, weight: .bold))
+            .tracking(-0.3)
+            .lineLimit(2)
+        }
+      } else {
+        ZStack {
+          Circle()
+            .fill(QuillDesign.actionAccent.opacity(0.2))
+            .frame(width: 36, height: 36)
+          Image(systemName: "bolt.horizontal.fill")
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(QuillDesign.actionAccent)
+        }
+        VStack(alignment: .leading, spacing: 2) {
+          Text(vm.items.count == 1 ? "Action detected" : "\(vm.items.count) actions detected")
+            .font(.system(size: 15, weight: .semibold))
+          Text(vm.wasAutoRouted ? "Auto-detected from your dictation" : (vm.items.count == 1 ? "Action mode" : "Multi-action mode"))
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+        }
       }
       Spacer()
     }
@@ -689,6 +748,18 @@ struct MultiActionConfirmationSheet: View {
 
   private var footer: some View {
     VStack(spacing: 8) {
+      // Suggestion reassurance: this sheet appeared proactively, so say
+      // out loud that nothing happens until Run.
+      if vm.suggestionContext != nil {
+        HStack(spacing: 6) {
+          Image(systemName: "lock")
+            .font(.system(size: 11, weight: .medium))
+          Text("Nothing is sent until you tap Run — edit anything above.")
+            .font(.system(size: 12))
+        }
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity)
+      }
       // Auto-routing escape hatch: the classifier thought this was a
       // command; one tap turns it back into a note line instead.
       if vm.wasAutoRouted, vm.onSaveToNote != nil {

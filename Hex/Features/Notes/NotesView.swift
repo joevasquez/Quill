@@ -14,6 +14,10 @@ import SwiftUI
 final class NoteSelectionState: ObservableObject {
   static let shared = NoteSelectionState()
   @Published var selectedNoteID: UUID?
+  /// Set by external launch points (the Home pane's dictate button /
+  /// meeting strip) alongside `selectedNoteID`: when the editor for this
+  /// note appears, it starts dictation immediately and clears the flag.
+  @Published var pendingDictationNoteID: UUID?
   private init() {}
 }
 
@@ -183,7 +187,7 @@ struct NotesView: View {
           photoStore: photoStore,
           isDirty: cloudSync.dirtyNoteIDs.contains(id),
           onSync: { syncNote(id: id) },
-          onMarkDirty: { cloudSync.markDirty(id: id) },
+          onMarkDirty: { cloudSync.markDirtyAndScheduleUpload(id: id) },
           onDelete: {
             noteToDelete = id
             showDeleteConfirmation = true
@@ -396,10 +400,16 @@ struct NotesView: View {
     if selection.selectedNoteID == id {
       selection.selectedNoteID = nil
     }
+    // Capture the photo ids BEFORE the note leaves the array — the cloud
+    // cleanup needs them (mirrors iOS NotesStore.deleteNote).
+    let photoIDs = cloudSync.cloudNotes
+      .first { $0.id == id }
+      .map { NoteContent.photoIDs(in: $0.body) } ?? []
     cloudSync.cloudNotes.removeAll { $0.id == id }
     cloudSync.clearDirty(id: id)
+    MacPhotoStore.shared.deleteAllPhotos(noteID: id)
     Task {
-      await cloudSync.deleteNoteFromCloud(id: id)
+      await cloudSync.deleteNoteFromCloud(id: id, photoIDs: photoIDs)
     }
   }
 }
@@ -420,6 +430,7 @@ private struct NoteEditorView: View {
   @State private var textViewRef: NSTextView?
   @FocusState private var bodyFocused: Bool
   @StateObject private var dictation = NoteDictationController()
+  @ObservedObject private var selection = NoteSelectionState.shared
   /// AI cleanup for note dictations (.notes mode: structured bullets).
   /// Persisted — it's a working style, not a per-recording choice.
   @AppStorage("quill.noteDictationCleanup") private var cleanupDictation = true
@@ -436,6 +447,9 @@ private struct NoteEditorView: View {
   @State private var pendingEdit: PendingNoteEdit?
   @State private var isEditingWithAI = false
   @State private var editError: String?
+  /// The AI bar rests collapsed (it's tall); the header toggles it and
+  /// the choice persists.
+  @AppStorage("quill.noteEditBarExpanded") private var editBarExpanded = false
   @Environment(\.colorScheme) private var colorScheme
 
   /// Readable amber for the Edit chips/labels — the mode hue is light, so
@@ -481,8 +495,38 @@ private struct NoteEditorView: View {
         .frame(maxWidth: .infinity)
       }
     }
-    .onAppear { loadFields() }
-    .onChange(of: note.id) { loadFields() }
+    .onAppear {
+      loadFields()
+      consumePendingDictation()
+      fetchMissingPhotos()
+    }
+    .onChange(of: note.id) {
+      loadFields()
+      consumePendingDictation()
+      fetchMissingPhotos()
+    }
+    .onChange(of: selection.pendingDictationNoteID) { _, _ in
+      consumePendingDictation()
+    }
+  }
+
+  /// Photos that haven't synced down yet download on open — no waiting
+  /// for the next full sync pass. `MacPhotoStore.revision` bumps on save,
+  /// which re-renders `photoSegments`.
+  private func fetchMissingPhotos() {
+    let snapshot = note
+    Task { await MacCloudSync.shared.fetchMissingPhotos(for: snapshot) }
+  }
+
+  /// Home-pane launch points (dictate button, meeting strip) select a
+  /// note and flag it for immediate dictation; the editor honors the
+  /// flag once it's showing that note.
+  private func consumePendingDictation() {
+    guard selection.pendingDictationNoteID == note.id,
+          !dictation.isRecording, !dictation.isProcessing
+    else { return }
+    selection.pendingDictationNoteID = nil
+    dictation.toggle(cleanup: cleanupDictation) { text in insertDictation(text) }
   }
 
   // MARK: - Title
@@ -641,35 +685,51 @@ private struct NoteEditorView: View {
     let edit = QuillDesign.ModePalette.edit
 
     VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 6) {
-        Image(systemName: "sparkles")
-          .font(.caption)
-          .foregroundStyle(editInk)
-        Text("Edit with AI")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(editInk.opacity(0.85))
-        if isEditingWithAI {
-          ProgressView().controlSize(.small).padding(.leading, 4)
-          Text("Revising…").font(.caption).foregroundStyle(.secondary)
+      // Header doubles as the disclosure — the bar is tall, so it rests
+      // collapsed to a single line until you want it.
+      Button {
+        withAnimation(.easeInOut(duration: 0.18)) { editBarExpanded.toggle() }
+      } label: {
+        HStack(spacing: 6) {
+          Image(systemName: "sparkles")
+            .font(.caption)
+            .foregroundStyle(editInk)
+          Text("Edit with AI")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(editInk.opacity(0.85))
+          if isEditingWithAI {
+            ProgressView().controlSize(.small).padding(.leading, 4)
+            Text("Revising…").font(.caption).foregroundStyle(.secondary)
+          }
+          Spacer()
+          Image(systemName: "chevron.down")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(editInk.opacity(0.7))
+            .rotationEffect(.degrees(editBarExpanded ? 0 : -90))
         }
+        .contentShape(Rectangle())
       }
+      .buttonStyle(.plain)
+      .help(editBarExpanded ? "Hide the edit commands" : "Show the edit commands")
 
-      // Chips wrap across the readable column.
-      FlowLayout(spacing: 7) {
-        ForEach(learned, id: \.self) { editChip($0, isLearned: true) }
-        ForEach(NoteEditCommands.suggestions, id: \.self) {
-          editChip($0, isLearned: learned.contains($0))
+      if editBarExpanded {
+        // Chips wrap across the readable column.
+        FlowLayout(spacing: 7) {
+          ForEach(learned, id: \.self) { editChip($0, isLearned: true) }
+          ForEach(NoteEditCommands.suggestions, id: \.self) {
+            editChip($0, isLearned: learned.contains($0))
+          }
         }
-      }
 
-      HStack(spacing: 8) {
-        TextField("Edit this note — e.g. shorten by 20%", text: $editDraft)
-          .textFieldStyle(.roundedBorder)
-          .onSubmit { submitEditDraft() }
-          .disabled(isEditingWithAI)
-        Button("Run") { submitEditDraft() }
-          .keyboardShortcut(.return, modifiers: .command)
-          .disabled(editDraft.trimmingCharacters(in: .whitespaces).isEmpty || isEditingWithAI)
+        HStack(spacing: 8) {
+          TextField("Edit this note — e.g. shorten by 20%", text: $editDraft)
+            .textFieldStyle(.roundedBorder)
+            .onSubmit { submitEditDraft() }
+            .disabled(isEditingWithAI)
+          Button("Run") { submitEditDraft() }
+            .keyboardShortcut(.return, modifiers: .command)
+            .disabled(editDraft.trimmingCharacters(in: .whitespaces).isEmpty || isEditingWithAI)
+        }
       }
 
       if let editError {

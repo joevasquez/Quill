@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.25.0
+
+### Minor Changes
+
+- Gmail suggestions via Google's official Gmail MCP server: one-tap featured Gmail connection that authenticates with your existing Google sign-in (no separate OAuth), gmail.readonly scope added (re-connect Google once to grant), inbox reads feed the proactive suggestion engine.
+- Plan surfaces: a dedicated Quill Pro screen (iOS Settings) and Plan tab (macOS Settings) with the shared Free vs Pro comparison, plus a richer onboarding Connect Google step listing what the sign-in unlocks — sync, Gmail/Calendar actions, Pro suggestions. Google stays optional; the plan controls moved out of General.
+- Settings simplified: macOS hides expert knobs (clipboard/paste mechanics, word corrections, per-app AI overrides, settings export/import/reset) behind one 'Show advanced settings' switch, drops the read-only Status and Keyboard Shortcuts mirror sections, and finally exposes Cloud Sync. Cloud sync failures now report the real reason instead of a bare HTTP code, and MCP auth errors no longer blame your token when the service itself is unavailable. iOS reads its version from the bundle and drops debug logging from the keychain path.
+- macOS Home pane: the main window now opens to a Home tab mirroring iOS — proactive suggestions (Pro) with Review routing into the confirmation panel, plus your three most recent synced notes with one-click jump to the Notes editor.
+- macOS Home becomes a doing surface: type-a-command field + Dictate button (new note, auto-starts dictation), meeting strip with NOW tag pre-titling notes, staggered suggestion cards, Connect Sources CTA, and suggestions refresh on app activation. Notes: deleting now removes cloud photos too, and missing photos download on open. Connections: Gmail is one row — compose (native) + inbox reading (MCP) with a one-click Enable. History wears the brand wash.
+- iOS proactive suggestions (Pro): Quill reads your connected sources on app open and offers ready-to-run action cards — reviewed in the pre-filled confirmation sheet, never auto-executed. Plus the Dictate meeting strip, collapsed Act app summary, and the Dictate format dropdown.
+
+### Patch Changes
+
+- Fix hotkey capture: the key listener rode on a once-only, view-tied effect, so the first Settings tab switch killed it and nothing could re-arm it — new shortcuts silently wouldn't record. It's now scoped to the capture itself. General's shortcut summary also gets a 'Change shortcuts…' row that jumps to the editor. iOS Settings regrouped from 16 stacked sections into 8, behind five focused sub-screens.
+- Suggestions page is always reachable: a lightbulb button joins the home top bar when Pro is on (the peek bar only appears when there's something to tease), and the page gains a refresh button that re-checks sources immediately, bypassing the 30-minute throttle.
+- Restore the Keyboard Shortcuts summary in General (it was the only signpost to the hotkey editor) and always list Cycle Mode and Paste Last, showing 'Not set' when unassigned. Suggestion generation is no longer cancelled when you navigate away from Home mid-pass.
+- Point cloud sync at a new Firestore database (quill-sync). The previous database was destroyed with the GCP project; undeleting the project restored its metadata but not its data, and Firestore permanently reserves a deleted database's ID, so the old name could not be reused.
+- macOS window simplified: Home is the hub — sidebar toggle removed, Home/History show no sidebar, Home's toolbar has Notes/History/Settings icons, and every other pane gets a back-to-Home button. Settings keeps its sub-tab list and Notes its note list.
+- Suggestions moved to a dedicated page: home shows a quiet one-tap peek bar (stacked source icons + count + top headline) above the renamed Recent Notes rail, and the full-screen Suggestions page hosts the inbox-style cards, empty state, and Pro upsell. Review still opens the same pre-filled confirmation sheet.
+- macOS notes are cached locally: the list renders instantly on launch instead of waiting for a cloud round-trip, unsynced edits survive quitting the app, and syncs now merge (local edits that haven't uploaded are preserved and pushed, rather than being silently reverted by the incoming cloud copy).
+- Suggestions now read Google Calendar events (existing scope, no re-consent), the Dictate meeting strip works for Google-only calendars, and the empty state explains that Gmail/Dex suggestions need their MCP servers instead of claiming you're caught up.
+- Subscription tab (renamed from Plan) with side-by-side Free vs Pro cards and one-click plan switching; Pro removes the free connection cap and its warning on both platforms; suggestions fixed for Pro users (the AI proxy truncated long responses — truncated output no longer poisons the refresh timer, the proxy honors a larger output budget, and the prompt keeps output compact); calmer Home layout with uniform section labels and slim note rows.
+- iOS note view: tap the title to rename, and the header's rename button is now the share menu (text-only or PDF).
+- macOS Notes: the Edit-with-AI bar collapses to a single header line (persisted), and edits auto-sync ~7 seconds after you stop typing — no more manual Sync Now for routine edits. Home: bigger centered Actions | Notes switcher with live count bubbles (suggestions / today's meetings), the meeting strip lives in the Notes tab, and the layout breathes more.
+- Suggestions no longer fail wholesale when the model invents a field — bad items are dropped, good ones survive, and failures log the raw payload. macOS Home splits into Actions | Notes sub-tabs (persisted), with the Notes tab showing eight recent notes and an All Notes shortcut.
+- macOS Home polish: sidebar toggle suppressed on Home and History, and Home gains the Quill brand header — feather wordmark, time-of-day greeting, and a soft violet wash.
+
 ## 0.24.0
 
 ### Minor Changes

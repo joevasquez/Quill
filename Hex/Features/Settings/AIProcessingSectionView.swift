@@ -97,6 +97,7 @@ struct CustomModeEditorMac: View {
 struct AIProcessingSectionView: View {
   @ObserveInjection var inject
   @Bindable var store: StoreOf<SettingsFeature>
+  @AppStorage(AdvancedSettings.defaultsKey) private var showAdvanced = false
   @State private var apiKeyText: String = ""
   @State private var isAPIKeyVisible: Bool = false
   @State private var saveTask: Task<Void, Never>?
@@ -402,6 +403,10 @@ struct AIProcessingSectionView: View {
   /// rendered as a row with an app picker (NSOpenPanel-driven) and
   /// a mode picker. Empty list shows a helpful empty-state row.
   @ViewBuilder private var perAppOverridesSection: some View {
+    // Power-user territory: the built-in "Auto-select mode by app"
+    // heuristic covers the common cases, so hand-written rules stay
+    // behind Advanced.
+    if showAdvanced {
     Section {
       if store.hexSettings.appModeRules.isEmpty {
         Label {
@@ -450,6 +455,7 @@ struct AIProcessingSectionView: View {
     } footer: {
       Text("Pick an app and the AI mode Quill should use whenever you dictate while it's frontmost.")
         .settingsCaption()
+    }
     }
   }
 

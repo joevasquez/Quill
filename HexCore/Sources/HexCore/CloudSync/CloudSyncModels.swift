@@ -99,7 +99,14 @@ public enum SyncPlatform: String, Codable, Sendable {
 public enum CloudSyncConstants {
   public static let gcpProjectID = "quill-495210"
   public static let firestoreScope = "https://www.googleapis.com/auth/datastore"
-  public static let firestoreDatabaseID = "quill-db"
+  /// Was `quill-db` until 2026-07-31. That database was destroyed when the
+  /// GCP project was deleted; undeleting the project restored the metadata
+  /// record but not the data, leaving the ID tombstoned — `delete` returns
+  /// NOT_FOUND while `create` returns ALREADY_EXISTS, so the name can never
+  /// be used again. Deleting a Firestore database permanently burns its ID:
+  /// if this one ever has to be replaced, pick another new name here rather
+  /// than trying to recreate it.
+  public static let firestoreDatabaseID = "quill-sync"
   public static let cloudSyncEnabledKey = "quill.cloudSyncEnabled"
   public static let gcsBucket = "quill-49521-notes"
   public static let photoStorageScope = "https://www.googleapis.com/auth/devstorage.read_write"

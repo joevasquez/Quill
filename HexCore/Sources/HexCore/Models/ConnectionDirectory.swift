@@ -51,6 +51,17 @@ public enum ConnectionDirectory {
   /// native integrations. Order = display order.
   public static let featured: [ConnectionBrand] = [
     ConnectionBrand(
+      name: "gmail",
+      systemImage: "envelope.fill",
+      // Handoff hue 330 (oklch 0.72 0.16 330) — matches SuggestionSource.
+      tintHex: "E979B4",
+      tagline: "Read your inbox, draft replies",
+      // Google's managed Gmail MCP server. Authenticates with the app's
+      // own Google sign-in (see usesNativeGoogleAuth), NOT the generic
+      // MCP OAuth flow — Google doesn't support dynamic registration.
+      mcpURL: "https://gmailmcp.googleapis.com/mcp/v1"
+    ),
+    ConnectionBrand(
       name: "notion",
       systemImage: "doc.richtext",
       tintHex: "1F1F1F",

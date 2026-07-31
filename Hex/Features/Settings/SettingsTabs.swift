@@ -37,11 +37,12 @@ struct GeneralSettingsTabView: View {
 
   var body: some View {
     Form {
-      StatusOverviewView(
-        store: store,
-        microphonePermission: microphonePermission,
-        accessibilityPermission: accessibilityPermission
-      )
+      // The Status overview restated the Permissions section plus two
+      // other tabs' state, so it's gone. The Keyboard Shortcuts summary
+      // stays: it looks like a read-only mirror, but it's how people
+      // FIND the hotkey editor (its footer names the Recording tab).
+      // Removing it made the editor effectively undiscoverable.
+      // Permissions still appears, but only when something needs granting.
       if microphonePermission != .granted
           || accessibilityPermission != .granted
           || inputMonitoringPermission != .granted
@@ -56,7 +57,26 @@ struct GeneralSettingsTabView: View {
       SoundSectionView(store: store)
       GeneralSectionView(store: store)
       KeyboardShortcutReferenceView(store: store)
+      CloudSyncSectionView(store: store)
       AboutSectionView(store: store)
+      AdvancedSettingsToggle(summary: "Settings export, import, and reset.")
+    }
+    .formStyle(.grouped)
+    .task { await store.send(.task).finish() }
+    .enableInjection()
+  }
+}
+
+// MARK: - Plan
+
+/// The subscription surface: Free vs Pro comparison + activation.
+struct PlanSettingsTabView: View {
+  @ObserveInjection var inject
+  @Bindable var store: StoreOf<SettingsFeature>
+
+  var body: some View {
+    Form {
+      PlanSectionView(store: store)
     }
     .formStyle(.grouped)
     .task { await store.send(.task).finish() }
@@ -99,6 +119,7 @@ struct RecordingSettingsTabView: View {
   @ObserveInjection var inject
   @Bindable var store: StoreOf<SettingsFeature>
   let microphonePermission: PermissionStatus
+  @AppStorage(AdvancedSettings.defaultsKey) private var showAdvanced = false
 
   var body: some View {
     Form {
@@ -113,9 +134,14 @@ struct RecordingSettingsTabView: View {
       }
       HotKeySectionView(store: store)
       RecordingBehaviorSectionView(store: store)
-      RecordingOutputSectionView(store: store)
       HistorySectionView(store: store)
-      WordRemappingsSection(store: store)
+      // Paste mechanics and word corrections are troubleshooting tools —
+      // most people never need them, and the per-app delay list is long.
+      if showAdvanced {
+        RecordingOutputSectionView(store: store)
+        WordRemappingsSection(store: store)
+      }
+      AdvancedSettingsToggle(summary: "Text output, clipboard behavior, and word corrections.")
     }
     .formStyle(.grouped)
     .task { await store.send(.task).finish() }
@@ -258,39 +284,55 @@ private struct KeyboardShortcutReferenceView: View {
         icon: "mic.fill"
       )
 
-      if let cycleHotkey = store.hexSettings.cycleModeHotkey {
-        shortcutRow(
-          label: "Cycle Mode",
-          hotkey: cycleHotkey,
-          icon: "rectangle.3.group.fill"
-        )
-      }
+      // Always list every assignable shortcut, even unassigned ones —
+      // hiding the unset rows meant a user with no Cycle Mode shortcut
+      // had no clue one existed, let alone where to set it.
+      shortcutRow(
+        label: "Cycle Mode",
+        hotkey: store.hexSettings.cycleModeHotkey,
+        icon: "rectangle.3.group.fill"
+      )
 
-      if let pasteHotkey = store.hexSettings.pasteLastTranscriptHotkey {
-        shortcutRow(
-          label: "Paste Last",
-          hotkey: pasteHotkey,
-          icon: "doc.on.clipboard"
-        )
+      shortcutRow(
+        label: "Paste Last",
+        hotkey: store.hexSettings.pasteLastTranscriptHotkey,
+        icon: "doc.on.clipboard"
+      )
+      Button {
+        NotificationCenter.default.post(name: .openRecordingSettings, object: nil)
+      } label: {
+        Label("Change shortcuts\u{2026}", systemImage: "arrow.right.circle")
       }
     } header: {
       Text("Keyboard Shortcuts")
     } footer: {
-      Text("Configure shortcuts in the Recording tab under Hot Key.")
+      Text("Shortcuts are set in the Recording tab, under Hot Key.")
         .settingsCaption()
     }
   }
 
   @ViewBuilder
   private func shortcutRow(label: String, hotkey: HotKey, icon: String) -> some View {
+    shortcutRow(label: label, hotkey: Optional(hotkey), icon: icon)
+  }
+
+  /// `nil` renders a muted "Not set" so unassigned shortcuts still
+  /// announce that they exist.
+  private func shortcutRow(label: String, hotkey: HotKey?, icon: String) -> some View {
     HStack {
       Label(label, systemImage: icon)
       Spacer()
-      Text(hotkeyDisplayString(hotkey))
-        .font(.system(.body, design: .rounded).weight(.medium))
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+      if let hotkey {
+        Text(hotkeyDisplayString(hotkey))
+          .font(.system(.body, design: .rounded).weight(.medium))
+          .padding(.horizontal, 8)
+          .padding(.vertical, 3)
+          .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+      } else {
+        Text("Not set")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
     }
   }
 

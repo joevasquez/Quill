@@ -56,6 +56,56 @@ enum IOSTodoistAdapter {
     throw IOSActionError.invalidResponse("Todoist")
   }
 
+  /// Read-only snapshot of active tasks for the suggestion engine — one
+  /// line per task with its due date, overdue flagged. Best-effort:
+  /// returns "" when there's no token or the request fails.
+  static func tasksSnapshot(limit: Int = 25) async -> String {
+    let (token, _) = KeychainStore.read(account: KeychainKey.todoistAPIToken)
+    guard let token, !token.isEmpty else { return "" }
+
+    let request = authorizedRequest("tasks", token: token)
+    guard let (data, response) = try? await URLSession.shared.data(for: request),
+          let http = response as? HTTPURLResponse, http.statusCode == 200
+    else { return "" }
+
+    var tasks: [[String: Any]] = []
+    if let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+      tasks = array
+    } else if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = dict["results"] as? [[String: Any]] {
+      tasks = results
+    }
+    guard !tasks.isEmpty else { return "" }
+
+    let today = Calendar.current.startOfDay(for: Date())
+    let dayFormatter = DateFormatter()
+    dayFormatter.dateFormat = "yyyy-MM-dd"
+
+    // Overdue first, then dated, then undated — the interesting ones lead.
+    func dueDate(_ task: [String: Any]) -> Date? {
+      guard let due = task["due"] as? [String: Any],
+            let dateString = due["date"] as? String
+      else { return nil }
+      return dayFormatter.date(from: String(dateString.prefix(10)))
+    }
+    let sorted = tasks.sorted { a, b in
+      switch (dueDate(a), dueDate(b)) {
+      case (let x?, let y?): return x < y
+      case (_?, nil): return true
+      default: return false
+      }
+    }
+
+    let lines = sorted.prefix(limit).compactMap { task -> String? in
+      guard let content = task["content"] as? String, !content.isEmpty else { return nil }
+      guard let due = dueDate(task) else { return "- \(content) (no due date)" }
+      let overdue = due < today ? " [OVERDUE]" : ""
+      return "- \(content) (due \(dayFormatter.string(from: due)))\(overdue)"
+    }
+    guard !lines.isEmpty else { return "" }
+    return "Active Todoist tasks:\n" + lines.joined(separator: "\n")
+  }
+
   // MARK: - Private
 
   private static func authorizedRequest(_ path: String, token: String, method: String = "GET") -> URLRequest {

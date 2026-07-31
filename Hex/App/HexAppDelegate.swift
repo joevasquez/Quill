@@ -373,6 +373,11 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 	}
 
 	func applicationWillTerminate(_: Notification) {
+		// Flush the note cache synchronously — the debounced write may be
+		// mid-flight, and a Task here wouldn't outlive termination.
+		MainActor.assumeIsolated {
+			MacCloudSync.shared.persistLocalCacheNow()
+		}
 		Task {
 			await recording.cleanup()
 		}

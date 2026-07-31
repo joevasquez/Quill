@@ -567,6 +567,17 @@ struct HistoryView: View {
           }
         }
       }
+      // Same soft brand wash as the Home pane, so the two default surfaces
+      // read as one product (flat language: tint, not chrome).
+      .background(
+        RadialGradient(
+          colors: [QuillDesign.brand.color(0.08), .clear],
+          center: UnitPoint(x: 0.5, y: -0.15),
+          startRadius: 0,
+          endRadius: 620
+        )
+        .ignoresSafeArea()
+      )
       .searchable(text: $searchQuery, placement: .toolbar, prompt: "Search transcripts")
       .task(id: searchQuery) {
         // Debounce: wait for typing to settle before running the
@@ -704,14 +715,7 @@ struct UsageStatsCardView: View {
 		}
 		.padding(.horizontal, 12)
 		.padding(.vertical, 10)
-		.background(
-			RoundedRectangle(cornerRadius: 8)
-				.fill(Color(.windowBackgroundColor).opacity(0.5))
-				.overlay(
-					RoundedRectangle(cornerRadius: 8)
-						.strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
-				)
-		)
+		.quillCard()
 		.padding(.horizontal)
 		.padding(.top, 8)
 	}

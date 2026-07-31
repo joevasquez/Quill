@@ -20,6 +20,16 @@ struct IOSGoogleCalendar: Equatable, Sendable, Identifiable {
   let name: String
 }
 
+/// A read-only upcoming event, used by the suggestion pass and the
+/// Dictate × Calendar strip. Distinct from EventKit's `EKEvent` so
+/// Google-only users (no local calendar access) still get both features.
+struct IOSGoogleCalendarEvent: Equatable, Sendable {
+  let start: Date
+  let end: Date
+  let title: String
+  let location: String?
+}
+
 @MainActor
 enum IOSGoogleCalendarAdapter {
   /// Fetches the user's calendar list. Returns `[]` on any failure
@@ -30,6 +40,55 @@ enum IOSGoogleCalendarAdapter {
       return []
     }
     return await fetchCalendarList(accessToken: accessToken)
+  }
+
+  /// Read-only: timed events on the primary calendar in the next `hours`.
+  /// The existing `calendar.events` OAuth scope already permits reads —
+  /// no re-consent needed. Best-effort: `[]` on any failure.
+  static func upcomingEvents(from: Date = Date(), hours: Int = 48, maxResults: Int = 20) async -> [IOSGoogleCalendarEvent] {
+    guard let accessToken = try? await IOSGoogleOAuthClient.refreshIfNeeded() else { return [] }
+
+    let iso = ISO8601DateFormatter()
+    iso.formatOptions = [.withInternetDateTime]
+    guard let end = Calendar.current.date(byAdding: .hour, value: hours, to: from) else { return [] }
+
+    var components = URLComponents(string: "https://www.googleapis.com/calendar/v3/calendars/primary/events")!
+    components.queryItems = [
+      URLQueryItem(name: "timeMin", value: iso.string(from: from)),
+      URLQueryItem(name: "timeMax", value: iso.string(from: end)),
+      URLQueryItem(name: "singleEvents", value: "true"),
+      URLQueryItem(name: "orderBy", value: "startTime"),
+      URLQueryItem(name: "maxResults", value: String(maxResults)),
+    ]
+    guard let url = components.url else { return [] }
+
+    var request = URLRequest(url: url)
+    request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+    request.timeoutInterval = 15
+
+    guard let (data, response) = try? await URLSession.shared.data(for: request),
+          let http = response as? HTTPURLResponse, http.statusCode == 200,
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let items = json["items"] as? [[String: Any]]
+    else { return [] }
+
+    return items.compactMap { item in
+      // All-day events carry "date" instead of "dateTime" — skip them,
+      // matching the EventKit fetcher's !isAllDay filter.
+      guard let startObj = item["start"] as? [String: Any],
+            let endObj = item["end"] as? [String: Any],
+            let startString = startObj["dateTime"] as? String,
+            let endString = endObj["dateTime"] as? String,
+            let start = iso.date(from: startString),
+            let endDate = iso.date(from: endString)
+      else { return nil }
+      return IOSGoogleCalendarEvent(
+        start: start,
+        end: endDate,
+        title: (item["summary"] as? String) ?? "(untitled)",
+        location: item["location"] as? String
+      )
+    }
   }
 
   static func createEvent(_ intent: ActionIntent) async throws -> String {

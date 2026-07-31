@@ -559,6 +559,13 @@ final class RecordingViewModel: ObservableObject {
   }
 }
 
+/// What the home NavigationStack can push: a note's detail, or the
+/// dedicated Suggestions page.
+enum QuillRoute: Hashable {
+  case note(UUID)
+  case suggestions
+}
+
 struct ContentView: View {
   @AppStorage(QuillIOSSettingsKey.selectedModel) private var selectedModel: String = QuillIOSSettingsKey.defaultModel
   @AppStorage(QuillIOSSettingsKey.aiProcessingMode) private var aiModeRaw: String = QuillIOSSettingsKey.defaultMode
@@ -569,9 +576,12 @@ struct ContentView: View {
   @AppStorage(QuillIOSSettingsKey.defaultCaptureMode) private var defaultCaptureModeRaw: String = QuillIOSSettingsKey.defaultCaptureModeValue
   @AppStorage(IntegrationConnectionStore.userDefaultsKey) private var connectedIntegrationsData: Data = Data()
   @AppStorage(MCPServersStorage.userDefaultsKey) private var mcpServersData: Data = Data()
+  @AppStorage(QuillIOSSettingsKey.suggestionsEnabled) private var suggestionsEnabled: Bool = true
+  @AppStorage(QuillIOSSettingsKey.selectedPlan) private var selectedPlanRaw: String = ""
 
   @StateObject private var vm = RecordingViewModel()
   @StateObject private var notes = NotesStore.shared
+  @StateObject private var suggestions = SuggestionsController.shared
   /// View-model for the action confirmation sheet. Owned by ContentView
   /// (rather than the sheet itself via @StateObject) so the sheet can
   /// open *before* the LLM parse completes — we populate the
@@ -619,8 +629,8 @@ struct ContentView: View {
   /// note rail offers Edit where home offers Auto — sharing one value
   /// would strand the rail on a mode its own rail can't show.
   @State private var noteMode: QuillMode = .dictate
-  /// Navigation. Home is the root; a note pushes its detail.
-  @State private var path: [UUID] = []
+  /// Navigation. Home is the root; a note or the Suggestions page pushes.
+  @State private var path: [QuillRoute] = []
   @State private var offlineBannerDismissTask: Task<Void, Never>?
 
   /// The currently-selected mode, which may be either a built-in
@@ -665,8 +675,22 @@ struct ContentView: View {
         statusCard
           .padding(.bottom, 12)
       }
-      .navigationDestination(for: UUID.self) { id in
-        noteDetail(for: id)
+      .navigationDestination(for: QuillRoute.self) { route in
+        switch route {
+        case .note(let id):
+          noteDetail(for: id)
+        case .suggestions:
+          QuillSuggestionsPage(
+            suggestions: suggestions.current,
+            isPro: selectedPlanRaw == "pro",
+            noReadableSources: suggestions.hadNoReadableSources,
+            isGenerating: suggestions.isGenerating,
+            onReview: { reviewSuggestion($0) },
+            onDismiss: { suggestions.dismiss($0) },
+            onUnlock: { showingSettings = true },
+            onRefresh: { Task { await suggestions.regenerateNow() } }
+          )
+        }
       }
       .toolbar(.hidden, for: .navigationBar)
       .onAppear {
@@ -792,7 +816,7 @@ struct ContentView: View {
         NotesListView(store: notes, onOpenNote: { id in
           // The sheet dismisses itself; push the detail so the picked
           // note actually opens (home is just a launcher).
-          path = [id]
+          path = [.note(id)]
         })
       }
       // "+ Connect an app" / "+ Add" on the mode sub-rows go straight to
@@ -983,16 +1007,22 @@ struct ContentView: View {
       notes: notes.sortedNotes,
       destinations: actDestinations,
       hiddenFormats: disabledBuiltInModes,
+      suggestions: suggestions.current,
+      suggestionsEnabled: suggestionsEnabled,
+      isPro: selectedPlanRaw == "pro",
+      meetings: suggestions.meetings,
       onTapTrigger: { Task { await beginCapture() } },
       onHoldTrigger: { Task { await beginCapture() } },
       onReleaseTrigger: { Task { await endCapture() } },
       onTapKeyboard: { showingTypedAction = true },
       onOpenNote: { note in
         notes.setActiveNote(id: note.id)
-        path = [note.id]
+        path = [.note(note.id)]
       },
       onAddFormat: { showingCustomModes = true },
-      onAddDestination: { showingConnections = true }
+      onAddDestination: { showingConnections = true },
+      onOpenSuggestions: { path.append(.suggestions) },
+      onDictateMeeting: { dictateIntoMeeting($0) }
     )
     .onAppear {
       captureMode = QuillMode(rawValue: defaultCaptureModeRaw) ?? .auto
@@ -1005,6 +1035,35 @@ struct ContentView: View {
     }
     .onChange(of: defaultCaptureModeRaw) { _, newRaw in
       captureMode = QuillMode(rawValue: newRaw) ?? .auto
+    }
+  }
+
+  // MARK: - Suggestions
+
+  /// Accept path: opens the existing confirmation sheet pre-filled with the
+  /// suggestion's already-built intents — no parse, straight to review.
+  private func reviewSuggestion(_ suggestion: Suggestion) {
+    // Don't clobber an in-flight voice capture or an already-open sheet:
+    // the sheet VM is shared with the voice path.
+    guard !showingMultiActionConfirmation, !vm.isActionRecording, !isCapturing else { return }
+    multiActionVM.presentPrebuilt(
+      intents: suggestion.intents,
+      headline: suggestion.headline,
+      source: suggestion.source,
+      onRan: { suggestions.consume(suggestion) }
+    )
+    showingMultiActionConfirmation = true
+  }
+
+  /// Dictate × Calendar: start a dictation whose note is titled for the
+  /// meeting, so the capture lands as that meeting's notes.
+  private func dictateIntoMeeting(_ meeting: IOSSuggestionSources.UpcomingMeeting) {
+    guard !isCapturing else { return }
+    Task {
+      let loc = await LocationClient.shared.currentPlace()
+      let note = notes.startNewNote(location: loc)
+      notes.renameNote(id: note.id, to: meeting.title)
+      await beginCapture()
     }
   }
 
@@ -1181,6 +1240,17 @@ struct ContentView: View {
           notes.setActiveNote(id: id)
           tapRenameTitle()
         },
+        onShareText: {
+          if let note = notes.notes.first(where: { $0.id == id }) {
+            shareNoteText(note)
+          }
+        },
+        onSharePDF: {
+          if let note = notes.notes.first(where: { $0.id == id }) {
+            sharePDF(note)
+          }
+        },
+        isBuildingPDF: isBuildingPDF,
         onAddDestination: { showingConnections = true },
         onAddFormat: { showingCustomModes = true },
         isEditing: vm.isEditingNote,
@@ -1286,10 +1356,12 @@ struct ContentView: View {
         Task {
           let loc = await LocationClient.shared.currentPlace()
           let note = notes.startNewNote(location: loc)
-          path = [note.id]
+          path = [.note(note.id)]
         }
       },
-      onTapSettings: { showingSettings = true }
+      onTapSettings: { showingSettings = true },
+      onTapSuggestions: (selectedPlanRaw == "pro" && suggestionsEnabled)
+        ? { path.append(.suggestions) } : nil
     )
   }
 
@@ -1317,12 +1389,12 @@ struct ContentView: View {
         // the note already has a locked-in title (user-renamed or
         // previously AI-titled) — see `generateTitleIfNeeded`.
         notes.generateTitleIfNeeded(noteID: note.id, provider: aiProvider)
-        if navigate { path = [note.id] }
+        if navigate { path = [.note(note.id)] }
       }
     } else {
       let note = notes.appendToActiveNote(text, locationIfCreating: nil)
       notes.generateTitleIfNeeded(noteID: note.id, provider: aiProvider)
-      if navigate { path = [note.id] }
+      if navigate { path = [.note(note.id)] }
     }
   }
 

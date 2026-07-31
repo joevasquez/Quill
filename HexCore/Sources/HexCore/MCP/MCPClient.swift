@@ -99,10 +99,22 @@ public enum MCPError: LocalizedError {
     switch self {
     case .invalidURL:
       "Invalid MCP server URL"
-    case .httpError(let code, _):
+    case .httpError(let code, let body):
       switch code {
       case 401, 403:
-        "Authentication failed (HTTP \(code)). This server needs a valid token — add or fix it in Settings → Agent → Tools. (Servers that require an OAuth sign-in aren't supported yet.)"
+        // Google's own error envelope distinguishes "your token is
+        // wrong" from "the project behind this API is inactive" — very
+        // different fixes, and the old copy asserted the former plus a
+        // stale claim that OAuth servers were unsupported.
+        if let data = body.data(using: .utf8),
+           let reason = GoogleAPIError.reason(data),
+           let guidance = GoogleAPIError.userFacingMessage(status: code, reason: reason) {
+          "\(guidance) (HTTP \(code), \(reason))"
+        } else if code == 403 {
+          "Access denied (HTTP 403). The sign-in worked, but this server refused the request — the account may lack access, or the service may be inactive."
+        } else {
+          "Sign-in needed (HTTP 401). Connect this server in Settings → Connections, or add a token if it uses one."
+        }
       case 404:
         "MCP server not found (HTTP 404) — check the URL in Settings → Agent → Tools."
       default:

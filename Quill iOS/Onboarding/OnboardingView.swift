@@ -1089,7 +1089,7 @@ private struct GoogleSignInStep: View {
         Text("Connect Google")
           .font(.system(size: 26, weight: .medium, design: .serif))
           .foregroundStyle(OB.ink)
-        Text("Say \"email Mike about the deck\" or \"add a meeting\" \u{2014} Quill drafts it for you. You can do this later in Settings.")
+        Text("Optional — everything else works without it. You can do this later in Settings.")
           .font(.subheadline)
           .foregroundStyle(OB.inkSoft)
           .fixedSize(horizontal: false, vertical: true)
@@ -1097,6 +1097,41 @@ private struct GoogleSignInStep: View {
       .padding(.top, 72)
 
       Spacer().frame(height: 24)
+
+      // What the sign-in unlocks (shared copy with the Pro screens).
+      if connectedEmail == nil {
+        VStack(alignment: .leading, spacing: 14) {
+          ForEach(PlanCatalog.googleBenefits) { benefit in
+            HStack(alignment: .top, spacing: 12) {
+              Image(systemName: benefit.systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(OB.purple)
+                .frame(width: 26)
+              VStack(alignment: .leading, spacing: 2) {
+                Text(benefit.title)
+                  .font(.subheadline.weight(.semibold))
+                  .foregroundStyle(OB.ink)
+                Text(benefit.detail)
+                  .font(.caption)
+                  .foregroundStyle(OB.inkSoft)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
+            }
+          }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+          RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(Color.white)
+        )
+        .overlay(
+          RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .stroke(OB.line, lineWidth: 1)
+        )
+
+        Spacer().frame(height: 16)
+      }
 
       if let connectedEmail {
         VStack(spacing: 8) {

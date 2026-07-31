@@ -123,6 +123,10 @@ struct QuilliOSApp: App {
       // No-op when sync is disabled or Google isn't connected.
       if newPhase == .active {
         Task { await NotesStore.shared.syncNow() }
+        // Proactive suggestions (Pro): refresh the meetings strip and, when
+        // Pro + toggle + connected sources + TTL all line up, run a
+        // generation pass. Self-gating, like syncNow().
+        Task { await SuggestionsController.shared.refreshOnForeground() }
       }
     }
   }

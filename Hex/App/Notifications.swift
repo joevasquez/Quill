@@ -5,6 +5,10 @@ extension NSNotification.Name {
   /// Posted when app mode settings change (dock icon visibility, etc.)
   static let updateAppMode = NSNotification.Name("UpdateAppMode")
   /// Posted when an action intent is parsed and ready for user confirmation.
+  /// Jump the settings window to the Recording tab — posted by the
+  /// read-only shortcut summary in General so it's a signpost you can
+  /// follow, not a dead end next to an editor on another tab.
+  static let openRecordingSettings = NSNotification.Name("OpenRecordingSettings")
   static let presentActionConfirmation = NSNotification.Name("PresentActionConfirmation")
   /// Posted when multiple action intents are parsed and ready for user confirmation.
   static let presentMultiActionConfirmation = NSNotification.Name("PresentMultiActionConfirmation")

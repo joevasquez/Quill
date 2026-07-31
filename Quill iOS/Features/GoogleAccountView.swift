@@ -48,7 +48,7 @@ struct GoogleAccountView: View {
       } header: {
         Text("Google Account")
       } footer: {
-        Text("One sign-in unlocks Gmail drafts and Google Calendar events in Action mode (when iOS adds them — currently macOS only). Quill never reads your inbox or modifies events you didn't dictate.")
+        Text("One sign-in unlocks Gmail drafts and Google Calendar events in Action mode, plus cloud sync across your devices. Quill never reads your inbox or modifies events you didn't dictate.")
       }
     }
     .navigationTitle("Google Account")

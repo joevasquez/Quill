@@ -36,6 +36,11 @@ struct NoteDetailView: View {
   var onAddPhoto: () -> Void
   var onEditBody: () -> Void
   var onRename: () -> Void
+  var onShareText: () -> Void
+  var onSharePDF: () -> Void
+  /// True while the PDF export is building — disables the share menu so a
+  /// double-tap doesn't kick off two exports.
+  var isBuildingPDF: Bool = false
   var onAddDestination: () -> Void
   var onAddFormat: () -> Void
   /// True while a revision is in flight — an edit takes a beat, so the
@@ -79,27 +84,70 @@ struct NoteDetailView: View {
     HStack(spacing: 10) {
       roundButton("chevron.left", "Back") { dismiss() }
 
-      HStack(spacing: 8) {
-        // The mode dot colours the note by how it was captured. Notes
-        // don't record their capture mode yet, so this reflects the rail's
-        // current mode rather than the note's history.
-        Circle()
-          .fill(mode.palette.color())
-          .frame(width: 8, height: 8)
-        Text(note.displayTitle)
-          .font(.system(size: 17, weight: .bold))
-          .foregroundStyle(theme.text)
-          .lineLimit(1)
+      // Tapping the title opens the rename editor — the natural gesture,
+      // which freed the header slot for the share menu.
+      Button(action: onRename) {
+        HStack(spacing: 8) {
+          // The mode dot colours the note by how it was captured. Notes
+          // don't record their capture mode yet, so this reflects the rail's
+          // current mode rather than the note's history.
+          Circle()
+            .fill(mode.palette.color())
+            .frame(width: 8, height: 8)
+          Text(note.displayTitle)
+            .font(.system(size: 17, weight: .bold))
+            .foregroundStyle(theme.text)
+            .lineLimit(1)
+        }
+        .contentShape(Rectangle())
       }
+      .buttonStyle(.plain)
       .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityLabel("Rename note")
+      .accessibilityHint("Opens the title editor")
 
-      roundButton("textformat", "Rename", action: onRename)
+      shareMenu
       roundButton("camera", "Add photo", action: onAddPhoto)
       roundButton("square.and.pencil", "Edit text", tint: QuillDesign.brand.color(), action: onEditBody)
     }
     .padding(.horizontal, 16)
     .padding(.top, 4)
     .padding(.bottom, 10)
+  }
+
+  /// Text-only or PDF — the share options from the classic note canvas,
+  /// now living where the rename button used to be.
+  private var shareMenu: some View {
+    let text = NoteContent.stripPhotos(from: note.body)
+    let hasPhotos = note.photoCount > 0
+
+    return Menu {
+      Button(action: onShareText) {
+        Label("Share Text Only", systemImage: "text.alignleft")
+      }
+      .disabled(text.isEmpty)
+
+      Button(action: onSharePDF) {
+        Label(
+          hasPhotos ? "Share as PDF (text + photos)" : "Share as PDF",
+          systemImage: "doc.richtext"
+        )
+      }
+    } label: {
+      Image(systemName: "square.and.arrow.up")
+        .font(.system(size: 15, weight: .medium))
+        .foregroundStyle(theme.text2)
+        .frame(width: 36, height: 36)
+        .background(
+          Circle()
+            .fill(theme.chip)
+            .overlay(Circle().strokeBorder(theme.hair, lineWidth: 0.5))
+        )
+        .contentShape(Circle())
+    }
+    .disabled(isBuildingPDF)
+    .opacity(isBuildingPDF ? 0.5 : 1)
+    .accessibilityLabel("Share note")
   }
 
   private func roundButton(

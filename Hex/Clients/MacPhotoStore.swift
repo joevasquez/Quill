@@ -14,6 +14,11 @@ private let photoLogger = Logger(subsystem: "com.joevasquez.Quill", category: "m
 final class MacPhotoStore: ObservableObject {
   static let shared = MacPhotoStore()
 
+  /// Bumped on every cache mutation so SwiftUI views re-read the disk —
+  /// `image(noteID:photoID:)` is a plain file read, so observation alone
+  /// would never notice a newly-downloaded photo.
+  @Published private(set) var revision = 0
+
   private let rootURL: URL
 
   private init() {
@@ -46,12 +51,14 @@ final class MacPhotoStore: ObservableObject {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let target = dir.appendingPathComponent("\(photoID.uuidString).jpg")
     try data.write(to: target, options: [.atomic])
+    revision += 1
     photoLogger.info("Cached photo \(photoID.uuidString, privacy: .public) (\(data.count) bytes)")
   }
 
   func deleteAllPhotos(noteID: UUID) {
     let dir = rootURL.appendingPathComponent(noteID.uuidString, isDirectory: true)
     try? FileManager.default.removeItem(at: dir)
+    revision += 1
   }
 }
 #endif

@@ -143,11 +143,11 @@ public actor FirestoreClient {
     let body: [String: Any] = ["fields": fields]
     request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-    let (_, response) = try await URLSession.shared.data(for: request)
+    let (data, response) = try await URLSession.shared.data(for: request)
     guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
       let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-      syncLogger.error("Firestore PATCH failed: HTTP \(code, privacy: .public) path=\(path, privacy: .public)")
-      throw CloudSyncError.uploadFailed(code)
+      syncLogger.error("Firestore PATCH failed: HTTP \(code, privacy: .public) [\(GoogleAPIError.describe(data), privacy: .public)] path=\(path, privacy: .public)")
+      throw CloudSyncError.uploadFailed(code, reason: GoogleAPIError.reason(data))
     }
   }
 
@@ -169,7 +169,7 @@ public actor FirestoreClient {
       let (data, response) = try await URLSession.shared.data(for: request)
       guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        syncLogger.error("Firestore GET failed: HTTP \(code, privacy: .public) path=\(path, privacy: .public)")
+        syncLogger.error("Firestore GET failed: HTTP \(code, privacy: .public) [\(GoogleAPIError.describe(data), privacy: .public)] path=\(path, privacy: .public)")
         throw CloudSyncError.fetchFailed(code)
       }
 
@@ -318,7 +318,7 @@ public actor FirestoreClient {
 // MARK: - Errors
 
 public enum CloudSyncError: LocalizedError {
-  case uploadFailed(Int)
+  case uploadFailed(Int, reason: String? = nil)
   case fetchFailed(Int)
   case deleteFailed(Int)
   case notAuthenticated
@@ -326,11 +326,55 @@ public enum CloudSyncError: LocalizedError {
 
   public var errorDescription: String? {
     switch self {
-    case .uploadFailed(let code): "Cloud sync upload failed (HTTP \(code))"
+    case .uploadFailed(let code, let reason):
+      GoogleAPIError.userFacingMessage(status: code, reason: reason)
+        ?? "Cloud sync upload failed (HTTP \(code))"
     case .fetchFailed(let code): "Cloud sync fetch failed (HTTP \(code))"
     case .deleteFailed(let code): "Cloud sync delete failed (HTTP \(code))"
     case .notAuthenticated: "Not signed in to Google — connect in Settings."
     case .syncDisabled: "Cloud sync is not enabled."
+    }
+  }
+}
+
+/// Decodes Google's standard JSON error envelope so failures are
+/// diagnosable from a log line instead of a bare status code. A 403 can
+/// mean a missing scope, a disabled API, or an invalid project (billing) —
+/// which are very different problems with the same status.
+public enum GoogleAPIError {
+  /// `reason` from the first `ErrorInfo` detail, e.g. `CONSUMER_INVALID`,
+  /// `SERVICE_DISABLED`, `ACCESS_TOKEN_SCOPE_INSUFFICIENT`.
+  public static func reason(_ data: Data) -> String? {
+    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let error = json["error"] as? [String: Any],
+          let details = error["details"] as? [[String: Any]]
+    else { return nil }
+    return details.compactMap { $0["reason"] as? String }.first
+  }
+
+  /// Compact "REASON: message" for logging.
+  public static func describe(_ data: Data) -> String {
+    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let error = json["error"] as? [String: Any]
+    else { return "no error body" }
+    let message = (error["message"] as? String) ?? ""
+    if let reason = reason(data) { return "\(reason): \(message)" }
+    return message.isEmpty ? "unknown error" : message
+  }
+
+  /// Plain-English guidance for the failure modes a user can act on.
+  public static func userFacingMessage(status: Int, reason: String?) -> String? {
+    switch reason {
+    case "CONSUMER_INVALID", "ACCOUNT_STATE_INVALID":
+      return "Cloud sync is unavailable: the Quill cloud project is inactive (usually a billing issue). Your notes are safe on this device."
+    case "SERVICE_DISABLED":
+      return "Cloud sync is unavailable: the Firestore API is disabled for the Quill cloud project."
+    case "ACCESS_TOKEN_SCOPE_INSUFFICIENT":
+      return "Cloud sync needs permissions your Google sign-in didn't grant. Disconnect and reconnect Google, allowing every requested permission."
+    default:
+      return status == 401
+        ? "Google sign-in expired — reconnect in Settings."
+        : nil
     }
   }
 }

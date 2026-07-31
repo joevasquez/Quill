@@ -14,6 +14,7 @@ struct GeneralSectionView: View {
 	private var crashReportingEnabled: Bool = false
 
 	@State private var showResetConfirmation = false
+	@AppStorage(AdvancedSettings.defaultsKey) private var showAdvanced = false
 
 	var body: some View {
 		Section {
@@ -84,46 +85,8 @@ struct GeneralSectionView: View {
 			Text("Auto follows your Mac's system setting. The orb keeps its mode colors in both themes.")
 		}
 
-		Section {
-			Label {
-				VStack(alignment: .leading, spacing: 6) {
-					HStack {
-						Text("Quill Pro")
-							.fontWeight(.medium)
-						Spacer()
-						if store.hexSettings.selectedPlan == "pro" {
-							Text("Active")
-								.font(.caption)
-								.foregroundStyle(.white)
-								.padding(.horizontal, 8)
-								.padding(.vertical, 3)
-								.background(Capsule().fill(Color.purple.gradient))
-						}
-					}
-					Toggle(
-						"Enable Pro features",
-						isOn: Binding(
-							get: { store.hexSettings.selectedPlan == "pro" },
-							set: { enabled in
-								store.send(.setSelectedPlan(enabled ? "pro" : nil))
-							}
-						)
-					)
-					if store.hexSettings.selectedPlan == "pro" {
-						Text("AI Enhancement powered by Anthropic Claude — no API key needed. Requires Google sign-in.")
-							.settingsCaption()
-					} else {
-						Text("Enable to use AI features without your own API key")
-							.settingsCaption()
-					}
-				}
-			} icon: {
-				Image(systemName: "crown")
-					.foregroundStyle(store.hexSettings.selectedPlan == "pro" ? .purple : .secondary)
-			}
-		} header: {
-			Text("Plan")
-		}
+		// The Plan controls moved to the dedicated Plan tab
+		// (PlanSectionView) — one surface owns the Free vs Pro story.
 
 		Section {
 			Label {
@@ -139,10 +102,13 @@ struct GeneralSectionView: View {
 		} header: {
 			Text("Privacy")
 		} footer: {
-			Text("Off by default. When on, Quill sends crash stack traces and OS version to Sentry — never your transcripts, audio, notes, or contacts. Helps Joe diagnose problems you can't easily reproduce.")
+			Text("Off by default. When on, Quill sends crash stack traces and OS version to Sentry — never your transcripts, audio, notes, or contacts. Helps diagnose problems that are hard to reproduce.")
 				.settingsCaption()
 		}
+		.enableInjection()
 
+		// Export/import/reset are debugging affordances — behind Advanced.
+		if showAdvanced {
 		Section {
 			Button {
 				store.send(.exportSettings)
@@ -175,6 +141,6 @@ struct GeneralSectionView: View {
 			Text("Export saves your current settings as JSON. Import loads settings from a file. Reset restores defaults. API keys are never included in exports.")
 				.settingsCaption()
 		}
-		.enableInjection()
+		}
 	}
 }

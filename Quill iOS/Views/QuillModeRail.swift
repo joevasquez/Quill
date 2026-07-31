@@ -154,31 +154,66 @@ private struct QuillAddChip: View {
 
 // MARK: - Dictate: format sub-filters
 
+/// Format is single-select, so it reads as a dropdown, not a chip cloud:
+/// the active format is a pill (`Clean ⌄`) that opens a menu of all
+/// formats with a check on the current one and an "Add format…" row under
+/// a divider. (Contrast with Act, which is multi-select → summary + grid.)
 struct QuillFormatChips: View {
   @Binding var format: AIProcessingMode
   /// Built-ins the user has hidden in Settings.
   var hidden: Set<AIProcessingMode> = []
   var onAddCustom: () -> Void
 
+  @Environment(\.colorScheme) private var colorScheme
+  private var theme: QuillTheme { .of(colorScheme) }
+
   private var visible: [AIProcessingMode] {
     AIProcessingMode.allCases.filter { $0 == .off || !hidden.contains($0) }
   }
 
   var body: some View {
-    QuillWrap(spacing: 7) {
-      ForEach(visible, id: \.self) { f in
-        QuillChip(tint: QuillDesign.ModePalette.dictate, isOn: format == f) {
-          format = f
-        } label: {
-          HStack(spacing: 6) {
-            Image(systemName: f.iosIconName)
-              .font(.system(size: 13, weight: .medium))
-            Text(f.iosDisplayName)
-          }
+    Menu {
+      // Picker-in-Menu renders the system single-select treatment: one
+      // row per format, checkmark on the current selection.
+      Picker("Format", selection: $format) {
+        ForEach(visible, id: \.self) { f in
+          Label(f.iosDisplayName, systemImage: f.iosIconName).tag(f)
         }
       }
-      QuillAddChip(action: onAddCustom)
+      Divider()
+      Button(action: onAddCustom) {
+        Label("Add format…", systemImage: "plus")
+      }
+    } label: {
+      activePill
     }
+    .accessibilityLabel("Format: \(format.iosDisplayName)")
+    .accessibilityHint("Opens the format menu")
+  }
+
+  private var activePill: some View {
+    let tint = QuillDesign.ModePalette.dictate
+    return HStack(spacing: 6) {
+      Image(systemName: format.iosIconName)
+        .font(.system(size: 13, weight: .medium))
+      Text(format.iosDisplayName)
+        .font(.system(size: 13, weight: .semibold))
+      Image(systemName: "chevron.down")
+        .font(.system(size: 9, weight: .semibold))
+        .opacity(0.7)
+    }
+    .foregroundStyle(tint.lightnessCapped(at: theme.isDark ? 0.82 : 0.5).color())
+    .padding(.vertical, 6)
+    .padding(.horizontal, 12)
+    .background(
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
+        .fill(tint.color(0.13))
+        .overlay(
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
+            .strokeBorder(tint.color(0.5), lineWidth: 0.5)
+        )
+    )
+    .contentShape(Rectangle())
   }
 }
 
@@ -298,9 +333,111 @@ struct QuillActChips: View {
   var onAdd: () -> Void
 
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private var theme: QuillTheme { .of(colorScheme) }
 
+  /// Collapsed by default (design handoff §7): the toggle grid is a
+  /// configuration surface, not something to stare at every capture.
+  @State private var isExpanded = false
+
+  private var enabled: [QuillActDestination] {
+    destinations.filter { !disabled.contains($0.id) }
+  }
+
   var body: some View {
+    if destinations.isEmpty {
+      // Nothing connected yet — the summary row would be an empty shell,
+      // so keep the direct "Connect an app" affordance.
+      QuillWrap(spacing: 7) {
+        QuillAddChip(label: "Connect an app", action: onAdd)
+      }
+    } else if isExpanded {
+      VStack(spacing: 8) {
+        toggleGrid
+        Button {
+          withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { isExpanded = false }
+        } label: {
+          Text("Done")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(theme.text2)
+            .padding(.vertical, 5)
+            .padding(.horizontal, 16)
+            .background(Capsule().fill(theme.chip))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+      }
+    } else {
+      summaryRow
+    }
+  }
+
+  // MARK: - Collapsed summary
+
+  /// Overlapping source-tinted circles + "N apps · Todoist, Gmail…" +
+  /// Manage. One glance says what's routable; tap to change it.
+  private var summaryRow: some View {
+    Button {
+      withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { isExpanded = true }
+    } label: {
+      HStack(spacing: 10) {
+        HStack(spacing: -7) {
+          ForEach(enabled.prefix(5)) { d in
+            Image(systemName: d.systemImage)
+              .font(.system(size: 11, weight: .semibold))
+              .foregroundStyle(d.palette.color())
+              .frame(width: 26, height: 26)
+              .background(
+                Circle()
+                  .fill(theme.cardSolid)
+                  .overlay(Circle().fill(d.palette.color(theme.isDark ? 0.2 : 0.13)))
+                  .overlay(Circle().strokeBorder(theme.hair, lineWidth: 0.5))
+              )
+          }
+        }
+
+        Text(summaryText)
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(theme.text2)
+          .lineLimit(1)
+
+        Spacer(minLength: 6)
+
+        HStack(spacing: 3) {
+          Text("Manage")
+            .font(.system(size: 13, weight: .semibold))
+          Image(systemName: "chevron.down")
+            .font(.system(size: 10, weight: .semibold))
+        }
+        .foregroundStyle(theme.text2)
+      }
+      .padding(.vertical, 7)
+      .padding(.horizontal, 11)
+      .background(
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+          .fill(theme.card)
+          .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+              .strokeBorder(theme.hair, lineWidth: 0.5)
+          )
+      )
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("Connected apps: \(summaryText). Tap to manage.")
+  }
+
+  private var summaryText: String {
+    let count = enabled.count
+    guard count > 0 else { return "No apps enabled" }
+    let names = enabled.prefix(2).map(\.name).joined(separator: ", ")
+    let suffix = count > 2 ? "\(names)…" : names
+    return "\(count) app\(count == 1 ? "" : "s") · \(suffix)"
+  }
+
+  // MARK: - Expanded toggle grid
+
+  private var toggleGrid: some View {
     QuillWrap(spacing: 7) {
       ForEach(destinations) { d in
         let isOn = !disabled.contains(d.id)
@@ -329,7 +466,7 @@ struct QuillActChips: View {
         }
         .opacity(isOn ? 1 : 0.72)
       }
-      QuillAddChip(label: destinations.isEmpty ? "Connect an app" : "Add", action: onAdd)
+      QuillAddChip(action: onAdd)
     }
   }
 }

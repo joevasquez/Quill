@@ -56,6 +56,15 @@ enum QuillIOSSettingsKey {
   /// chip row.
   static let editCommandUsage = "quill.editCommandUsage"
 
+  /// Master toggle for proactive suggestions (Pro). On by default — the
+  /// feature is additionally gated on the Pro plan, so the toggle only
+  /// matters once Pro is active.
+  static let suggestionsEnabled = "quill.suggestionsEnabled"
+  /// JSON-encoded `[String: Bool]` of per-source opt-in OVERRIDES keyed by
+  /// `SuggestionSource.rawValue`. Absent key → the source's
+  /// `enabledByDefault` (everything on except Reminders).
+  static let suggestionSourcePrefs = "quill.suggestionSources"
+
   // Defaults
   static let defaultModel = "openai_whisper-tiny.en"  // Ships small, English-focused
   // AI defaults to .off so users see raw transcripts until they pick a mode.
@@ -123,6 +132,27 @@ enum EditCommandUsage {
       }
       .prefix(limit)
       .map(\.key)
+  }
+}
+
+/// Per-source opt-in overrides for proactive suggestions, persisted as
+/// JSON `[String: Bool]` under `QuillIOSSettingsKey.suggestionSourcePrefs`.
+/// Only overrides are stored — a missing key falls back to the source's
+/// `enabledByDefault`.
+enum SuggestionSourcePrefs {
+  static func decode(_ data: Data) -> [String: Bool] {
+    guard !data.isEmpty,
+          let overrides = try? JSONDecoder().decode([String: Bool].self, from: data)
+    else { return [:] }
+    return overrides
+  }
+
+  static func encode(_ overrides: [String: Bool]) -> Data {
+    (try? JSONEncoder().encode(overrides)) ?? Data()
+  }
+
+  static func isEnabled(_ source: SuggestionSource, overrides: [String: Bool]) -> Bool {
+    overrides[source.rawValue] ?? source.enabledByDefault
   }
 }
 

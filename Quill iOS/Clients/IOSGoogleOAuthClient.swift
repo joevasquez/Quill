@@ -49,6 +49,9 @@ enum IOSGoogleOAuthClient {
   /// `datastore` enables Firestore cloud sync when the user opts in.
   static let defaultScopes: [String] = [
     "https://www.googleapis.com/auth/gmail.compose",
+    // Read scope for the Google-hosted Gmail MCP server (suggestions read
+    // the inbox through it; the native adapter stays compose-only).
+    "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/userinfo.email",
     CloudSyncConstants.firestoreScope,

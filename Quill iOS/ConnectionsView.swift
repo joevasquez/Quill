@@ -492,6 +492,15 @@ struct ConnectionsView: View {
     persistServers()
     let error = await refreshServer(server)
     guard token.isEmpty else { return }
+    // Google-hosted servers authenticate with the app's own Google
+    // sign-in (no dynamic client registration) — never start the generic
+    // MCP OAuth flow against accounts.google.com; it can't succeed.
+    if IOSMCPOAuthClient.usesNativeGoogleAuth(server) {
+      if !IOSGoogleOAuthClient.isAuthorized() {
+        serverErrors[server.id] = "Sign in to Google first (Settings → Google Account), then refresh this server."
+      }
+      return
+    }
     // No static token + server demands auth → kick off the browser sign-in
     // automatically (matches how OAuth MCP servers expect to be added).
     if isAuthError(error) {
@@ -595,6 +604,8 @@ struct ConnectionsView: View {
 
   private func canConnect(_ integration: Integration) -> Bool {
     if isConnected(integration) { return true }
+    // Pro: unlimited connections, incl. Pro-only integrations.
+    if UserDefaults.standard.string(forKey: QuillIOSSettingsKey.selectedPlan) == "pro" { return true }
     if integration.requiresPro { return false }
     return connectedFreeCount < IntegrationLimits.freeTierMaxConnections
   }
