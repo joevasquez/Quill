@@ -3,6 +3,14 @@
     <channel>
         <title>Quill</title>
         <item>
+            <title>0.25.0</title>
+            <pubDate>Fri, 31 Jul 2026 11:45:06 -0400</pubDate>
+            <sparkle:version>110</sparkle:version>
+            <sparkle:shortVersionString>0.25.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/joevasquez/Quill/releases/download/v0.25.0/Hex-latest.dmg" length="15849500" type="application/octet-stream" sparkle:edSignature="t99tXY+Yl5DyDnWp/xCo/dckr5snz0bGZPF3Tcmkdq3++xZ9+Lx7E/9uJYLj3ykpwgeRZCrnSrDuQkgQatmuCg=="/>
+        </item>
+        <item>
             <title>0.24.0</title>
             <pubDate>Fri, 17 Jul 2026 14:07:49 -0600</pubDate>
             <sparkle:version>109</sparkle:version>
