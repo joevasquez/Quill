@@ -21,6 +21,8 @@ Strong foundation: on-device ASR (Parakeet/Whisper), four-mode HUD (Auto/Dictate
 **C2. Pro is a client-side flag.**
 `AIProcessingClient.swift:122-127` — `selectedPlan == "pro"` in local settings is the only gate. Anyone can edit `hex_settings.json` and route through the proxy. *Fix:* server-side entitlement doc (`users/{uid}/entitlement`) writable only by admin; proxy checks it.
 
+> **Addressed 2026-08-04, ahead of Phase 1.** The proxy now reads entitlement from the Athena dashboard's Cloudflare D1 (`quill_entitlements`) rather than `ALLOWED_EMAILS`, administered from that dashboard's Quill Admin tab. D1 rather than Firestore precisely because C1 above is still open — a Firestore entitlement doc would be writable by any client holding the `datastore` scope. The local `selectedPlan` flag still drives client UI, so an unapproved user can still *appear* Pro in-app; they just get 403s from the proxy, and the admin tab flags the mismatch. Once Phase 1 lands and the `datastore` scope is dropped, entitlement can move to `users/{uid}/entitlement` as originally planned.
+
 ### HIGH
 
 **H1. No server-side tenant isolation for cloud sync.**

@@ -3,18 +3,28 @@
 #
 # Prerequisites:
 #   1. gcloud CLI installed and authenticated
-#   2. ANTHROPIC_API_KEY set in your environment (or pass as --set-env-vars)
-#   3. Project quill-495210 selected: gcloud config set project quill-495210
+#   2. Project quill-495210 selected: gcloud config set project quill-495210
 #
-# ALLOWED_EMAILS is REQUIRED: a comma-separated whitelist of Google accounts
-# that can use the proxy. The function fails closed without it.
+# Env vars are PATCHED, not replaced (--update-env-vars), so you only export
+# what you want to change. ANTHROPIC_API_KEY is therefore only required on a
+# first-ever deploy — after that it persists on the function. To drop a
+# variable, use: gcloud functions deploy ... --remove-env-vars=NAME
 #
-# Optional: QUILL_OAUTH_CLIENT_IDS to override the pinned OAuth client
-# audience(s); DAILY_REQUEST_LIMIT (default 500 requests/user/day).
+# QUILL_PROXY_SECRET is the normal entitlement path: it authenticates the
+# proxy to the Athena dashboard, which owns Pro approvals in D1 and is
+# administered from the dashboard's Quill Admin tab. It must match the
+# worker secret of the same name.
+#
+# ALLOWED_EMAILS is the break-glass override — a comma-separated list of
+# Google accounts that get Pro regardless of the dashboard. At least one of
+# the two must be set; the function fails closed without either.
+#
+# Optional: ENTITLEMENT_URL to point at a different dashboard;
+# QUILL_OAUTH_CLIENT_IDS to override the pinned OAuth client audience(s);
+# DAILY_REQUEST_LIMIT (default 500 requests/user/day).
 #
 # Usage:
-#   export ANTHROPIC_API_KEY=sk-ant-...
-#   export ALLOWED_EMAILS="you@gmail.com,friend@gmail.com"
+#   export QUILL_PROXY_SECRET=...
 #   bash deploy.sh
 
 set -euo pipefail
@@ -24,27 +34,27 @@ REGION="us-central1"
 FUNCTION_NAME="quill-ai-proxy"
 RUNTIME="nodejs22"
 
-if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-  echo "Error: ANTHROPIC_API_KEY environment variable is required"
-  exit 1
-fi
-if [ -z "${ALLOWED_EMAILS:-}" ]; then
-  echo "Error: ALLOWED_EMAILS environment variable is required (the proxy fails closed without it)"
-  exit 1
-fi
-
-# gcloud splits --set-env-vars on commas, but ALLOWED_EMAILS and
-# QUILL_OAUTH_CLIENT_IDS are comma-separated lists — use gcloud's
+# gcloud splits env-var flags on commas, but ALLOWED_EMAILS and
+# QUILL_OAUTH_CLIENT_IDS are themselves comma-separated lists — use gcloud's
 # alternate-delimiter syntax (^:::^) so commas pass through as values.
-ENV_VARS="^:::^ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}:::ALLOWED_EMAILS=${ALLOWED_EMAILS}"
-if [ -n "${QUILL_OAUTH_CLIENT_IDS:-}" ]; then
-  ENV_VARS="${ENV_VARS}:::QUILL_OAUTH_CLIENT_IDS=${QUILL_OAUTH_CLIENT_IDS}"
-fi
-if [ -n "${DAILY_REQUEST_LIMIT:-}" ]; then
-  ENV_VARS="${ENV_VARS}:::DAILY_REQUEST_LIMIT=${DAILY_REQUEST_LIMIT}"
-fi
-if [ -n "${ANTHROPIC_MODEL:-}" ]; then
-  ENV_VARS="${ENV_VARS},ANTHROPIC_MODEL=${ANTHROPIC_MODEL}"
+ENV_VARS=""
+add_env() {
+  [ -n "${2:-}" ] || return 0
+  ENV_VARS="${ENV_VARS}:::$1=$2"
+}
+add_env ANTHROPIC_API_KEY "${ANTHROPIC_API_KEY:-}"
+add_env QUILL_PROXY_SECRET "${QUILL_PROXY_SECRET:-}"
+add_env ALLOWED_EMAILS "${ALLOWED_EMAILS:-}"
+add_env ENTITLEMENT_URL "${ENTITLEMENT_URL:-}"
+add_env QUILL_OAUTH_CLIENT_IDS "${QUILL_OAUTH_CLIENT_IDS:-}"
+add_env DAILY_REQUEST_LIMIT "${DAILY_REQUEST_LIMIT:-}"
+add_env ANTHROPIC_MODEL "${ANTHROPIC_MODEL:-}"
+
+ENV_FLAG=()
+if [ -n "${ENV_VARS}" ]; then
+  ENV_FLAG=(--update-env-vars="^:::^${ENV_VARS#:::}")
+else
+  echo "No env vars exported — deploying code only, keeping the function's existing configuration."
 fi
 
 echo "Deploying ${FUNCTION_NAME} to ${PROJECT_ID} (${REGION})..."
@@ -56,7 +66,7 @@ gcloud functions deploy "${FUNCTION_NAME}" \
   --trigger-http \
   --allow-unauthenticated \
   --entry-point="quill-ai-proxy" \
-  --set-env-vars="${ENV_VARS}" \
+  "${ENV_FLAG[@]}" \
   --memory=256MB \
   --timeout=60s \
   --source="$(dirname "$0")"

@@ -2,12 +2,54 @@ const functions = require("@google-cloud/functions-framework");
 
 // ── Configuration ──
 // Set ANTHROPIC_API_KEY as a Cloud Function environment variable (or Secret Manager ref).
-// ALLOWED_EMAILS is a comma-separated whitelist and is REQUIRED — the proxy fails
-// closed if it is missing. Server-side entitlement (Firestore) replaces this later.
+//
+// Pro entitlement is owned by the Athena dashboard (Cloudflare D1) and read
+// over HTTP — deliberately NOT Firestore, because Quill clients hold a
+// project-wide `datastore` OAuth scope and could therefore write their own
+// entitlement doc. D1 is unreachable from clients.
+//
+// ALLOWED_EMAILS remains as a break-glass override for when the dashboard is
+// unreachable. Either source granting Pro is sufficient; if neither is
+// configured the proxy fails closed.
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const ALLOWED_EMAILS = process.env.ALLOWED_EMAILS
   ? process.env.ALLOWED_EMAILS.split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)
   : null;
+const ENTITLEMENT_URL = process.env.ENTITLEMENT_URL
+  || "https://dashboard.joevasquez.com/webhook/quill-entitlement";
+const ENTITLEMENT_SECRET = process.env.QUILL_PROXY_SECRET;
+
+// Entitlement lookups are cached briefly so a burst of requests from one user
+// costs one round-trip. Revoking Pro takes effect within this window.
+const ENTITLEMENT_TTL_MS = 60_000;
+const entitlementCache = new Map(); // email -> { plan, fetchedAt }
+
+async function isProEntitled(email) {
+  if (ALLOWED_EMAILS?.includes(email)) return true; // break-glass
+  if (!ENTITLEMENT_SECRET) return false;
+
+  const cached = entitlementCache.get(email);
+  if (cached && Date.now() - cached.fetchedAt < ENTITLEMENT_TTL_MS) {
+    return cached.plan === "pro";
+  }
+
+  try {
+    const res = await fetch(`${ENTITLEMENT_URL}?email=${encodeURIComponent(email)}`, {
+      headers: { "X-Quill-Proxy-Secret": ENTITLEMENT_SECRET },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) {
+      console.error(`Entitlement lookup failed for ${email}: HTTP ${res.status}`);
+      return false; // fail closed
+    }
+    const { plan } = await res.json();
+    entitlementCache.set(email, { plan, fetchedAt: Date.now() });
+    return plan === "pro";
+  } catch (err) {
+    console.error("Entitlement lookup error:", err);
+    return false; // fail closed
+  }
+}
 const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 
@@ -61,9 +103,10 @@ functions.http("quill-ai-proxy", async (req, res) => {
     return;
   }
 
-  // Fail closed: an unset allowlist means nobody gets through, not everybody.
-  if (!ALLOWED_EMAILS || ALLOWED_EMAILS.length === 0) {
-    console.error("ALLOWED_EMAILS not configured — refusing all requests");
+  // Fail closed: with neither entitlement source configured, nobody gets
+  // through rather than everybody.
+  if (!ENTITLEMENT_SECRET && (!ALLOWED_EMAILS || ALLOWED_EMAILS.length === 0)) {
+    console.error("Neither QUILL_PROXY_SECRET nor ALLOWED_EMAILS configured — refusing all requests");
     res.status(503).json({ error: "Service not configured" });
     return;
   }
@@ -105,9 +148,9 @@ functions.http("quill-ai-proxy", async (req, res) => {
     return;
   }
 
-  // ── Check whitelist ──
-  if (!ALLOWED_EMAILS.includes(userEmail)) {
-    console.warn(`Denied: ${userEmail} not in allowlist`);
+  // ── Check Pro entitlement ──
+  if (!(await isProEntitled(userEmail))) {
+    console.warn(`Denied: ${userEmail} is not entitled to Pro`);
     res.status(403).json({ error: "Not authorized for Pro AI" });
     return;
   }
