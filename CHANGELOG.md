@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.26.1
+
+### Patch Changes
+
+- Quill Pro access is now approved server-side. Activating Pro in Settings no longer grants bundled AI on its own — the account must also be approved. Bring-your-own-key setups are unaffected.
+- Move the Pro AI service to new infrastructure for better reliability. No setup change is required.
+
 ## 0.26.0
 
 ### Minor Changes
