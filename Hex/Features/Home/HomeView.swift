@@ -10,6 +10,7 @@
 //  selected.
 //
 
+import ComposableArchitecture
 import HexCore
 import SwiftUI
 
@@ -23,20 +24,57 @@ struct HomeView: View {
   /// Jump to the Notes pane without a selection ("All notes").
   var openNotesPane: () -> Void
 
-  /// Which half of home is showing — mirrors iOS, where actions
-  /// (suggestions) and notes are separate destinations, not a stack.
+  /// Which half of home is showing — mirrors the iOS mode rail, where Act
+  /// and note capture are separate destinations, not a stack. It sits
+  /// directly above the input bar and governs it: Act sends what you type
+  /// to the agent, Notes turns it into a note.
+  ///
+  /// (The `.act` case keeps its legacy "actions" rawValue so anyone's
+  /// persisted choice survives the rename.)
   private enum HomeSection: String, CaseIterable, Identifiable {
-    case actions, notes
+    case act = "actions"
+    case notes
     var id: String { rawValue }
-    var title: String { self == .actions ? "Actions" : "Notes" }
+    var title: String { self == .act ? "Act" : "Notes" }
   }
 
   /// Persisted so the pane reopens on whichever half you live in.
-  @AppStorage("quill.homeSection") private var sectionRaw = HomeSection.actions.rawValue
-  private var section: HomeSection { HomeSection(rawValue: sectionRaw) ?? .actions }
+  @AppStorage("quill.homeSection") private var sectionRaw = HomeSection.act.rawValue
+  private var section: HomeSection { HomeSection(rawValue: sectionRaw) ?? .act }
+
+  /// Destinations muted on the Act chip row. Persisted (unlike iOS, where
+  /// it's per-capture) because a Mac session is long and re-muting the same
+  /// app every morning is the kind of chore that makes people stop using
+  /// the row at all.
+  @AppStorage("quill.actMutedDestinations") private var mutedRaw = ""
+  @AppStorage(IntegrationConnectionStore.userDefaultsKey) private var connectedIntegrationsData = Data()
+  @Shared(.hexSettings) private var hexSettings: HexSettings
 
   @ObservedObject private var controller = MacSuggestionsController.shared
   @ObservedObject private var cloudSync = MacCloudSync.shared
+  /// Holds the live action confirmation when one is routed into the window
+  /// instead of the menu-bar popdown (see InAppActionPresenter).
+  @ObservedObject private var actionPresenter = InAppActionPresenter.shared
+
+  /// Everything the agent could route to right now.
+  private var actDestinations: [QuillActDestination] {
+    QuillActDestination.connected(
+      integrations: IntegrationConnectionStore.decode(connectedIntegrationsData),
+      servers: hexSettings.mcpServers
+    )
+  }
+
+  /// …minus anything muted on the chip row. This is what the `@` menu
+  /// offers and what the planner is allowed to choose among.
+  private var routableDestinations: [QuillActDestination] {
+    let muted = mutedDestinations
+    return actDestinations.filter { !muted.contains($0.id) }
+  }
+
+  private var mutedDestinations: Set<String> {
+    get { Set(mutedRaw.split(separator: "\n").map(String.init)) }
+    nonmutating set { mutedRaw = newValue.sorted().joined(separator: "\n") }
+  }
 
   private var recentNotes: [SyncableNote] {
     cloudSync.cloudNotes
@@ -47,16 +85,36 @@ struct HomeView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 26) {
+      VStack(alignment: .leading, spacing: 34) {
         brandHeader
-        captureRow
-        sectionSwitcher
+        // The mode toggle sits directly above the input bar and governs
+        // it — same relationship as the iOS mode rail above the composer.
+        VStack(alignment: .leading, spacing: 16) {
+          sectionSwitcher
+          captureRow
+            .zIndex(1)  // the `@` menu overlays the chips below it
+          if section == .act {
+            ActDestinationChips(
+              destinations: actDestinations,
+              muted: Binding(get: { mutedDestinations }, set: { mutedDestinations = $0 }),
+              onAdd: openIntegrations
+            )
+          }
+        }
+        .zIndex(1)  // …and over the suggestions/notes sections below
+
+        // The workflow itself, when it's being hosted here: the plan lands
+        // directly under the bar you typed it into, rather than dropping out
+        // of the menu bar across the screen.
+        if let actionStore = actionPresenter.store {
+          inlineActionSection(actionStore)
+        }
 
         switch section {
-        case .actions:
+        case .act:
           suggestionsSection
         case .notes:
-          VStack(alignment: .leading, spacing: 22) {
+          VStack(alignment: .leading, spacing: 28) {
             if !controller.meetings.isEmpty {
               meetingStrip
             }
@@ -65,8 +123,8 @@ struct HomeView: View {
         }
       }
       .padding(.horizontal, 28)
-      .padding(.top, 20)
-      .padding(.bottom, 28)
+      .padding(.top, 24)
+      .padding(.bottom, 36)
       .frame(maxWidth: 640, alignment: .leading)
       .frame(maxWidth: .infinity)
     }
@@ -81,12 +139,32 @@ struct HomeView: View {
       )
       .ignoresSafeArea()
     )
+    .animation(.spring(duration: 0.35, bounce: 0.15), value: actionPresenter.store == nil)
+    // Tells the presenter whether an inline confirmation is possible. Also
+    // covers the window being closed — SwiftUI tears the pane down with it.
+    .onAppear { actionPresenter.isHomeVisible = true }
+    .onDisappear { actionPresenter.isHomeVisible = false }
     .task {
       await controller.refreshOnAppear()
       if cloudSync.isGoogleAuthorized() {
         _ = await cloudSync.fetchCloudNotes()
       }
     }
+  }
+
+  // MARK: - Inline action workflow
+
+  private func inlineActionSection(_ actionStore: StoreOf<MultiActionConfirmationFeature>) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      sectionLabel("Action", systemImage: "bolt.fill")
+      MultiActionConfirmationView(store: actionStore, isInline: true)
+    }
+    .transition(
+      .asymmetric(
+        insertion: .opacity.combined(with: .offset(y: -10)),
+        removal: .opacity.combined(with: .scale(scale: 0.97))
+      )
+    )
   }
 
   // MARK: - Brand header
@@ -119,15 +197,15 @@ struct HomeView: View {
   /// each tab says whether it's worth visiting before you click.
   private var sectionSwitcher: some View {
     HStack(spacing: 4) {
-      switcherButton(.actions, count: controller.isPro ? controller.current.count : 0)
+      switcherButton(.act, count: controller.isPro ? controller.current.count : 0)
       switcherButton(.notes, count: controller.meetings.count)
     }
     .padding(4)
     .background(
-      RoundedRectangle(cornerRadius: 13, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(Color.primary.opacity(0.05))
         .overlay(
-          RoundedRectangle(cornerRadius: 13, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
         )
     )
@@ -138,7 +216,7 @@ struct HomeView: View {
   private func switcherButton(_ target: HomeSection, count: Int) -> some View {
     let isOn = section == target
     return Button {
-      withAnimation(.spring(duration: 0.3, bounce: 0.15)) {
+      QuillMotion.run(.spring(duration: 0.3, bounce: 0.15)) {
         sectionRaw = target.rawValue
       }
     } label: {
@@ -161,10 +239,10 @@ struct HomeView: View {
       .frame(maxWidth: .infinity)
       .padding(.vertical, 9)
       .background(
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .fill(isOn ? Color.primary.opacity(0.08) : .clear)
       )
-      .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+      .contentShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous))
     }
     .buttonStyle(.plain)
     .accessibilityLabel("\(target.title)\(count > 0 ? ", \(count) item\(count == 1 ? "" : "s")" : "")")
@@ -198,29 +276,36 @@ struct HomeView: View {
 
   // MARK: - Capture row
 
-  @State private var commandDraft = ""
-
-  /// The doing surface: type a command for the agent, or start a
-  /// dictation into a fresh note.
+  /// The doing surface, and what the toggle above it governs: in Act, what
+  /// you type goes to the agent (with `@` destination tagging); in Notes,
+  /// it becomes a new note. Dictate is available from either.
   private var captureRow: some View {
-    HStack(spacing: 10) {
-      HStack(spacing: 8) {
-        Image(systemName: "bolt.fill")
-          .foregroundStyle(QuillDesign.actionAccent)
-        TextField("Type a command — \u{201C}remind me to call Kelly Friday\u{201D}", text: $commandDraft)
-          .textFieldStyle(.plain)
-          .onSubmit(submitCommand)
-        if !commandDraft.trimmingCharacters(in: .whitespaces).isEmpty {
-          Button(action: submitCommand) {
-            Image(systemName: "return")
-          }
-          .buttonStyle(.borderless)
-          .help("Run command")
-        }
+    HStack(alignment: .top, spacing: 10) {
+      switch section {
+      case .act:
+        ActCommandField(
+          destinations: routableDestinations,
+          icon: "bolt.fill",
+          accent: QuillDesign.actionAccent,
+          placeholder: "Type a command — \u{201C}remind me to call Kelly Friday\u{201D}",
+          hint: "Type @ to send this to a specific app",
+          onSubmit: submitCommand
+        )
+        // Identity per mode, so switching visibly changes what the bar
+        // does rather than only what's listed below it.
+        .id(HomeSection.act)
+
+      case .notes:
+        ActCommandField(
+          destinations: [],
+          icon: "square.and.pencil",
+          accent: QuillDesign.brand.color(),
+          placeholder: "Start a note — give it a title and press return",
+          hint: nil,
+          onSubmit: { title, _ in startDictation(title: title) }
+        )
+        .id(HomeSection.notes)
       }
-      .padding(.horizontal, 12)
-      .padding(.vertical, 9)
-      .quillCard()
 
       Button {
         startDictation(title: "")
@@ -234,13 +319,22 @@ struct HomeView: View {
     }
   }
 
-  private func submitCommand() {
-    let text = commandDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+  private func submitCommand(_ text: String, pinned: [QuillActDestination]) {
     guard !text.isEmpty else { return }
-    commandDraft = ""
     // Same pipeline as the menu bar's "Type a Command…" panel — routines,
-    // memory, MCP context, then the confirmation panel.
-    HexApp.appStore.send(.transcription(.typedActionSubmitted(text)))
+    // memory, MCP context, then the confirmation panel. The targeting
+    // carries both user signals: what they pinned with `@`, and what's
+    // left enabled on the chip row.
+    HexApp.appStore.send(
+      .transcription(
+        .typedActionSubmitted(
+          text,
+          targeting: ActTargeting(
+            all: actDestinations, muted: mutedDestinations, pinned: pinned
+          )
+        )
+      )
+    )
   }
 
   /// Create a note (pre-titled for a meeting when given), open it in the
@@ -301,7 +395,7 @@ struct HomeView: View {
               .foregroundStyle(.white)
               .padding(.vertical, 1)
               .padding(.horizontal, 4)
-              .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(blue.color()))
+              .background(RoundedRectangle(cornerRadius: QuillDesign.Radius.badge, style: .continuous).fill(blue.color()))
           }
         }
         Text(meeting.title)
@@ -331,7 +425,7 @@ struct HomeView: View {
   // MARK: - Suggestions
 
   private var suggestionsSection: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 14) {
       HStack(spacing: 7) {
         sectionLabel("Suggestions", systemImage: "lightbulb.max")
         Text("PRO")
@@ -341,7 +435,7 @@ struct HomeView: View {
           .padding(.vertical, 1.5)
           .padding(.horizontal, 5)
           .background(
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.badge, style: .continuous)
               .fill(QuillDesign.brand.color())
           )
         Spacer()
@@ -436,7 +530,7 @@ struct HomeView: View {
   // MARK: - Recent notes
 
   private var recentNotesSection: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 14) {
       HStack {
         sectionLabel("Recent", systemImage: "note.text")
         Spacer()
@@ -541,7 +635,7 @@ private struct MacSuggestionCard: View {
           .foregroundStyle(tint)
           .frame(width: 30, height: 30)
           .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
               .fill(tint.opacity(0.15))
           )
         VStack(alignment: .leading, spacing: 0) {
@@ -621,7 +715,7 @@ private struct MacSuggestionCard: View {
           .padding(.vertical, 3)
           .padding(.horizontal, 7)
           .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
               .fill(Color.primary.opacity(0.06))
           )
         }

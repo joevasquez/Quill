@@ -265,6 +265,7 @@ private struct RoutineRow: View {
       }
       .buttonStyle(.plain)
       .help("Delete routine")
+      .accessibilityLabel("Delete routine")
     }
   }
 }
@@ -295,6 +296,7 @@ private struct MemoryRow: View {
       }
       .buttonStyle(.plain)
       .help("Forget this")
+      .accessibilityLabel("Forget this")
     }
   }
 

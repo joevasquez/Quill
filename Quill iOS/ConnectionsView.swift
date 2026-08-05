@@ -694,13 +694,13 @@ private struct ConnectionRow<Expansion: View>: View {
           .foregroundStyle(.tertiary)
           .rotationEffect(.degrees(isExpanded ? 90 : 0))
 
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
           .fill(Color(hex: tintHex) ?? QuillDesign.mcpTile)
           .frame(width: 28, height: 28)
           .overlay(
             Image(systemName: icon)
               .foregroundStyle(.white)
-              .font(.system(size: 13, weight: .semibold))
+              .quillFont(13, weight: .semibold)
           )
 
         VStack(alignment: .leading, spacing: 1) {

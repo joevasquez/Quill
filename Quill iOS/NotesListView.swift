@@ -15,6 +15,9 @@ import HexCore
 import SwiftUI
 
 struct NotesListView: View {
+  /// Search capsule height — scales so the field doesn't clip at large text.
+  @ScaledMetric(relativeTo: .body) private var searchFieldHeight: CGFloat = 42
+
   @ObservedObject var store: NotesStore
   /// Called with the picked (or freshly created) note's id. The presenter
   /// pushes the note detail — home is a launcher now, so just setting the
@@ -105,7 +108,7 @@ struct NotesListView: View {
         Spacer()
 
         Text("Notes")
-          .font(.system(size: 18, weight: .bold))
+          .quillFont(18, weight: .bold)
           .foregroundStyle(theme.text)
 
         Spacer()
@@ -125,7 +128,7 @@ struct NotesListView: View {
   ) -> some View {
     Button(action: action) {
       Image(systemName: symbol)
-        .font(.system(size: 16, weight: .medium))
+        .quillFont(16, weight: .medium)
         .foregroundStyle(theme.text2)
         .frame(width: 40, height: 40)
         .background(
@@ -142,11 +145,11 @@ struct NotesListView: View {
   private var searchField: some View {
     HStack(spacing: 9) {
       Image(systemName: "magnifyingglass")
-        .font(.system(size: 16))
+        .quillFont(16)
         .foregroundStyle(theme.text3)
 
       TextField("", text: $searchQuery, prompt: Text("Search notes").foregroundColor(theme.text3))
-        .font(.system(size: 16))
+        .quillFont(16)
         .foregroundStyle(theme.text)
         .tint(QuillDesign.brand.color())
         .submitLabel(.search)
@@ -165,12 +168,8 @@ struct NotesListView: View {
       }
     }
     .padding(.horizontal, 14)
-    .frame(height: 42)
-    .background(
-      Capsule()
-        .fill(theme.field)
-        .overlay(Capsule().strokeBorder(theme.fieldRing, lineWidth: 1))
-    )
+    .frame(minHeight: searchFieldHeight)
+    .glassEffect(.regular.interactive(), in: .capsule)
   }
 
   // MARK: - List
@@ -222,10 +221,10 @@ struct NotesListView: View {
     VStack(spacing: 6) {
       Spacer()
       Text(title)
-        .font(.system(size: 17, weight: .semibold))
+        .quillFont(17, weight: .semibold)
         .foregroundStyle(theme.text2)
       Text(message)
-        .font(.system(size: 15))
+        .quillFont(15)
         .foregroundStyle(theme.text3)
         .multilineTextAlignment(.center)
       Spacer()
@@ -340,25 +339,25 @@ private struct NoteListCard: View {
     HStack(spacing: 8) {
       if note.isPinned {
         Image(systemName: "pin.fill")
-          .font(.system(size: 11))
+          .quillFont(11)
           .foregroundStyle(accent)
           .rotationEffect(.degrees(45))
       }
 
       Text(note.displayTitle)
-        .font(.system(size: 17, weight: .semibold))
+        .quillFont(17, weight: .semibold)
         .tracking(-0.3)
         .foregroundStyle(theme.text)
         .lineLimit(1)
 
       if isActive {
         Text("ACTIVE")
-          .font(.system(size: 10.5, weight: .bold))
+          .quillFont(10.5, weight: .bold)
           .tracking(0.3)
           .foregroundStyle(accent)
           .padding(.horizontal, 7)
           .padding(.vertical, 2)
-          .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(accent.opacity(0.14)))
+          .background(RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous).fill(accent.opacity(0.14)))
       }
     }
   }
@@ -370,7 +369,7 @@ private struct NoteListCard: View {
 
     if !text.isEmpty {
       Text(text)
-        .font(.system(size: 14.5))
+        .quillFont(14.5)
         .foregroundStyle(theme.text2)
         .lineLimit(2)
         .multilineTextAlignment(.leading)
@@ -379,11 +378,11 @@ private struct NoteListCard: View {
         "\(note.photoCount) photo\(note.photoCount == 1 ? "" : "s")",
         systemImage: "photo"
       )
-      .font(.system(size: 14.5))
+      .quillFont(14.5)
       .foregroundStyle(theme.text2)
     } else {
       Text("Empty")
-        .font(.system(size: 14.5))
+        .quillFont(14.5)
         .italic()
         .foregroundStyle(theme.text3)
     }
@@ -397,7 +396,7 @@ private struct NoteListCard: View {
   ) -> some View {
     Button(action: action) {
       Image(systemName: symbol)
-        .font(.system(size: 15, weight: .medium))
+        .quillFont(15, weight: .medium)
         .foregroundStyle(tint)
         .frame(width: 36, height: 36)
         .background(

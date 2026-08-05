@@ -134,6 +134,7 @@ struct AppPasteDelayRow: View {
 			}
 			.buttonStyle(.borderless)
 			.help("Remove this app.")
+			.accessibilityLabel("Remove this app")
 		}
 		.opacity(rule.isEnabled ? 1 : 0.5)
 	}

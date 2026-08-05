@@ -18,6 +18,9 @@ import HexCore
 import SwiftUI
 
 struct NoteDetailView: View {
+  /// Composer capsule height — a minimum, so the field can grow with type.
+  @ScaledMetric(relativeTo: .body) private var composerHeight: CGFloat = 48
+
   let note: Note
 
   @Binding var mode: QuillMode
@@ -95,7 +98,7 @@ struct NoteDetailView: View {
             .fill(mode.palette.color())
             .frame(width: 8, height: 8)
           Text(note.displayTitle)
-            .font(.system(size: 17, weight: .bold))
+            .quillFont(17, weight: .bold)
             .foregroundStyle(theme.text)
             .lineLimit(1)
         }
@@ -135,7 +138,7 @@ struct NoteDetailView: View {
       }
     } label: {
       Image(systemName: "square.and.arrow.up")
-        .font(.system(size: 15, weight: .medium))
+        .quillFont(15, weight: .medium)
         .foregroundStyle(theme.text2)
         .frame(width: 36, height: 36)
         .background(
@@ -158,7 +161,7 @@ struct NoteDetailView: View {
   ) -> some View {
     Button(action: action) {
       Image(systemName: symbol)
-        .font(.system(size: 15, weight: .medium))
+        .quillFont(15, weight: .medium)
         .foregroundStyle(tint ?? theme.text2)
         .frame(width: 36, height: 36)
         .background(
@@ -180,53 +183,53 @@ struct NoteDetailView: View {
     let edit = QuillDesign.ModePalette.edit
     return HStack(spacing: 10) {
       Image(systemName: "sparkles")
-        .font(.system(size: 13))
+        .quillFont(13)
         .foregroundStyle(.white)
         .frame(width: 24, height: 24)
         .background(Circle().fill(edit.color()))
 
       VStack(alignment: .leading, spacing: 1) {
         Text(pending.label)
-          .font(.system(size: 14.5, weight: .semibold))
+          .quillFont(14.5, weight: .semibold)
           .foregroundStyle(theme.text)
         Text("Review the changes below")
-          .font(.system(size: 12))
+          .quillFont(12)
           .foregroundStyle(theme.text3)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
 
       Button("Undo") { notes.undoEdit(id: note.id) }
-        .font(.system(size: 13.5, weight: .semibold))
+        .quillFont(13.5, weight: .semibold)
         .foregroundStyle(theme.text)
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .background(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .fill(theme.card)
             .overlay(
-              RoundedRectangle(cornerRadius: 10, style: .continuous)
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
                 .strokeBorder(theme.hair, lineWidth: 1)
             )
         )
         .buttonStyle(.plain)
 
       Button("Keep") { notes.keepEdit(id: note.id) }
-        .font(.system(size: 13.5, weight: .bold))
+        .quillFont(13.5, weight: .bold)
         .foregroundStyle(.white)
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .background(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .fill(edit.color())
         )
         .buttonStyle(.plain)
     }
     .padding(11)
     .background(
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
         .fill(edit.color(0.12))
         .overlay(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .strokeBorder(edit.color(0.4), lineWidth: 1)
         )
     )
@@ -241,7 +244,7 @@ struct NoteDetailView: View {
           diffView(from: pending.previousBody, to: note.body)
         } else if note.body.isEmpty {
           Text("Empty — hold the orb below to start dictating.")
-            .font(.system(size: 16.5))
+            .quillFont(16.5)
             .italic()
             .foregroundStyle(theme.text3)
             .padding(.top, 20)
@@ -270,19 +273,19 @@ struct NoteDetailView: View {
         } else {
           HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(gutter(row.kind))
-              .font(.system(size: 12, design: .monospaced))
+              .quillFont(12, design: .monospaced)
               .foregroundStyle(gutterColor(row.kind, removed: removed, added: added))
               .frame(width: 14, alignment: .leading)
 
             Text(row.text.replacingOccurrences(of: "**", with: ""))
-              .font(.system(size: 16, weight: row.text.hasPrefix("**") ? .bold : .regular))
+              .quillFont(16, weight: row.text.hasPrefix("**") ? .bold : .regular)
               .foregroundStyle(row.kind == .removed ? removed.color() : theme.text)
               .strikethrough(row.kind == .removed)
               .opacity(row.kind == .removed ? 0.7 : 1)
               .padding(.horizontal, row.kind == .added ? 5 : 0)
               .padding(.vertical, row.kind == .added ? 1 : 0)
               .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                RoundedRectangle(cornerRadius: QuillDesign.Radius.badge, style: .continuous)
                   .fill(row.kind == .added ? added.color(0.16) : .clear)
               )
               .frame(maxWidth: .infinity, alignment: .leading)
@@ -327,9 +330,9 @@ struct NoteDetailView: View {
             .resizable()
             .aspectRatio(contentMode: .fit)
             .frame(maxWidth: .infinity)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous))
         } else {
-          RoundedRectangle(cornerRadius: 12, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .fill(theme.chip)
             .frame(height: 80)
             .overlay(
@@ -355,29 +358,29 @@ struct NoteDetailView: View {
     } else if let analysis = notes.photoAnalyses[photoID] {
       VStack(alignment: .leading, spacing: 6) {
         Text(analysis.summary)
-          .font(.system(size: 14))
+          .quillFont(14)
           .foregroundStyle(theme.text)
         ForEach(analysis.keyDetails, id: \.self) { detail in
           HStack(alignment: .top, spacing: 6) {
             Text("•").foregroundStyle(theme.text3)
             Text(detail)
           }
-          .font(.system(size: 13))
+          .quillFont(13)
           .foregroundStyle(theme.text2)
         }
         if let transcribed = analysis.transcribedText, !transcribed.isEmpty {
           Text(transcribed)
-            .font(.system(size: 13, design: .monospaced))
+            .quillFont(13, design: .monospaced)
             .foregroundStyle(theme.text2)
         }
       }
       .padding(12)
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .fill(theme.card)
           .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
               .strokeBorder(theme.hair, lineWidth: 0.5)
           )
       )
@@ -407,14 +410,14 @@ struct NoteDetailView: View {
     Button(action: onDismissEditError) {
       HStack(spacing: 8) {
         Image(systemName: "exclamationmark.triangle.fill")
-          .font(.system(size: 13))
+          .quillFont(13)
         Text(message)
-          .font(.system(size: 13))
+          .quillFont(13)
           .multilineTextAlignment(.leading)
           .fixedSize(horizontal: false, vertical: true)
         Spacer(minLength: 0)
         Image(systemName: "xmark")
-          .font(.system(size: 11, weight: .semibold))
+          .quillFont(11, weight: .semibold)
       }
       .foregroundStyle(QuillDesign.ModePalette.edit.lightnessCapped(at: theme.isDark ? 0.82 : 0.46).color())
       .padding(.horizontal, 12)
@@ -440,7 +443,7 @@ struct NoteDetailView: View {
         HStack(spacing: 8) {
           ProgressView().controlSize(.small)
           Text("Revising…")
-            .font(.system(size: 13))
+            .quillFont(13)
             .foregroundStyle(theme.text2)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -453,7 +456,7 @@ struct NoteDetailView: View {
       HStack(spacing: 11) {
         HStack(spacing: 9) {
           TextField(placeholder, text: $draft)
-            .font(.system(size: 16))
+            .quillFont(16)
             .foregroundStyle(theme.text)
             .submitLabel(.send)
             .onSubmit(send)
@@ -461,7 +464,7 @@ struct NoteDetailView: View {
           if !draft.trimmingCharacters(in: .whitespaces).isEmpty {
             Button(action: send) {
               Image(systemName: "arrow.up")
-                .font(.system(size: 16, weight: .semibold))
+                .quillFont(16, weight: .semibold)
                 .foregroundStyle(.white)
                 .frame(width: 38, height: 38)
                 .background(Circle().fill(mode.palette.color()))
@@ -472,12 +475,8 @@ struct NoteDetailView: View {
         }
         .padding(.leading, 16)
         .padding(.trailing, 6)
-        .frame(height: 48)
-        .background(
-          Capsule()
-            .fill(theme.field)
-            .overlay(Capsule().strokeBorder(theme.fieldRing, lineWidth: 1))
-        )
+        .frame(minHeight: composerHeight)
+        .glassEffect(.regular.interactive(), in: .capsule)
 
         if draft.trimmingCharacters(in: .whitespaces).isEmpty {
           QuillTriggerButton(

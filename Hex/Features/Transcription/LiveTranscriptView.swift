@@ -7,6 +7,7 @@
 
 import Inject
 import SwiftUI
+import HexCore
 
 struct LiveTranscriptView: View {
   @ObserveInjection var inject
@@ -24,10 +25,10 @@ struct LiveTranscriptView: View {
         .padding(.vertical, 8)
         .frame(maxWidth: 400)
         .background(
-          RoundedRectangle(cornerRadius: 10)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card)
             .fill(.ultraThinMaterial)
             .background(
-              RoundedRectangle(cornerRadius: 10)
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.card)
                 .fill(Color.black.opacity(0.6))
             )
         )

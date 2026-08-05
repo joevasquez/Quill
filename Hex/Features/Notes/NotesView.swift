@@ -256,7 +256,7 @@ struct NotesView: View {
 
   private func landingGlyph(_ symbol: String) -> some View {
     ZStack {
-      RoundedRectangle(cornerRadius: 18, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
         .fill(
           LinearGradient(
             colors: [Color.purple.opacity(0.18), Color.blue.opacity(0.12)],
@@ -308,7 +308,7 @@ struct NotesView: View {
         .foregroundStyle(.tertiary)
     }
     .padding(16)
-    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: QuillDesign.Radius.card))
   }
 
   @ViewBuilder
@@ -359,6 +359,7 @@ struct NotesView: View {
       Image(systemName: "square.and.pencil")
     }
     .help("New Note")
+    .accessibilityLabel("New Note")
   }
 
   private var isSyncing: Bool {
@@ -592,9 +593,9 @@ private struct NoteEditorView: View {
                 .resizable()
                 .scaledToFill()
                 .frame(width: 180, height: 120)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.card))
             } else {
-              RoundedRectangle(cornerRadius: 10)
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.card)
                 .fill(Color.secondary.opacity(0.08))
                 .frame(width: 180, height: 120)
                 .overlay {
@@ -688,7 +689,7 @@ private struct NoteEditorView: View {
       // Header doubles as the disclosure — the bar is tall, so it rests
       // collapsed to a single line until you want it.
       Button {
-        withAnimation(.easeInOut(duration: 0.18)) { editBarExpanded.toggle() }
+        QuillMotion.run(.easeInOut(duration: 0.18)) { editBarExpanded.toggle() }
       } label: {
         HStack(spacing: 6) {
           Image(systemName: "sparkles")
@@ -740,10 +741,10 @@ private struct NoteEditorView: View {
     }
     .padding(10)
     .background(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(edit.color(0.08))
         .overlay(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .strokeBorder(edit.color(0.25), lineWidth: 1)
         )
     )
@@ -796,10 +797,10 @@ private struct NoteEditorView: View {
     }
     .padding(10)
     .background(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(edit.color(0.10))
         .overlay(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .strokeBorder(edit.color(0.4), lineWidth: 1)
         )
     )
@@ -830,7 +831,7 @@ private struct NoteEditorView: View {
                 .padding(.horizontal, row.kind == .added ? 4 : 0)
                 .padding(.vertical, row.kind == .added ? 1 : 0)
                 .background(
-                  RoundedRectangle(cornerRadius: 4, style: .continuous)
+                  RoundedRectangle(cornerRadius: QuillDesign.Radius.badge, style: .continuous)
                     .fill(row.kind == .added ? added.color(0.16) : .clear)
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -927,23 +928,27 @@ private struct NoteEditorView: View {
           Image(systemName: "bold")
         }
         .help("Bold")
+        .accessibilityLabel("Bold")
         .keyboardShortcut("b", modifiers: .command)
 
         Button { wrapSelection(prefix: "_", suffix: "_") } label: {
           Image(systemName: "italic")
         }
         .help("Italic")
+        .accessibilityLabel("Italic")
         .keyboardShortcut("i", modifiers: .command)
 
         Button { wrapSelection(prefix: "~~", suffix: "~~") } label: {
           Image(systemName: "strikethrough")
         }
         .help("Strikethrough")
+        .accessibilityLabel("Strikethrough")
 
         Button { wrapSelection(prefix: "`", suffix: "`") } label: {
           Image(systemName: "chevron.left.forwardslash.chevron.right")
         }
         .help("Inline Code")
+        .accessibilityLabel("Inline Code")
 
         Divider().frame(height: 16)
 
@@ -951,21 +956,25 @@ private struct NoteEditorView: View {
           Image(systemName: "number")
         }
         .help("Heading")
+        .accessibilityLabel("Heading")
 
         Button { insertAtLineStart("- ") } label: {
           Image(systemName: "list.bullet")
         }
         .help("Bullet List")
+        .accessibilityLabel("Bullet List")
 
         Button { insertAtLineStart("- [ ] ") } label: {
           Image(systemName: "checklist")
         }
         .help("Checkbox")
+        .accessibilityLabel("Checkbox")
 
         Button { insertAtLineStart("1. ") } label: {
           Image(systemName: "list.number")
         }
         .help("Numbered List")
+        .accessibilityLabel("Numbered List")
 
         Button { insertAtLineStart("> ") } label: {
           Image(systemName: "text.quote")
@@ -1002,6 +1011,8 @@ private struct NoteEditorView: View {
       .help(cleanupDictation
         ? "AI cleanup on: dictations are structured into tidy notes before inserting"
         : "AI cleanup off: raw transcript is inserted as spoken")
+      .accessibilityLabel("AI cleanup")
+      .accessibilityValue(cleanupDictation ? "On" : "Off")
 
       Button {
         dictation.toggle(cleanup: cleanupDictation) { text in
@@ -1042,6 +1053,7 @@ private struct NoteEditorView: View {
       }
       .buttonStyle(.borderless)
       .help("Delete this note")
+      .accessibilityLabel("Delete this note")
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 8)

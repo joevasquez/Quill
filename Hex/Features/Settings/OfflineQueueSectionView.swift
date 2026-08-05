@@ -157,6 +157,7 @@ private struct QueueRow: View {
       }
       .buttonStyle(.plain)
       .help("Discard this item")
+      .accessibilityLabel("Discard this item")
     }
     .padding(.vertical, 2)
   }

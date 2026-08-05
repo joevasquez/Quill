@@ -13,6 +13,7 @@
 //
 
 import SwiftUI
+import HexCore
 
 struct QuillHeaderBar: View {
   let onTapList: () -> Void
@@ -27,7 +28,7 @@ struct QuillHeaderBar: View {
       // serif, 34→26pt feather frame). Trims the brand band so the
       // header doesn't dominate the screen.
       Text("Quill")
-        .font(.system(size: 26, weight: .heavy, design: .rounded))
+        .quillFont(26, weight: .heavy, design: .rounded)
         .foregroundStyle(.white)
         .kerning(0.5)
         .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
@@ -121,7 +122,7 @@ struct QuillHeaderBar: View {
       // is 44pt; the surrounding hit area on a Button extends a bit
       // further than the visible Circle).
       Image(systemName: systemName)
-        .font(.system(size: 12, weight: .semibold))
+        .quillFont(12, weight: .semibold)
         .foregroundStyle(.white)
         .frame(width: 36, height: 36)
         .background(Circle().fill(Color.white.opacity(0.18)))

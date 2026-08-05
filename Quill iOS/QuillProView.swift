@@ -71,7 +71,7 @@ struct QuillProView: View {
   private var header: some View {
     VStack(spacing: 10) {
       Image(systemName: "crown.fill")
-        .font(.system(size: 30, weight: .semibold))
+        .quillFont(30, weight: .semibold)
         .foregroundStyle(QuillDesign.brand.color())
         .frame(width: 64, height: 64)
         .background(Circle().fill(QuillDesign.brand.color(0.14)))
@@ -80,7 +80,7 @@ struct QuillProView: View {
           .font(.title2.bold())
         if isPro {
           Text("ACTIVE")
-            .font(.system(size: 10, weight: .heavy))
+            .quillFont(10, weight: .heavy)
             .tracking(0.5)
             .foregroundStyle(.white)
             .padding(.vertical, 2)
@@ -100,7 +100,7 @@ struct QuillProView: View {
   private func featureRow(_ row: PlanFeatureRow) -> some View {
     HStack(alignment: .top, spacing: 12) {
       Image(systemName: row.systemImage)
-        .font(.system(size: 15, weight: .medium))
+        .quillFont(15, weight: .medium)
         .foregroundStyle(QuillDesign.brand.color())
         .frame(width: 24)
         .padding(.top, 1)
@@ -126,7 +126,7 @@ struct QuillProView: View {
 
   private func tierChip(_ label: String, dimmed: Bool, tinted: Bool = false) -> some View {
     Text(label)
-      .font(.system(size: 8.5, weight: .heavy))
+      .quillFont(8.5, weight: .heavy)
       .tracking(0.4)
       .foregroundStyle(tinted ? Color.white : Color.secondary)
       .padding(.vertical, 1)

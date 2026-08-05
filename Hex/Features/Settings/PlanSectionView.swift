@@ -112,10 +112,10 @@ struct PlanSectionView: View {
     .padding(14)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(
-      RoundedRectangle(cornerRadius: 12, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(pro ? QuillDesign.brand.color(0.06) : Color.primary.opacity(0.03))
         .overlay(
-          RoundedRectangle(cornerRadius: 12, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .strokeBorder(
               pro ? QuillDesign.brand.color(0.45) : Color.primary.opacity(0.1),
               lineWidth: pro ? 1.5 : 1

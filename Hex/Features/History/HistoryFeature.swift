@@ -331,7 +331,7 @@ struct TranscriptView: View {
 
 				if isLongTranscript {
 					Button(isExpanded ? "Show less" : "Show more") {
-						withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
+						QuillMotion.run(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
 					}
 					.buttonStyle(.plain)
 					.font(.caption.weight(.medium))
@@ -396,6 +396,7 @@ struct TranscriptView: View {
 					.buttonStyle(.plain)
 					.foregroundStyle(isPlaying ? .blue : .secondary)
 					.help(isPlaying ? "Stop playback" : "Play audio")
+					.accessibilityLabel(isPlaying ? "Stop playback" : "Play audio")
 
 					Button(action: onDelete) {
 						Image(systemName: "trash.fill")
@@ -403,6 +404,7 @@ struct TranscriptView: View {
 					.buttonStyle(.plain)
 					.foregroundStyle(.secondary)
 					.help("Delete transcript")
+					.accessibilityLabel("Delete transcript")
 				}
 				.font(.subheadline)
 				// Quieter rows: actions only appear on hover (or while
@@ -415,10 +417,10 @@ struct TranscriptView: View {
 			.padding(.vertical, 6)
 		}
 		.background(
-			RoundedRectangle(cornerRadius: 8)
+			RoundedRectangle(cornerRadius: QuillDesign.Radius.chip)
 				.fill(Color(.windowBackgroundColor).opacity(isHovering ? 0.8 : 0.5))
 				.overlay(
-					RoundedRectangle(cornerRadius: 8)
+					RoundedRectangle(cornerRadius: QuillDesign.Radius.chip)
 						.strokeBorder(Color.secondary.opacity(isHovering ? 0.3 : 0.2), lineWidth: 1)
 				)
 		)
@@ -437,13 +439,13 @@ struct TranscriptView: View {
 		copyTask?.cancel()
 
 		copyTask = Task {
-			withAnimation {
+			QuillMotion.run {
 				showCopied = true
 			}
 
 			try await Task.sleep(for: .seconds(1.5))
 
-			withAnimation {
+			QuillMotion.run {
 				showCopied = false
 			}
 		}
@@ -660,13 +662,13 @@ struct FileDropZoneView: View {
 		.frame(maxWidth: .infinity)
 		.padding(12)
 		.background(
-			RoundedRectangle(cornerRadius: 8)
+			RoundedRectangle(cornerRadius: QuillDesign.Radius.chip)
 				.strokeBorder(
 					isDropTargeted ? Color.blue : Color.secondary.opacity(0.3),
 					style: StrokeStyle(lineWidth: 1.5, dash: [6, 3])
 				)
 				.background(
-					RoundedRectangle(cornerRadius: 8)
+					RoundedRectangle(cornerRadius: QuillDesign.Radius.chip)
 						.fill(isDropTargeted ? Color.blue.opacity(0.05) : Color.clear)
 				)
 		)

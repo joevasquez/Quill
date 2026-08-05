@@ -59,9 +59,16 @@ struct TranscriptionFeature {
     /// `targetIntegration` is overridden with this value before the
     /// confirmation panel opens. Toggled from the HUD picker row.
     var lockedActionIntegration: Integration.Identifier?
+    /// Destination targeting for the in-flight typed command (`@` mentions
+    /// plus the un-muted chip row). Reset once the parse lands so it can't
+    /// leak into the next, unrelated capture.
+    var actTargeting: ActTargeting = .unrestricted
     /// The raw transcript that was sent to the action LLM parser. Carried
     /// through to the confirmation panel so the "HEARD" section can quote it.
     var lastActionTranscript: String = ""
+    /// How the pending action was started — carried to the confirmation panel
+    /// so its trace records dictated vs typed vs routine.
+    var actionTrigger: ActionRun.Trigger = .voice
     /// True when a clipboard-based selection capture is in flight (Edit mode,
     /// AX failed). Prevents the transcription result from racing ahead of the
     /// clipboard fallback — if the transcription finishes first, the result
@@ -123,9 +130,12 @@ struct TranscriptionFeature {
     case inlineEditUndo
 
     // Action mode
-    /// A command typed (not spoken) via the menu bar's "Type a Command…"
-    /// panel — runs the same agent pipeline as a dictated action.
-    case typedActionSubmitted(String)
+    /// A command typed (not spoken) via Home or the menu bar's "Type a
+    /// Command…" panel — runs the same agent pipeline as a dictated action.
+    /// `targeting` carries the destinations the user pinned with an `@`
+    /// mention (and the ones left enabled on the Act chip row); pass
+    /// `.unrestricted` when the surface has no destination controls.
+    case typedActionSubmitted(String, targeting: ActTargeting)
     case actionIntentParsed(ActionIntent)
     case multiActionIntentsParsed([ActionIntent])
     case actionParsingFailed(String)
@@ -386,7 +396,7 @@ struct TranscriptionFeature {
 
       // MARK: - Action Mode
 
-      case let .typedActionSubmitted(text):
+      case let .typedActionSubmitted(text, targeting):
         // Typed commands run the same agent pipeline as spoken ones —
         // routine authoring, trigger fast-path, memory context, MCP —
         // just without the recorder/Whisper front-half (and without a
@@ -395,6 +405,8 @@ struct TranscriptionFeature {
         guard !typed.isEmpty else { return .none }
         state.isAIProcessing = true
         state.lastActionTranscript = typed
+        state.actionTrigger = .typed
+        state.actTargeting = targeting
         state.$usageStats.withLock { stats in
           stats.actionCount += 1
           stats.totalWordsTranscribed += transcriptionWordCount(of: typed)
@@ -431,7 +443,7 @@ struct TranscriptionFeature {
           }
 
           do {
-            let response = try await actionParsing.parseMulti(typed, typedProvider, nil)
+            let response = try await actionParsing.parseMulti(typed, typedProvider, nil, targeting)
             await send(.aiProcessingFinished)
             if response.isSingleAction, let intent = response.actions.first,
                intent.actionType != .mcpCall, intent.actionType != .open {
@@ -464,26 +476,35 @@ struct TranscriptionFeature {
 
       case let .actionIntentParsed(intent):
         // Apply hard-lock: if the user pre-selected an integration on the
-        // HUD picker, override whatever the LLM chose so the action lands
-        // in the user's pick regardless of voice phrasing.
+        // HUD picker — or pinned exactly one with an `@` mention — override
+        // whatever the LLM chose so the action lands in the user's pick
+        // regardless of phrasing.
         var resolvedIntent = intent
-        if let locked = state.lockedActionIntegration {
+        if let locked = state.lockedActionIntegration ?? state.actTargeting.forcedIntegration {
           resolvedIntent.targetIntegration = locked
         }
+        state.actTargeting = .unrestricted
         state.pendingAction = resolvedIntent
         let raw = state.lastActionTranscript
         return .send(.presentActionConfirmation(resolvedIntent, raw))
 
       case let .multiActionIntentsParsed(intents):
-        // Multi-action: apply hard-lock to all intents if set.
+        // Multi-action: apply hard-lock to all intents if set. A single `@`
+        // pin counts as a lock; two or more stay advisory (the prompt
+        // already restricts the model to them, and "@Gmail draft it and log
+        // it in @Dex" is a legitimate two-destination command).
         var resolvedIntents = intents
-        if let locked = state.lockedActionIntegration {
+        if let locked = state.lockedActionIntegration ?? state.actTargeting.forcedIntegration {
           resolvedIntents = intents.map { intent in
             var r = intent
+            // Never retarget a step that isn't integration-bound — an MCP
+            // call or an app/URL open has no `targetIntegration` to speak of.
+            guard r.actionType != .mcpCall, r.actionType != .open else { return r }
             r.targetIntegration = locked
             return r
           }
         }
+        state.actTargeting = .unrestricted
         state.pendingAction = resolvedIntents.first
         let raw = state.lastActionTranscript
         return .send(.presentMultiActionConfirmation(resolvedIntents, raw))
@@ -500,7 +521,8 @@ struct TranscriptionFeature {
               intents: routine.steps,
               rawTranscript: rawRoutineTranscript,
               autoExecute: routine.autoRun,
-              sourceAppBundleID: routineBundleID
+              sourceAppBundleID: routineBundleID,
+              trigger: .routine
             )
           }
         }
@@ -597,9 +619,15 @@ struct TranscriptionFeature {
       case let .presentMultiActionConfirmation(intents, rawTranscript):
         transcriptionFeatureLogger.info("Posting multi-action confirmation notification for \(intents.count, privacy: .public) intents")
         let multiBundleID = state.sourceAppBundleID
+        let multiTrigger = state.actionTrigger
         return .run { _ in
           await MainActor.run {
-            ActionConfirmationNotification.postMulti(intents: intents, rawTranscript: rawTranscript, sourceAppBundleID: multiBundleID)
+            ActionConfirmationNotification.postMulti(
+              intents: intents,
+              rawTranscript: rawTranscript,
+              sourceAppBundleID: multiBundleID,
+              trigger: multiTrigger
+            )
           }
         }
 
@@ -1381,6 +1409,7 @@ private extension TranscriptionFeature {
       }
       state.isAIProcessing = true
       state.lastActionTranscript = modifiedResult
+      state.actionTrigger = .voice
       let agentName = state.hexSettings.agentName
       let memoryEnabled = state.hexSettings.agentMemoryEnabled
       // Selected-text context captured at stop time (AX-only in Action
@@ -1433,7 +1462,11 @@ private extension TranscriptionFeature {
         }
 
         do {
-          let response = try await actionParsing.parseMulti(modifiedResult, aiProvider, selectionContext)
+          // Spoken actions carry no `@` mentions; the HUD's own integration
+          // lock (applied after the parse) is the voice equivalent.
+          let response = try await actionParsing.parseMulti(
+            modifiedResult, aiProvider, selectionContext, .unrestricted
+          )
           await send(.aiProcessingFinished)
           // MCP + open actions always go through the multi-action panel — the
           // single-action panel's per-integration editors don't apply.

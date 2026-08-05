@@ -76,7 +76,7 @@ struct QuillStepChain: View {
         HStack(spacing: 5) {
           if group.id > 0 {
             Image(systemName: "chevron.right")
-              .font(.system(size: 9, weight: .semibold))
+              .quillFont(9, weight: .semibold)
               .foregroundStyle(theme.text3)
           }
           pill(group)
@@ -89,24 +89,24 @@ struct QuillStepChain: View {
     let tint = tintColor(group.target)
     return HStack(spacing: 5) {
       Image(systemName: group.target.systemImage)
-        .font(.system(size: 11, weight: .medium))
+        .quillFont(11, weight: .medium)
         .foregroundStyle(tint)
       Text(group.target.displayName)
-        .font(.system(size: 12, weight: .semibold))
+        .quillFont(12, weight: .semibold)
         .foregroundStyle(theme.text2)
       if group.count > 1 {
         Text("×\(group.count)")
-          .font(.system(size: 12, weight: .bold))
+          .quillFont(12, weight: .bold)
           .foregroundStyle(theme.text3)
       }
     }
     .padding(.vertical, 3)
     .padding(.horizontal, 8)
     .background(
-      RoundedRectangle(cornerRadius: 9, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
         .fill(tint.opacity(theme.isDark ? 0.16 : 0.11))
         .overlay(
-          RoundedRectangle(cornerRadius: 9, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
             .strokeBorder(tint.opacity(0.32), lineWidth: 0.5)
         )
     )
@@ -132,6 +132,9 @@ struct QuillSuggestPeekBar: View {
   @Environment(\.colorScheme) private var colorScheme
   private var theme: QuillTheme { .of(colorScheme) }
 
+  /// Diameter of each stacked source mark.
+  private let markSize: CGFloat = 28
+
   /// One mark per distinct source, in feed order.
   private var distinctSources: [SuggestionSource] {
     var seen = Set<SuggestionSource>()
@@ -146,9 +149,11 @@ struct QuillSuggestPeekBar: View {
         HStack(spacing: 11) {
           HStack(spacing: -8) {
             ForEach(distinctSources.prefix(4)) { source in
-              QuillSourceMark(source: source, size: 28)
+              // The ring has to trace the mark's own squircle, so this radius
+              // is derived from the mark size — not a step on the shape scale.
+              QuillSourceMark(source: source, size: markSize)
                 .overlay(
-                  RoundedRectangle(cornerRadius: 28 * 0.32, style: .continuous)
+                  RoundedRectangle(cornerRadius: markSize * 0.32, style: .continuous)
                     .strokeBorder(theme.cardSolid, lineWidth: 1.5)
                 )
             }
@@ -157,16 +162,16 @@ struct QuillSuggestPeekBar: View {
           VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 6) {
               Text("\(suggestions.count) suggestion\(suggestions.count == 1 ? "" : "s")")
-                .font(.system(size: 12.5, weight: .semibold))
+                .quillFont(12.5, weight: .semibold)
                 .foregroundStyle(theme.text2)
               Text(top.source.displayName)
-                .font(.system(size: 10.5, weight: .heavy))
+                .quillFont(10.5, weight: .heavy)
                 .tracking(0.3)
                 .textCase(.uppercase)
                 .foregroundStyle(topTint.color())
             }
             Text(top.headline)
-              .font(.system(size: 14.5, weight: .semibold))
+              .quillFont(14.5, weight: .semibold)
               .tracking(-0.2)
               .foregroundStyle(theme.text)
               .lineLimit(1)
@@ -175,20 +180,20 @@ struct QuillSuggestPeekBar: View {
 
           HStack(spacing: 2) {
             Text("View")
-              .font(.system(size: 13.5, weight: .semibold))
+              .quillFont(13.5, weight: .semibold)
             Image(systemName: "chevron.right")
-              .font(.system(size: 11, weight: .semibold))
+              .quillFont(11, weight: .semibold)
           }
           .foregroundStyle(QuillDesign.brand.color())
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
         .background(
-          RoundedRectangle(cornerRadius: 18, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .fill(theme.card)
             // A faint source-tinted bleed from the left edge gives it life.
             .overlay(
-              RoundedRectangle(cornerRadius: 18, style: .continuous)
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
                 .fill(
                   LinearGradient(
                     colors: [topTint.color(theme.isDark ? 0.14 : 0.1), .clear],
@@ -198,11 +203,11 @@ struct QuillSuggestPeekBar: View {
                 )
             )
             .overlay(
-              RoundedRectangle(cornerRadius: 18, style: .continuous)
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
                 .strokeBorder(theme.hair, lineWidth: 0.5)
             )
         )
-        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous))
       }
       .buttonStyle(QuillPressStyle())
       .padding(.horizontal, 16)
@@ -231,18 +236,18 @@ struct QuillSuggestionCard: View {
         QuillSourceMark(source: suggestion.source)
         VStack(alignment: .leading, spacing: 1) {
           Text(suggestion.source.displayName)
-            .font(.system(size: 12.5, weight: .heavy))
+            .quillFont(12.5, weight: .heavy)
             .tracking(0.2)
             .textCase(.uppercase)
             .foregroundStyle(tint.color())
           Text(suggestion.intents.count > 1 ? "\(suggestion.intents.count)-step action" : "Suggested action")
-            .font(.system(size: 11.5))
+            .quillFont(11.5)
             .foregroundStyle(theme.text3)
         }
         Spacer()
         Button(action: onDismiss) {
           Image(systemName: "xmark")
-            .font(.system(size: 12, weight: .semibold))
+            .quillFont(12, weight: .semibold)
             .foregroundStyle(theme.text3)
             .frame(width: 28, height: 28)
             .background(Circle().fill(theme.chip))
@@ -254,7 +259,7 @@ struct QuillSuggestionCard: View {
       .padding(.bottom, 11)
 
       Text(suggestion.headline)
-        .font(.system(size: 17.5, weight: .bold))
+        .quillFont(17.5, weight: .bold)
         .tracking(-0.3)
         .foregroundStyle(theme.text)
         .fixedSize(horizontal: false, vertical: true)
@@ -262,11 +267,11 @@ struct QuillSuggestionCard: View {
       if !suggestion.why.isEmpty {
         HStack(alignment: .top, spacing: 6) {
           Image(systemName: "sparkles")
-            .font(.system(size: 11, weight: .medium))
+            .quillFont(11, weight: .medium)
             .foregroundStyle(theme.text3)
             .padding(.top, 3)
           Text(suggestion.why)
-            .font(.system(size: 13.5))
+            .quillFont(13.5)
             .foregroundStyle(theme.text2)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -285,18 +290,18 @@ struct QuillSuggestionCard: View {
         Button(action: onReview) {
           HStack(spacing: 5) {
             Text("Review")
-              .font(.system(size: 14.5, weight: .bold))
+              .quillFont(14.5, weight: .bold)
             Image(systemName: "chevron.right")
-              .font(.system(size: 11, weight: .bold))
+              .quillFont(11, weight: .bold)
           }
           .foregroundStyle(act.lightnessCapped(at: theme.isDark ? 0.84 : 0.4).color())
           .padding(.vertical, 9)
           .padding(.horizontal, 15)
           .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
               .fill(act.color(theme.isDark ? 0.22 : 0.16))
           )
-          .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+          .contentShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous))
         }
         .buttonStyle(QuillPressStyle())
         .accessibilityHint("Opens an editable review — nothing runs until you tap Run")
@@ -304,10 +309,10 @@ struct QuillSuggestionCard: View {
     }
     .padding(15)
     .background(
-      RoundedRectangle(cornerRadius: 22, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.sheet, style: .continuous)
         .fill(theme.card)
         .overlay(
-          RoundedRectangle(cornerRadius: 22, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.sheet, style: .continuous)
             .strokeBorder(theme.hair, lineWidth: 0.5)
         )
     )
@@ -370,7 +375,7 @@ struct QuillSuggestionsPage: View {
         dismiss()
       } label: {
         Image(systemName: "chevron.left")
-          .font(.system(size: 15, weight: .medium))
+          .quillFont(15, weight: .medium)
           .foregroundStyle(theme.text2)
           .frame(width: 36, height: 36)
           .background(
@@ -386,22 +391,22 @@ struct QuillSuggestionsPage: View {
       VStack(alignment: .leading, spacing: 1) {
         HStack(spacing: 8) {
           Text("Suggestions")
-            .font(.system(size: 24, weight: .bold))
+            .quillFont(24, weight: .bold)
             .tracking(-0.5)
             .foregroundStyle(theme.text)
           Text("PRO")
-            .font(.system(size: 10, weight: .heavy))
+            .quillFont(10, weight: .heavy)
             .tracking(0.5)
             .foregroundStyle(.white)
             .padding(.vertical, 2)
             .padding(.horizontal, 6)
             .background(
-              RoundedRectangle(cornerRadius: 6, style: .continuous)
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
                 .fill(QuillDesign.brand.color())
             )
         }
         Text("Ready-to-run actions from your sources")
-          .font(.system(size: 12.5))
+          .quillFont(12.5)
           .foregroundStyle(theme.text2)
       }
 
@@ -415,7 +420,7 @@ struct QuillSuggestionsPage: View {
                 .controlSize(.small)
             } else {
               Image(systemName: "arrow.clockwise")
-                .font(.system(size: 14, weight: .medium))
+                .quillFont(14, weight: .medium)
                 .foregroundStyle(theme.text2)
             }
           }
@@ -474,23 +479,23 @@ struct QuillSuggestEmpty: View {
   var body: some View {
     HStack(alignment: noReadableSources ? .top : .center, spacing: 13) {
       Image(systemName: noReadableSources ? "antenna.radiowaves.left.and.right.slash" : "checkmark")
-        .font(.system(size: 17, weight: .semibold))
+        .quillFont(17, weight: .semibold)
         .foregroundStyle(accent.lightnessCapped(at: theme.isDark ? 0.8 : 0.55).color())
         .frame(width: 38, height: 38)
         .background(
-          RoundedRectangle(cornerRadius: 12, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .fill(accent.color(0.12))
         )
       VStack(alignment: .leading, spacing: 1) {
         Text(noReadableSources ? "Nothing to read yet" : "You're all caught up")
-          .font(.system(size: 15.5, weight: .semibold))
+          .quillFont(15.5, weight: .semibold)
           .foregroundStyle(theme.text)
         Text(
           noReadableSources
             ? "Google's Gmail connection is send-only, so inbox and Dex suggestions come from their MCP servers — add them in Settings → Connections."
             : "Quill will nudge you when something's worth acting on."
         )
-        .font(.system(size: 13.5))
+        .quillFont(13.5)
         .foregroundStyle(theme.text2)
         .fixedSize(horizontal: false, vertical: true)
       }
@@ -499,10 +504,10 @@ struct QuillSuggestEmpty: View {
     .padding(.vertical, 14)
     .padding(.horizontal, 16)
     .background(
-      RoundedRectangle(cornerRadius: 20, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.sheet, style: .continuous)
         .fill(theme.card)
         .overlay(
-          RoundedRectangle(cornerRadius: 20, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.sheet, style: .continuous)
             .strokeBorder(theme.hair, lineWidth: 0.5)
         )
     )
@@ -512,6 +517,8 @@ struct QuillSuggestEmpty: View {
 // MARK: - Pro upsell (page)
 
 struct QuillProUpsellCard: View {
+  @ScaledMetric(relativeTo: .body) private var buttonHeight: CGFloat = 46
+
   var onUnlock: () -> Void
 
   @Environment(\.colorScheme) private var colorScheme
@@ -521,25 +528,25 @@ struct QuillProUpsellCard: View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 11) {
         Image(systemName: "lock.fill")
-          .font(.system(size: 16, weight: .semibold))
+          .quillFont(16, weight: .semibold)
           .foregroundStyle(QuillDesign.brand.lightnessCapped(at: theme.isDark ? 0.8 : 0.55).color())
           .frame(width: 36, height: 36)
           .background(
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
               .fill(QuillDesign.brand.color(0.16))
           )
         HStack(spacing: 7) {
           Text("Proactive suggestions")
-            .font(.system(size: 16, weight: .semibold))
+            .quillFont(16, weight: .semibold)
             .foregroundStyle(theme.text)
           Text("PRO")
-            .font(.system(size: 10, weight: .heavy))
+            .quillFont(10, weight: .heavy)
             .tracking(0.5)
             .foregroundStyle(.white)
             .padding(.vertical, 2)
             .padding(.horizontal, 6)
             .background(
-              RoundedRectangle(cornerRadius: 6, style: .continuous)
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
                 .fill(QuillDesign.brand.color())
             )
         }
@@ -547,17 +554,17 @@ struct QuillProUpsellCard: View {
       }
 
       Text("Let Quill watch your inbox, calendar, and contacts and offer ready-to-run actions — you always review before anything happens.")
-        .font(.system(size: 14))
+        .quillFont(14)
         .foregroundStyle(theme.text2)
 
       Button(action: onUnlock) {
         Text("Upgrade to Pro")
-          .font(.system(size: 15.5, weight: .semibold))
+          .quillFont(15.5, weight: .semibold)
           .foregroundStyle(.white)
           .frame(maxWidth: .infinity)
-          .frame(height: 46)
+          .frame(minHeight: buttonHeight)
           .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
               .fill(QuillDesign.brand.color())
           )
       }
@@ -565,10 +572,10 @@ struct QuillProUpsellCard: View {
     }
     .padding(16)
     .background(
-      RoundedRectangle(cornerRadius: 22, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.sheet, style: .continuous)
         .fill(theme.card)
         .overlay(
-          RoundedRectangle(cornerRadius: 22, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.sheet, style: .continuous)
             .fill(
               RadialGradient(
                 colors: [QuillDesign.brand.color(theme.isDark ? 0.14 : 0.1), .clear],
@@ -579,7 +586,7 @@ struct QuillProUpsellCard: View {
             )
         )
         .overlay(
-          RoundedRectangle(cornerRadius: 22, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.sheet, style: .continuous)
             .strokeBorder(QuillDesign.brand.color(0.32), lineWidth: 0.5)
         )
     )
@@ -604,10 +611,10 @@ struct QuillDictateCalendarStrip: View {
     VStack(spacing: 8) {
       HStack(spacing: 8) {
         Image(systemName: "calendar")
-          .font(.system(size: 12, weight: .semibold))
+          .quillFont(12, weight: .semibold)
           .foregroundStyle(blue.color())
         Text("Dictate into a meeting")
-          .font(.system(size: 13, weight: .semibold))
+          .quillFont(13, weight: .semibold)
           .tracking(0.3)
           .textCase(.uppercase)
           .foregroundStyle(theme.text3)
@@ -636,7 +643,7 @@ struct QuillDictateCalendarStrip: View {
             .fill(meeting.isNow ? blue.color() : theme.text3)
             .frame(width: 6, height: 6)
           Text(meeting.time)
-            .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+            .quillFont(12.5, weight: .semibold, design: .monospaced)
             .foregroundStyle(
               meeting.isNow
                 ? blue.lightnessCapped(at: theme.isDark ? 0.82 : 0.42).color()
@@ -644,25 +651,25 @@ struct QuillDictateCalendarStrip: View {
             )
           if meeting.isNow {
             Text("NOW")
-              .font(.system(size: 9.5, weight: .heavy))
+              .quillFont(9.5, weight: .heavy)
               .tracking(0.4)
               .foregroundStyle(.white)
               .padding(.vertical, 1)
               .padding(.horizontal, 5)
-              .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(blue.color()))
+              .background(RoundedRectangle(cornerRadius: QuillDesign.Radius.badge, style: .continuous).fill(blue.color()))
           }
         }
         Text(meeting.title)
-          .font(.system(size: 14.5, weight: .semibold))
+          .quillFont(14.5, weight: .semibold)
           .tracking(-0.2)
           .foregroundStyle(theme.text)
           .lineLimit(1)
         HStack(spacing: 5) {
           Image(systemName: "mic")
-            .font(.system(size: 10, weight: .medium))
+            .quillFont(10, weight: .medium)
             .foregroundStyle(blue.color())
           Text(meeting.detail.isEmpty ? "Dictate notes" : "Dictate notes · \(meeting.detail)")
-            .font(.system(size: 12))
+            .quillFont(12)
             .foregroundStyle(theme.text3)
             .lineLimit(1)
         }
@@ -671,10 +678,10 @@ struct QuillDictateCalendarStrip: View {
       .padding(.horizontal, 13)
       .frame(maxWidth: 210, alignment: .leading)
       .background(
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
           .fill(meeting.isNow ? blue.color(theme.isDark ? 0.18 : 0.1) : theme.card)
           .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
               .strokeBorder(
                 meeting.isNow ? blue.color(0.4) : theme.hair,
                 lineWidth: meeting.isNow ? 1 : 0.5

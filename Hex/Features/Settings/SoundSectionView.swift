@@ -15,7 +15,7 @@ struct SoundSectionView: View {
 					isOn: Binding(
 						get: { store.hexSettings.soundEffectsEnabled },
 						set: { isOn in
-							withAnimation(.snappy(duration: 0.25)) {
+							QuillMotion.run(.snappy(duration: 0.25)) {
 								_ = store.send(.setSoundEffectsEnabled(isOn))
 							}
 						}

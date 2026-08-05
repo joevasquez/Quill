@@ -61,7 +61,7 @@ struct RoutineSaveSheet: View {
                 .frame(width: 18)
               VStack(alignment: .leading, spacing: 2) {
                 Text(step.title)
-                  .font(.system(size: 14, weight: .medium))
+                  .quillFont(14, weight: .medium)
                 Text(stepSubtitle(step))
                   .font(.caption)
                   .foregroundStyle(.secondary)

@@ -157,8 +157,11 @@ final class MacSuggestionsController: ObservableObject {
     pendingRun = suggestion
     ActionConfirmationNotification.postMulti(
       intents: suggestion.intents,
-      rawTranscript: "",
-      autoExecute: false
+      // The headline is what the user saw and accepted — without it the
+      // trace would have a blank request line for every suggestion run.
+      rawTranscript: suggestion.headline,
+      autoExecute: false,
+      trigger: .suggestion
     )
   }
 

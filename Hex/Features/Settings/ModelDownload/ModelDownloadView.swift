@@ -1,6 +1,7 @@
 import ComposableArchitecture
 import Inject
 import SwiftUI
+import HexCore
 
 public struct ModelDownloadView: View {
 	@ObserveInjection var inject
@@ -34,7 +35,7 @@ public struct ModelDownloadView: View {
 					style: .info
 				)
 				.overlay(
-					RoundedRectangle(cornerRadius: 8)
+					RoundedRectangle(cornerRadius: QuillDesign.Radius.chip)
 						.stroke(Color.accentColor, lineWidth: shouldFlash ? 3 : 0)
 						.animation(.easeInOut(duration: 0.5).repeatCount(3, autoreverses: true), value: shouldFlash)
 				)

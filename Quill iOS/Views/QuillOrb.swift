@@ -78,12 +78,12 @@ struct QuillOrb: View {
     .onChange(of: level) { _, newLevel in
       // The recorder publishes per-buffer; ease between samples so the
       // glow and bars don't step.
-      withAnimation(.linear(duration: 0.12)) {
+      QuillMotion.run(.linear(duration: 0.12)) {
         displayedLevel = isListening ? newLevel : 0
       }
     }
     .onChange(of: isListening) { _, listening in
-      withAnimation(.linear(duration: 0.12)) {
+      QuillMotion.run(.linear(duration: 0.12)) {
         displayedLevel = listening ? level : 0
       }
     }

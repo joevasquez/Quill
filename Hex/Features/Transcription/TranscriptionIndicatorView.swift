@@ -165,14 +165,14 @@ struct TranscriptionIndicatorView: View {
       .padding(.vertical, 6)
     }
     .background(
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
         .fill(.ultraThinMaterial)
         .overlay(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .fill(.black.opacity(0.25))
         )
         .overlay(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .strokeBorder(.white.opacity(0.15), lineWidth: 1)
         )
     )
@@ -230,7 +230,7 @@ struct TranscriptionIndicatorView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(
-          RoundedRectangle(cornerRadius: 7, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
             .fill(.white.opacity(0.08))
         )
       }
@@ -244,7 +244,7 @@ struct TranscriptionIndicatorView: View {
             .font(.system(size: 9, weight: .bold))
           Text("Keep")
             .font(.system(size: 11, weight: .semibold))
-          RoundedRectangle(cornerRadius: 3, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.badge, style: .continuous)
             .fill(.white.opacity(0.25))
             .frame(width: 14, height: 14)
             .overlay(
@@ -257,7 +257,7 @@ struct TranscriptionIndicatorView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(
-          RoundedRectangle(cornerRadius: 7, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
             .fill(.green)
         )
       }
@@ -265,7 +265,7 @@ struct TranscriptionIndicatorView: View {
     }
     .padding(3)
     .background(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(.black.opacity(0.7))
     )
   }
@@ -310,7 +310,7 @@ struct TranscriptionIndicatorView: View {
     .padding(.horizontal, 10)
     .padding(.vertical, 5)
     .background(
-      RoundedRectangle(cornerRadius: 7, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
         .fill(.white.opacity(0.08))
     )
   }
@@ -478,7 +478,7 @@ private struct PulseModifier: ViewModifier {
     content
       .opacity(on ? 1.0 : 0.3)
       .onAppear {
-        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+        QuillMotion.run(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
           on = false
         }
       }
@@ -507,15 +507,15 @@ struct LiveTranscriptCard: View {
       .padding(.horizontal, 14)
       .padding(.vertical, 10)
       .background(
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
           .fill(.ultraThinMaterial)
           .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
               .fill(.black.opacity(0.35))
           )
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
           .strokeBorder(.white.opacity(0.18), lineWidth: 1)
       )
       .compositingGroup()
@@ -572,18 +572,18 @@ struct IntegrationToggleButton: View {
           .padding(.horizontal, 5)
           .padding(.vertical, 2)
           .background(
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.badge, style: .continuous)
               .fill(.white.opacity(isLocked ? 0.22 : 0.10))
           )
       }
       .padding(.horizontal, 8)
       .padding(.vertical, 5)
       .background(
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
           .fill(isLocked ? tintColor : Color.white.opacity(0.08))
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
           .strokeBorder(
             isLocked ? Color.white.opacity(0.55) : Color.white.opacity(0.10),
             lineWidth: isLocked ? 1.0 : 0.5

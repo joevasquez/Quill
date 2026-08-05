@@ -116,26 +116,26 @@ struct QuillCaptureSheet: View {
           .fill(accent.color())
           .frame(width: 7, height: 7)
         Text(badgeText)
-          .font(.system(size: 13, weight: .bold))
+          .quillFont(13, weight: .bold)
       }
       .foregroundStyle(accent.lightnessCapped(at: theme.isDark ? 0.82 : 0.5).color())
       .padding(.horizontal, 11)
       .padding(.vertical, 4)
       .background(
-        RoundedRectangle(cornerRadius: 9, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
           .fill(accent.color(0.14))
       )
 
       Spacer(minLength: 8)
 
       Text(statusText)
-        .font(.system(size: 11.5, design: .monospaced))
+        .quillFont(11.5, design: .monospaced)
         .tracking(0.3)
         .foregroundStyle(theme.text3)
 
       Button(action: onCancel) {
         Image(systemName: "xmark")
-          .font(.system(size: 12, weight: .semibold))
+          .quillFont(12, weight: .semibold)
           .foregroundStyle(theme.text2)
           .frame(width: 26, height: 26)
           .background(Circle().fill(theme.chip))
@@ -178,13 +178,13 @@ struct QuillCaptureSheet: View {
       Button(action: onTogglePause) {
         VStack(spacing: 5) {
           Image(systemName: isPaused ? "play.fill" : "pause.fill")
-            .font(.system(size: 20, weight: .semibold))
+            .quillFont(20, weight: .semibold)
             .foregroundStyle(theme.text)
             .frame(width: 58, height: 58)
             .background(Circle().fill(theme.chip))
             .overlay(Circle().strokeBorder(theme.hair, lineWidth: 1))
           Text(isPaused ? "Resume" : "Pause")
-            .font(.system(size: 12, weight: .medium))
+            .quillFont(12, weight: .medium)
             .foregroundStyle(theme.text2)
         }
         .contentShape(Rectangle())
@@ -195,12 +195,12 @@ struct QuillCaptureSheet: View {
       Button(action: onStop) {
         VStack(spacing: 5) {
           Image(systemName: "stop.fill")
-            .font(.system(size: 22, weight: .semibold))
+            .quillFont(22, weight: .semibold)
             .foregroundStyle(.white)
             .frame(width: 58, height: 58)
             .background(Circle().fill(accent.color()))
           Text("Stop")
-            .font(.system(size: 12, weight: .semibold))
+            .quillFont(12, weight: .semibold)
             .foregroundStyle(accent.lightnessCapped(at: theme.isDark ? 0.82 : 0.5).color())
         }
         .contentShape(Rectangle())
@@ -217,12 +217,12 @@ struct QuillCaptureSheet: View {
     if isResult, let resultText {
       HStack(spacing: 9) {
         Image(systemName: "checkmark")
-          .font(.system(size: 12, weight: .bold))
+          .quillFont(12, weight: .bold)
           .foregroundStyle(.white)
           .frame(width: 24, height: 24)
           .background(Circle().fill(QuillDesign.ModePalette.resolved.color()))
         Text(resultText)
-          .font(.system(size: 16, weight: .semibold))
+          .quillFont(16, weight: .semibold)
           .foregroundStyle(theme.text)
       }
       .frame(minHeight: 26)
@@ -242,13 +242,13 @@ struct QuillCaptureSheet: View {
         // Once Stop is pressed we're no longer listening — say so, rather
         // than leaving "Listening…" up through the transcription pass.
         Text(isRecording ? "Listening…" : "Transcribing…")
-          .font(.system(size: 18))
+          .quillFont(18)
           .foregroundStyle(theme.text3)
       } else {
         QuillWrap(spacing: 5) {
           ForEach(Array(words.enumerated()), id: \.offset) { _, word in
             Text(word)
-              .font(.system(size: 18))
+              .quillFont(18)
               .foregroundStyle(theme.text)
               .transition(.opacity)
           }
@@ -272,16 +272,16 @@ struct QuillCaptureSheet: View {
     VStack(spacing: 8) {
       HStack(spacing: 10) {
         Image(systemName: routing.target?.systemImage ?? "sparkles")
-          .font(.system(size: 18))
+          .quillFont(18)
           .foregroundStyle(routing.target?.palette.color() ?? theme.text3)
           .frame(width: 22)
 
         VStack(alignment: .leading, spacing: 1) {
           Text(routing.target?.name ?? "Listening for a destination…")
-            .font(.system(size: 15.5, weight: .semibold))
+            .quillFont(15.5, weight: .semibold)
             .foregroundStyle(theme.text)
           Text(routingSubtitle(routing))
-            .font(.system(size: 12))
+            .quillFont(12)
             .foregroundStyle(theme.text3)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -289,10 +289,10 @@ struct QuillCaptureSheet: View {
       .padding(.horizontal, 13)
       .padding(.vertical, 11)
       .background(
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
           .fill(routing.target != nil ? accent.color(0.12) : theme.card)
           .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
               .strokeBorder(routing.target != nil ? accent.color(0.5) : theme.hair, lineWidth: 1)
           )
       )
@@ -318,10 +318,10 @@ struct QuillCaptureSheet: View {
     } label: {
       HStack(spacing: 7) {
         Image(systemName: d.systemImage)
-          .font(.system(size: 13))
+          .quillFont(13)
           .foregroundStyle(d.palette.color())
         Text(d.name)
-          .font(.system(size: 13.5, weight: isOn ? .semibold : .medium))
+          .quillFont(13.5, weight: isOn ? .semibold : .medium)
           .foregroundStyle(isOn ? theme.text : theme.text2)
       }
       .padding(.horizontal, 11)

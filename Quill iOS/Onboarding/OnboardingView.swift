@@ -159,7 +159,7 @@ struct OnboardingView: View {
 
   private func advance(to next: OnboardingStep) {
     UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-    withAnimation {
+    QuillMotion.run {
       step = next
     }
   }
@@ -261,7 +261,7 @@ private struct OnboardingButton: View {
   private var backgroundShape: some View {
     switch variant {
     case .primary:
-      RoundedRectangle(cornerRadius: 12, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(LinearGradient(
           colors: [OB.purple, OB.purpleDark],
           startPoint: .top,
@@ -269,14 +269,14 @@ private struct OnboardingButton: View {
         ))
         .shadow(color: OB.purple.opacity(0.30), radius: 9, y: 6)
     case .secondary:
-      RoundedRectangle(cornerRadius: 12, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(Color.white)
         .shadow(color: Color.black.opacity(0.04), radius: 1, y: 1)
     case .ghost:
-      RoundedRectangle(cornerRadius: 12, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(Color.clear)
     case .dark:
-      RoundedRectangle(cornerRadius: 12, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(OB.ink)
     }
   }
@@ -285,7 +285,7 @@ private struct OnboardingButton: View {
   private var borderOverlay: some View {
     switch variant {
     case .secondary:
-      RoundedRectangle(cornerRadius: 12, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .stroke(OB.line, lineWidth: 1)
     default:
       EmptyView()
@@ -296,6 +296,8 @@ private struct OnboardingButton: View {
 // MARK: - Step 1: Welcome
 
 private struct WelcomeStep: View {
+  /// Display type in a `Text` concatenation — see QuillFont.
+  @ScaledMetric(relativeTo: .largeTitle) private var displaySize: CGFloat = 38
   let onContinue: () -> Void
   @State private var featherOpacity: Double = 0
   @State private var contentOpacity: Double = 0
@@ -314,13 +316,13 @@ private struct WelcomeStep: View {
 
       VStack(spacing: 8) {
         (Text("Welcome to\n")
-          .font(.system(size: 38, weight: .medium, design: .serif))
+          .font(.system(size: displaySize, weight: .medium, design: .serif))
           .foregroundStyle(OB.ink)
         + Text("Quill")
-          .font(.system(size: 38, weight: .regular, design: .serif).italic())
+          .font(.system(size: displaySize, weight: .regular, design: .serif).italic())
           .foregroundStyle(OB.purpleDark)
         + Text(".")
-          .font(.system(size: 38, weight: .medium, design: .serif))
+          .font(.system(size: displaySize, weight: .medium, design: .serif))
           .foregroundStyle(OB.ink))
           .multilineTextAlignment(.center)
           .lineSpacing(2)
@@ -350,10 +352,10 @@ private struct WelcomeStep: View {
     }
     .padding(.horizontal, 22)
     .onAppear {
-      withAnimation(.easeOut(duration: 0.8)) {
+      QuillMotion.run(.easeOut(duration: 0.8)) {
         featherOpacity = 1
       }
-      withAnimation(.easeIn(duration: 0.5).delay(0.4)) {
+      QuillMotion.run(.easeIn(duration: 0.5).delay(0.4)) {
         contentOpacity = 1
       }
     }
@@ -408,12 +410,12 @@ private struct PermissionRow: View {
   var body: some View {
     Button(action: action) {
       HStack(alignment: .center, spacing: 12) {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
           .fill(OB.purpleLight)
           .frame(width: 32, height: 32)
           .overlay(
             Image(systemName: systemImage)
-              .font(.system(size: 14, weight: .semibold))
+              .quillFont(14, weight: .semibold)
               .foregroundStyle(OB.purpleDark)
           )
 
@@ -432,11 +434,11 @@ private struct PermissionRow: View {
       .padding(12)
       .padding(.horizontal, 2)
       .background(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .fill(Color.white)
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .stroke(OB.line, lineWidth: 1)
       )
     }
@@ -454,11 +456,11 @@ private struct PermissionRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(
-          RoundedRectangle(cornerRadius: 8, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
             .fill(Color.white)
         )
         .overlay(
-          RoundedRectangle(cornerRadius: 8, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
             .stroke(OB.line, lineWidth: 1)
         )
     case .requesting:
@@ -488,7 +490,7 @@ private struct PermissionsStep: View {
     VStack(alignment: .leading, spacing: 0) {
       VStack(alignment: .leading, spacing: 6) {
         Text("Grant access")
-          .font(.system(size: 26, weight: .medium, design: .serif))
+          .quillFont(26, weight: .medium, design: .serif)
           .foregroundStyle(OB.ink)
         Text("Quill never records without you holding the button.")
           .font(.subheadline)
@@ -530,6 +532,8 @@ private struct PermissionsStep: View {
 // MARK: - Step 3: Plan Choice
 
 private struct PlanChoiceStep: View {
+  /// Display type in a `Text` concatenation — see QuillFont.
+  @ScaledMetric(relativeTo: .title2) private var displaySize: CGFloat = 24
   let onProTrial: () -> Void
   let onBYOK: () -> Void
 
@@ -538,10 +542,10 @@ private struct PlanChoiceStep: View {
       VStack(alignment: .leading, spacing: 0) {
         VStack(alignment: .leading, spacing: 6) {
           (Text("How will you ")
-            .font(.system(size: 24, weight: .medium, design: .serif))
+            .font(.system(size: displaySize, weight: .medium, design: .serif))
             .foregroundStyle(OB.ink)
           + Text("pay for AI?")
-            .font(.system(size: 24, weight: .medium, design: .serif).italic())
+            .font(.system(size: displaySize, weight: .medium, design: .serif).italic())
             .foregroundStyle(OB.purpleDark))
           Text("Two ways. You can switch later.")
             .font(.subheadline)
@@ -560,12 +564,12 @@ private struct PlanChoiceStep: View {
           }
 
           Text("Quill Pro")
-            .font(.system(size: 19, weight: .medium, design: .serif))
+            .quillFont(19, weight: .medium, design: .serif)
             .foregroundStyle(OB.ink)
 
           HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text("$10")
-              .font(.system(size: 28, weight: .medium, design: .serif))
+              .quillFont(28, weight: .medium, design: .serif)
               .foregroundStyle(OB.purpleDark)
             Text("/ month")
               .font(.caption)
@@ -587,9 +591,9 @@ private struct PlanChoiceStep: View {
             endPoint: .bottom
           )
         )
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous))
         .overlay(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .stroke(OB.purpleMid, lineWidth: 1.5)
         )
         .shadow(color: OB.purple.opacity(0.15), radius: 12, y: 8)
@@ -606,12 +610,12 @@ private struct PlanChoiceStep: View {
           }
 
           Text("Bring Your Own Keys")
-            .font(.system(size: 19, weight: .medium, design: .serif))
+            .quillFont(19, weight: .medium, design: .serif)
             .foregroundStyle(OB.ink)
 
           HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text("$50")
-              .font(.system(size: 28, weight: .medium, design: .serif))
+              .quillFont(28, weight: .medium, design: .serif)
               .foregroundStyle(OB.ink)
             Text("once \u{00B7} forever")
               .font(.caption)
@@ -628,9 +632,9 @@ private struct PlanChoiceStep: View {
         }
         .padding(16)
         .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous))
         .overlay(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .stroke(OB.line, lineWidth: 1)
         )
         .padding(.top, 10)
@@ -699,7 +703,7 @@ private struct PipView: View {
 
   var body: some View {
     Text(text)
-      .font(.system(size: 10, weight: .bold))
+      .quillFont(10, weight: .bold)
       .tracking(0.6)
       .textCase(.uppercase)
       .foregroundStyle(fg)
@@ -712,6 +716,8 @@ private struct PipView: View {
 // MARK: - Step 4a: Pro Trial
 
 private struct ProTrialStep: View {
+  /// Display type in a `Text` concatenation — see QuillFont.
+  @ScaledMetric(relativeTo: .title2) private var displaySize: CGFloat = 24
   let onContinue: () -> Void
   let onSwitchBYOK: () -> Void
 
@@ -720,10 +726,10 @@ private struct ProTrialStep: View {
       VStack(alignment: .leading, spacing: 0) {
         VStack(alignment: .leading, spacing: 6) {
           (Text("Start your ")
-            .font(.system(size: 24, weight: .medium, design: .serif))
+            .font(.system(size: displaySize, weight: .medium, design: .serif))
             .foregroundStyle(OB.ink)
           + Text("10-day trial")
-            .font(.system(size: 24, weight: .medium, design: .serif).italic())
+            .font(.system(size: displaySize, weight: .medium, design: .serif).italic())
             .foregroundStyle(OB.purpleDark))
           Text("Cancel anytime. No charge if you stop before day 10.")
             .font(.subheadline)
@@ -736,7 +742,7 @@ private struct ProTrialStep: View {
           HStack(alignment: .firstTextBaseline) {
             HStack(alignment: .firstTextBaseline, spacing: 2) {
               Text("$10")
-                .font(.system(size: 30, weight: .medium, design: .serif))
+                .quillFont(30, weight: .medium, design: .serif)
                 .foregroundStyle(OB.purpleDark)
               Text("/mo")
                 .font(.subheadline)
@@ -757,9 +763,9 @@ private struct ProTrialStep: View {
         }
         .padding(16)
         .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous))
         .overlay(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .stroke(OB.line, lineWidth: 1)
         )
         .padding(.top, 16)
@@ -777,7 +783,7 @@ private struct ProTrialStep: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .fill(OB.purpleLight)
         )
         .padding(.top, 12)
@@ -795,11 +801,11 @@ private struct ProTrialStep: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .fill(OB.paperElev)
         )
         .overlay(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .stroke(OB.line, lineWidth: 1)
         )
         .padding(.top, 8)
@@ -879,7 +885,7 @@ private struct BYOKPhoneStep: View {
         // Header
         HStack(spacing: 10) {
           Text("BYOK")
-            .font(.system(size: 10, weight: .bold))
+            .quillFont(10, weight: .bold)
             .tracking(0.6)
             .textCase(.uppercase)
             .foregroundStyle(OB.inkMute)
@@ -887,7 +893,7 @@ private struct BYOKPhoneStep: View {
         .padding(.top, 72)
 
         Text("Set up your key")
-          .font(.system(size: 22, weight: .medium, design: .serif))
+          .quillFont(22, weight: .medium, design: .serif)
           .foregroundStyle(OB.ink)
           .padding(.top, 8)
 
@@ -902,12 +908,12 @@ private struct BYOKPhoneStep: View {
           set: { selectedProvider = AIProvider(rawValue: $0) ?? .anthropic }
         )) {
           HStack(spacing: 6) {
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.badge)
               .fill(Color(red: 0.80, green: 0.47, blue: 0.36))
               .frame(width: 14, height: 14)
               .overlay(
                 Text("A")
-                  .font(.system(size: 8, weight: .bold, design: .serif))
+                  .quillFont(8, weight: .bold, design: .serif)
                   .foregroundStyle(.white)
               )
             Text("Anthropic")
@@ -915,12 +921,12 @@ private struct BYOKPhoneStep: View {
           .tag(AIProvider.anthropic.rawValue)
 
           HStack(spacing: 6) {
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.badge)
               .fill(Color(red: 0.063, green: 0.639, blue: 0.498))
               .frame(width: 14, height: 14)
               .overlay(
                 Text("O")
-                  .font(.system(size: 8, weight: .bold, design: .serif))
+                  .quillFont(8, weight: .bold, design: .serif)
                   .foregroundStyle(.white)
               )
             Text("OpenAI")
@@ -953,9 +959,9 @@ private struct BYOKPhoneStep: View {
         }
         .padding(14)
         .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous))
         .overlay(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .stroke(OB.line, lineWidth: 1)
         )
         .padding(.top, 12)
@@ -971,7 +977,7 @@ private struct BYOKPhoneStep: View {
         // Paste key
         VStack(alignment: .leading, spacing: 6) {
           Text("Paste key here")
-            .font(.system(size: 10, weight: .semibold))
+            .quillFont(10, weight: .semibold)
             .tracking(0.4)
             .textCase(.uppercase)
             .foregroundStyle(OB.inkMute)
@@ -983,11 +989,11 @@ private struct BYOKPhoneStep: View {
             .foregroundStyle(OB.ink)
             .padding(12)
             .background(
-              RoundedRectangle(cornerRadius: 10, style: .continuous)
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
                 .fill(Color.white)
             )
             .overlay(
-              RoundedRectangle(cornerRadius: 10, style: .continuous)
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
                 .stroke(OB.purple, lineWidth: 1.5)
             )
         }
@@ -1021,11 +1027,11 @@ private struct BYOKPhoneStep: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .fill(Color(red: 1.0, green: 0.96, blue: 0.90))
         )
         .overlay(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .stroke(Color(red: 0.99, green: 0.89, blue: 0.75), lineWidth: 1)
         )
         .padding(.top, 10)
@@ -1055,7 +1061,7 @@ private struct BYOKPhoneStep: View {
 
     let status = KeychainStore.save(account: account, value: apiKey)
     if status == errSecSuccess {
-      withAnimation { savedFlash = true }
+      QuillMotion.run { savedFlash = true }
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
         isVerifying = false
         onContinue()
@@ -1087,7 +1093,7 @@ private struct GoogleSignInStep: View {
     VStack(alignment: .leading, spacing: 0) {
       VStack(alignment: .leading, spacing: 6) {
         Text("Connect Google")
-          .font(.system(size: 26, weight: .medium, design: .serif))
+          .quillFont(26, weight: .medium, design: .serif)
           .foregroundStyle(OB.ink)
         Text("Optional — everything else works without it. You can do this later in Settings.")
           .font(.subheadline)
@@ -1104,7 +1110,7 @@ private struct GoogleSignInStep: View {
           ForEach(PlanCatalog.googleBenefits) { benefit in
             HStack(alignment: .top, spacing: 12) {
               Image(systemName: benefit.systemImage)
-                .font(.system(size: 15, weight: .semibold))
+                .quillFont(15, weight: .semibold)
                 .foregroundStyle(OB.purple)
                 .frame(width: 26)
               VStack(alignment: .leading, spacing: 2) {
@@ -1122,11 +1128,11 @@ private struct GoogleSignInStep: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .fill(Color.white)
         )
         .overlay(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .stroke(OB.line, lineWidth: 1)
         )
 
@@ -1149,11 +1155,11 @@ private struct GoogleSignInStep: View {
         .frame(maxWidth: .infinity)
         .padding(16)
         .background(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .fill(Color.white)
         )
         .overlay(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .stroke(OB.line, lineWidth: 1)
         )
         .transition(.opacity)
@@ -1205,7 +1211,7 @@ private struct GoogleSignInStep: View {
         current.insert(.gmail)
         current.insert(.googleCalendar)
         connectedData = IntegrationConnectionStore.encode(current)
-        withAnimation { connectedEmail = email ?? "your Google account" }
+        QuillMotion.run { connectedEmail = email ?? "your Google account" }
       } catch {
         errorMessage = error.localizedDescription
       }
@@ -1217,6 +1223,8 @@ private struct GoogleSignInStep: View {
 // MARK: - Step 6: First Dictation
 
 private struct FirstDictationStep: View {
+  /// Display type in a `Text` concatenation — see QuillFont.
+  @ScaledMetric(relativeTo: .title2) private var displaySize: CGFloat = 24
   let onContinue: () -> Void
   @State private var barHeights: [CGFloat] = (0..<20).map { _ in CGFloat.random(in: 4...18) }
 
@@ -1224,10 +1232,10 @@ private struct FirstDictationStep: View {
     VStack(spacing: 0) {
       VStack(alignment: .leading, spacing: 6) {
         (Text("Press & hold to ")
-          .font(.system(size: 24, weight: .medium, design: .serif))
+          .font(.system(size: displaySize, weight: .medium, design: .serif))
           .foregroundStyle(OB.ink)
         + Text("speak")
-          .font(.system(size: 24, weight: .medium, design: .serif).italic())
+          .font(.system(size: displaySize, weight: .medium, design: .serif).italic())
           .foregroundStyle(OB.purpleDark))
         Text("Hold the mic, talk, release. We'll show you the text.")
           .font(.subheadline)
@@ -1256,7 +1264,7 @@ private struct FirstDictationStep: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(
-              RoundedRectangle(cornerRadius: 6, style: .continuous)
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
                 .fill(.white.opacity(0.06))
             )
         }
@@ -1264,7 +1272,7 @@ private struct FirstDictationStep: View {
 
         HStack(spacing: 0) {
           Text("\u{201C}hi mom calling to say hi\u{201D}")
-            .font(.system(size: 15, weight: .regular, design: .serif).italic())
+            .quillFont(15, weight: .regular, design: .serif).italic()
             .foregroundStyle(.white)
           Rectangle()
             .fill(OB.purpleMid)
@@ -1285,7 +1293,7 @@ private struct FirstDictationStep: View {
       }
       .padding(18)
       .background(
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
           .fill(
             LinearGradient(
               colors: [OB.ink, Color(red: 0.086, green: 0.086, blue: 0.094)],
@@ -1317,7 +1325,7 @@ private struct FirstDictationStep: View {
           .shadow(color: OB.purple.opacity(0.40), radius: 14, y: 10)
           .overlay(
             Image(systemName: "mic.fill")
-              .font(.system(size: 30))
+              .quillFont(30)
               .foregroundStyle(.white)
           )
       }
@@ -1330,7 +1338,7 @@ private struct FirstDictationStep: View {
     }
     .onAppear {
       // Animate waveform bars
-      withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+      QuillMotion.run(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
         barHeights = (0..<20).map { _ in CGFloat.random(in: 4...18) }
       }
     }
@@ -1340,6 +1348,8 @@ private struct FirstDictationStep: View {
 // MARK: - Step 7: Done
 
 private struct DoneStep: View {
+  /// Display type in a `Text` concatenation — see QuillFont.
+  @ScaledMetric(relativeTo: .largeTitle) private var displaySize: CGFloat = 36
   let onFinish: () -> Void
   @State private var appeared = false
 
@@ -1364,13 +1374,13 @@ private struct DoneStep: View {
       .opacity(appeared ? 1 : 0)
 
       (Text("You're ")
-        .font(.system(size: 36, weight: .medium, design: .serif))
+        .font(.system(size: displaySize, weight: .medium, design: .serif))
         .foregroundStyle(OB.ink)
       + Text("set")
-        .font(.system(size: 36, weight: .regular, design: .serif).italic())
+        .font(.system(size: displaySize, weight: .regular, design: .serif).italic())
         .foregroundStyle(OB.purpleDark)
       + Text(".")
-        .font(.system(size: 36, weight: .medium, design: .serif))
+        .font(.system(size: displaySize, weight: .medium, design: .serif))
         .foregroundStyle(OB.ink))
       .opacity(appeared ? 1 : 0)
 
@@ -1404,7 +1414,7 @@ private struct DoneStep: View {
     }
     .padding(.horizontal, 22)
     .onAppear {
-      withAnimation(.spring(duration: 0.7, bounce: 0.3)) {
+      QuillMotion.run(.spring(duration: 0.7, bounce: 0.3)) {
         appeared = true
       }
     }
@@ -1432,11 +1442,11 @@ private struct TryCard: View {
     }
     .padding(14)
     .background(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(Color.white)
     )
     .overlay(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .stroke(OB.line, lineWidth: 1)
     )
   }

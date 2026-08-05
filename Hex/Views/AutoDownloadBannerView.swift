@@ -1,5 +1,6 @@
 import Inject
 import SwiftUI
+import HexCore
 
 struct AutoDownloadBannerView: View {
 	@ObserveInjection var inject
@@ -52,11 +53,11 @@ struct AutoDownloadBannerView: View {
 		.padding(12)
 		.frame(maxWidth: .infinity, alignment: .leading)
 		.background(
-			RoundedRectangle(cornerRadius: 10)
+			RoundedRectangle(cornerRadius: QuillDesign.Radius.card)
 				.fill(.thinMaterial)
 		)
 		.overlay(
-			RoundedRectangle(cornerRadius: 10)
+			RoundedRectangle(cornerRadius: QuillDesign.Radius.card)
 				.stroke(accentColor.opacity(style == .error ? 0.4 : 0.25), lineWidth: 1)
 		)
 		.shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 4)

@@ -327,7 +327,7 @@ private struct KeyboardShortcutReferenceView: View {
           .font(.system(.body, design: .rounded).weight(.medium))
           .padding(.horizontal, 8)
           .padding(.vertical, 3)
-          .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+          .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: QuillDesign.Radius.chip))
       } else {
         Text("Not set")
           .font(.caption)

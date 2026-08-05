@@ -39,17 +39,17 @@ struct ActionConfirmationView: View {
     .frame(minHeight: 280)
     .animation(.spring(duration: 0.32, bounce: 0.18), value: store.completion)
     .background(
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
         .fill(.ultraThinMaterial)
         .overlay(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .fill(.black.opacity(0.45))
         )
         .shadow(color: .black.opacity(0.35), radius: 18, y: 10)
     )
-    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous))
     .overlay(
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
         .strokeBorder(.white.opacity(0.10), lineWidth: 0.5)
     )
     .onAppear { store.send(.onAppear) }
@@ -60,7 +60,7 @@ struct ActionConfirmationView: View {
 
   private var header: some View {
     HStack(alignment: .center, spacing: 12) {
-      integrationTile(size: 36, cornerRadius: 8)
+      integrationTile(size: 36, cornerRadius: QuillDesign.Radius.chip)
 
       VStack(alignment: .leading, spacing: 2) {
         if store.availableIntegrations.count > 1 {
@@ -114,7 +114,7 @@ struct ActionConfirmationView: View {
         // Top mini-row inside the card: integration tile + bold title +
         // secondary date/time. Mirrors the screenshot's preview header.
         HStack(alignment: .center, spacing: 10) {
-          integrationTile(size: 32, cornerRadius: 6)
+          integrationTile(size: 32, cornerRadius: QuillDesign.Radius.chip)
           VStack(alignment: .leading, spacing: 2) {
             Text(displayTitle)
               .font(.system(size: 13, weight: .semibold))
@@ -147,11 +147,11 @@ struct ActionConfirmationView: View {
         }
       }
       .background(
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .fill(.white.opacity(0.05))
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .strokeBorder(.white.opacity(0.08), lineWidth: 0.5)
       )
     }
@@ -280,7 +280,7 @@ struct ActionConfirmationView: View {
           Text("Run action")
             .font(.system(size: 13, weight: .semibold))
           // Return-key glyph chip on the trailing edge.
-          RoundedRectangle(cornerRadius: 4, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.badge, style: .continuous)
             .fill(.white.opacity(0.22))
             .frame(width: 18, height: 18)
             .overlay(
@@ -293,7 +293,7 @@ struct ActionConfirmationView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
         .background(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .fill(executeDisabled ? Color.purple.opacity(0.4) : Color.purple)
         )
       }

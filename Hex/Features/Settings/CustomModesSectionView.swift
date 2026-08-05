@@ -59,6 +59,7 @@ struct CustomModesSectionView: View {
                 Image(systemName: "trash")
               }
               .controlSize(.small)
+              .accessibilityLabel("Delete mode \(mode.name)")
             }
             .padding(.vertical, 4)
           }

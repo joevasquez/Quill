@@ -533,9 +533,9 @@ struct MultiActionConfirmationSheet: View {
         }
         VStack(alignment: .leading, spacing: 2) {
           Text("Understanding…")
-            .font(.system(size: 15, weight: .semibold))
+            .quillFont(15, weight: .semibold)
           Text("Turning your words into actions")
-            .font(.system(size: 12))
+            .quillFont(12)
             .foregroundStyle(.secondary)
         }
         Spacer()
@@ -546,12 +546,12 @@ struct MultiActionConfirmationSheet: View {
         .frame(height: 56)
         .overlay(
           HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.08))
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip).fill(Color.primary.opacity(0.08))
               .frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 5) {
-              RoundedRectangle(cornerRadius: 3).fill(Color.primary.opacity(0.08))
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.badge).fill(Color.primary.opacity(0.08))
                 .frame(width: 150, height: 10)
-              RoundedRectangle(cornerRadius: 3).fill(Color.primary.opacity(0.06))
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.badge).fill(Color.primary.opacity(0.06))
                 .frame(width: 90, height: 8)
             }
             Spacer()
@@ -573,12 +573,12 @@ struct MultiActionConfirmationSheet: View {
         QuillSourceMark(source: suggestion.source, size: 40)
         VStack(alignment: .leading, spacing: 2) {
           Text("From \(suggestion.source.displayName)")
-            .font(.system(size: 11, weight: .bold))
+            .quillFont(11, weight: .bold)
             .tracking(0.2)
             .textCase(.uppercase)
             .foregroundStyle(QuillDesign.destination(hue: suggestion.source.hue).color())
           Text(suggestion.headline)
-            .font(.system(size: 17, weight: .bold))
+            .quillFont(17, weight: .bold)
             .tracking(-0.3)
             .lineLimit(2)
         }
@@ -588,14 +588,14 @@ struct MultiActionConfirmationSheet: View {
             .fill(QuillDesign.actionAccent.opacity(0.2))
             .frame(width: 36, height: 36)
           Image(systemName: "bolt.horizontal.fill")
-            .font(.system(size: 16, weight: .semibold))
+            .quillFont(16, weight: .semibold)
             .foregroundStyle(QuillDesign.actionAccent)
         }
         VStack(alignment: .leading, spacing: 2) {
           Text(vm.items.count == 1 ? "Action detected" : "\(vm.items.count) actions detected")
-            .font(.system(size: 15, weight: .semibold))
+            .quillFont(15, weight: .semibold)
           Text(vm.wasAutoRouted ? "Auto-detected from your dictation" : (vm.items.count == 1 ? "Action mode" : "Multi-action mode"))
-            .font(.system(size: 12))
+            .quillFont(12)
             .foregroundStyle(.secondary)
         }
       }
@@ -610,11 +610,11 @@ struct MultiActionConfirmationSheet: View {
     if !vm.rawTranscript.isEmpty {
       VStack(alignment: .leading, spacing: 6) {
         Text("HEARD")
-          .font(.system(size: 10, weight: .semibold))
+          .quillFont(10, weight: .semibold)
           .tracking(1.4)
           .foregroundStyle(.secondary)
         Text("\u{201C}\(vm.rawTranscript)\u{201D}")
-          .font(.system(size: 14))
+          .quillFont(14)
           .lineLimit(3)
       }
     }
@@ -625,7 +625,7 @@ struct MultiActionConfirmationSheet: View {
   private var willDoSection: some View {
     VStack(alignment: .leading, spacing: 6) {
       Text("WILL DO")
-        .font(.system(size: 10, weight: .semibold))
+        .quillFont(10, weight: .semibold)
         .tracking(1.4)
         .foregroundStyle(.secondary)
 
@@ -642,32 +642,32 @@ struct MultiActionConfirmationSheet: View {
         VStack(alignment: .leading, spacing: 2) {
           HStack(spacing: 5) {
             Text(item.displayTitle)
-              .font(.system(size: 14, weight: .semibold))
+              .quillFont(14, weight: .semibold)
               .lineLimit(1)
             if item.dependsOnID != nil {
               Image(systemName: "link")
-                .font(.system(size: 10, weight: .semibold))
+                .quillFont(10, weight: .semibold)
                 .foregroundStyle(.secondary)
             }
           }
           Text(item.displaySubtitle)
-            .font(.system(size: 12))
+            .quillFont(12)
             .foregroundStyle(.secondary)
             .lineLimit(1)
         }
         Spacer()
         Button {
-          withAnimation { vm.items[index].isExpanded.toggle() }
+          QuillMotion.run { vm.items[index].isExpanded.toggle() }
         } label: {
           Image(systemName: item.isExpanded ? "chevron.up" : "chevron.down")
-            .font(.system(size: 11, weight: .bold))
+            .quillFont(11, weight: .bold)
             .foregroundStyle(.secondary)
         }
         Button {
-          withAnimation { vm.removeItem(at: item.id) }
+          QuillMotion.run { vm.removeItem(at: item.id) }
         } label: {
           Image(systemName: "xmark")
-            .font(.system(size: 11, weight: .bold))
+            .quillFont(11, weight: .bold)
             .foregroundStyle(.secondary)
         }
       }
@@ -695,7 +695,7 @@ struct MultiActionConfirmationSheet: View {
           ForEach(args.keys.sorted(), id: \.self) { key in
             fieldRow(key) {
               Text(args[key] ?? "")
-                .font(.system(size: 13))
+                .quillFont(13)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -736,11 +736,11 @@ struct MultiActionConfirmationSheet: View {
   private func fieldRow(_ label: String, @ViewBuilder content: () -> some View) -> some View {
     HStack {
       Text(label)
-        .font(.system(size: 12))
+        .quillFont(12)
         .foregroundStyle(.secondary)
         .frame(width: 54, alignment: .leading)
       content()
-        .font(.system(size: 13))
+        .quillFont(13)
     }
   }
 
@@ -753,9 +753,9 @@ struct MultiActionConfirmationSheet: View {
       if vm.suggestionContext != nil {
         HStack(spacing: 6) {
           Image(systemName: "lock")
-            .font(.system(size: 11, weight: .medium))
+            .quillFont(11, weight: .medium)
           Text("Nothing is sent until you tap Run — edit anything above.")
-            .font(.system(size: 12))
+            .quillFont(12)
         }
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity)
@@ -768,7 +768,7 @@ struct MultiActionConfirmationSheet: View {
           dismiss()
         } label: {
           Label("Save to note instead", systemImage: "note.text")
-            .font(.system(size: 13, weight: .medium))
+            .quillFont(13, weight: .medium)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
@@ -782,7 +782,7 @@ struct MultiActionConfirmationSheet: View {
     HStack(spacing: 12) {
       Button { dismiss() } label: {
         Text("Dismiss")
-          .font(.system(size: 14, weight: .medium))
+          .quillFont(14, weight: .medium)
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity)
           .padding(.vertical, 10)
@@ -796,13 +796,13 @@ struct MultiActionConfirmationSheet: View {
             ProgressView().tint(.white)
           }
           Text(vm.items.count == 1 ? "Run action" : "Run \(vm.items.count) actions")
-            .font(.system(size: 14, weight: .semibold))
+            .quillFont(14, weight: .semibold)
         }
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
         .background(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .fill(vm.isExecuting ? Color.purple.opacity(0.5) : Color.purple)
         )
       }
@@ -824,14 +824,14 @@ struct MultiActionConfirmationSheet: View {
               .fill(c.failed == 0 ? QuillDesign.success : Color.orange)
               .frame(width: 46, height: 46)
             Image(systemName: c.failed == 0 ? "checkmark" : "exclamationmark.triangle")
-              .font(.system(size: 21, weight: .bold))
+              .quillFont(21, weight: .bold)
               .foregroundStyle(.white)
           }
           VStack(spacing: 3) {
             Text(c.failed == 0 ? "Done" : "Partial success")
-              .font(.system(size: 16, weight: .semibold))
+              .quillFont(16, weight: .semibold)
             Text(completionSubhead(c))
-              .font(.system(size: 13))
+              .quillFont(13)
               .foregroundStyle(.secondary)
           }
         }
@@ -852,12 +852,12 @@ struct MultiActionConfirmationSheet: View {
             dismiss()
           } label: {
             Text("Done")
-              .font(.system(size: 14, weight: .semibold))
+              .quillFont(14, weight: .semibold)
               .foregroundStyle(.white)
               .frame(maxWidth: .infinity)
               .padding(.vertical, 10)
               .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
                   .fill(Color.purple)
               )
           }
@@ -874,18 +874,18 @@ struct MultiActionConfirmationSheet: View {
     if !answer.isEmpty {
       VStack(alignment: .leading, spacing: 8) {
         Text("ANSWER")
-          .font(.system(size: 10, weight: .semibold))
+          .quillFont(10, weight: .semibold)
           .tracking(1.4)
           .foregroundStyle(.secondary)
         Text(answer)
-          .font(.system(size: 16, weight: .semibold))
+          .quillFont(16, weight: .semibold)
           .textSelection(.enabled)
         Button {
           UIPasteboard.general.string = answer
           UINotificationFeedbackGenerator().notificationOccurred(.success)
         } label: {
           Label("Copy", systemImage: "doc.on.doc")
-            .font(.system(size: 13, weight: .semibold))
+            .quillFont(13, weight: .semibold)
             .foregroundStyle(.white)
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
@@ -895,11 +895,11 @@ struct MultiActionConfirmationSheet: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(14)
       .background(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .fill(Color.purple.opacity(colorScheme == .dark ? 0.18 : 0.08))
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .strokeBorder(Color.purple.opacity(0.25), lineWidth: 0.5)
       )
     }
@@ -908,15 +908,15 @@ struct MultiActionConfirmationSheet: View {
   private func stepOutcomeRow(_ step: MultiActionConfirmationViewModel.Completion.StepOutcome) -> some View {
     HStack(alignment: .top, spacing: 10) {
       Image(systemName: stepStatusIcon(step.status))
-        .font(.system(size: 14, weight: .semibold))
+        .quillFont(14, weight: .semibold)
         .foregroundStyle(stepStatusColor(step.status))
         .padding(.top, 1)
       VStack(alignment: .leading, spacing: 3) {
         Text(step.title)
-          .font(.system(size: 13, weight: .semibold))
+          .quillFont(13, weight: .semibold)
         if !step.detail.isEmpty {
           Text(step.detail)
-            .font(.system(size: 12))
+            .quillFont(12)
             .foregroundStyle(.secondary)
             .textSelection(.enabled)
         }
@@ -930,7 +930,7 @@ struct MultiActionConfirmationSheet: View {
           UINotificationFeedbackGenerator().notificationOccurred(.success)
         } label: {
           Image(systemName: "doc.on.doc")
-            .font(.system(size: 13, weight: .semibold))
+            .quillFont(13, weight: .semibold)
             .foregroundStyle(.secondary)
             .frame(width: 30, height: 30)
             .background(Circle().fill(Color.secondary.opacity(0.12)))
@@ -981,12 +981,12 @@ struct MultiActionConfirmationSheet: View {
       return QuillDesign.mcpTile
     }()
     let tint = target.tintHex.flatMap { Color(hex: $0) } ?? fallback
-    return RoundedRectangle(cornerRadius: 6, style: .continuous)
+    return RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
       .fill(tint)
       .frame(width: 28, height: 28)
       .overlay(
         Image(systemName: target.systemImage)
-          .font(.system(size: 14, weight: .semibold))
+          .quillFont(14, weight: .semibold)
           .foregroundStyle(.white)
       )
   }

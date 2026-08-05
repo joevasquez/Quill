@@ -19,6 +19,9 @@ struct MultiActionConfirmationFeature {
     /// Routine trust ladder: when true (auto-run routine), execution starts
     /// on appear — the panel becomes a progress display instead of a prompt.
     var autoExecute: Bool = false
+    /// How this run was started — recorded on the trace so the Actions
+    /// history can tell a dictated command from a typed one.
+    var trigger: ActionRun.Trigger = .voice
 
     struct ActionItemState: Equatable, Identifiable {
       let id: UUID
@@ -234,9 +237,16 @@ struct MultiActionConfirmationFeature {
       var hasReviewableStep: Bool { steps.contains { $0.reviewable } }
     }
 
-    init(intents: [ActionIntent], rawTranscript: String, autoExecute: Bool = false, sourceAppBundleID: String? = nil) {
+    init(
+      intents: [ActionIntent],
+      rawTranscript: String,
+      autoExecute: Bool = false,
+      sourceAppBundleID: String? = nil,
+      trigger: ActionRun.Trigger = .voice
+    ) {
       self.rawTranscript = rawTranscript
       self.sourceAppBundleID = sourceAppBundleID
+      self.trigger = trigger
       var built = intents.map { ActionItemState(intent: $0) }
       // Resolve each step's `dependsOn` index into the depended-on item's id,
       // so chaining survives panel reordering/removal.
@@ -326,13 +336,27 @@ struct MultiActionConfirmationFeature {
         state.isExecuting = true
         let itemsSnapshot = state.items.elements
         let request = state.rawTranscript
+        let trigger = state.trigger
         @Shared(.hexSettings) var hexSettings: HexSettings
         let provider = hexSettings.aiProvider
         return .run { [todoist, reminders, calendarAdapter, gmailAdapter, googleCalendarAdapter, actionParsing] send in
-          // Runs one already-final intent, returning both the panel result and
-          // the raw text output (MCP tool result / created-item id) so a
-          // dependent step can consume it.
-          @Sendable func execute(_ finalIntent: ActionIntent) async -> (State.ItemResult, String) {
+          let runStartedAt = Date()
+
+          // What one execution produced: the panel result, the raw text a
+          // dependent step can consume, the error (kept separately so the
+          // trace records *why* even when the panel only shows "queued"),
+          // and the timings.
+          struct Outcome {
+            let result: State.ItemResult
+            let text: String
+            let error: String?
+            let startedAt: Date
+            let finishedAt: Date
+          }
+
+          // Runs one already-final intent.
+          @Sendable func execute(_ finalIntent: ActionIntent) async -> Outcome {
+            let startedAt = Date()
             let integration = finalIntent.targetIntegration
             do {
               let id: String
@@ -356,27 +380,92 @@ struct MultiActionConfirmationFeature {
                   throw ActionConfirmationError.unsupportedIntegration(integration)
                 }
               }
-              return (.succeeded(id), id)
+              return Outcome(result: .succeeded(id), text: id, error: nil, startedAt: startedAt, finishedAt: Date())
             } catch {
+              let message = error.localizedDescription
               if QueueableErrorClassifier.isQueueable(error) {
-                await ActionQueueManager.shared.enqueue(finalIntent, lastError: error.localizedDescription)
-                return (.queued, "")
+                await ActionQueueManager.shared.enqueue(finalIntent, lastError: message)
+                return Outcome(result: .queued, text: "", error: message, startedAt: startedAt, finishedAt: Date())
               }
-              return (.failed(error.localizedDescription), "")
+              return Outcome(result: .failed(message), text: "", error: message, startedAt: startedAt, finishedAt: Date())
             }
           }
 
           // Each item's raw text output, keyed by id — feeds dependent steps.
           var outputs: [UUID: String] = [:]
+          // Trace rows, keyed by item id and assembled in panel order below.
+          var traces: [UUID: ActionStepTrace] = [:]
+
+          // Panel-order index of each item, so a chained step's trace can
+          // point at the step it consumed.
+          let indexByID = Dictionary(
+            uniqueKeysWithValues: itemsSnapshot.enumerated().map { ($0.element.id, $0.offset) }
+          )
+
+          /// Builds the trace row for a step. `executed` is the intent as it
+          /// actually ran (post-resolve); `planned` is what the panel held.
+          func makeTrace(
+            id: UUID,
+            index: Int,
+            title: String,
+            planned: ActionIntent,
+            executed: ActionIntent?,
+            dependsOnIndex: Int?,
+            status: ActionStepTrace.Status,
+            outcome: Outcome?,
+            error: String?
+          ) -> ActionStepTrace {
+            let effective = executed ?? planned
+            return ActionStepTrace(
+              index: index,
+              title: title,
+              targetName: ConnectionTarget.forIntent(effective).displayName,
+              actionType: effective.actionType.rawValue,
+              status: status,
+              startedAt: outcome?.startedAt,
+              finishedAt: outcome?.finishedAt,
+              dependsOnIndex: dependsOnIndex,
+              resolveInstruction: planned.resolveInstruction,
+              plannedIntentJSON: planned.traceJSON,
+              resolvedIntentJSON: executed.map { $0.traceJSON },
+              mcpServer: effective.mcpServerName,
+              mcpTool: effective.mcpTool,
+              mcpArguments: effective.mcpArguments,
+              rawResult: outcome.map(\.text).flatMap { $0.isEmpty ? nil : $0 },
+              errorMessage: error
+            )
+          }
+
+          func traceStatus(_ result: State.ItemResult) -> ActionStepTrace.Status {
+            switch result {
+            case .succeeded: .succeeded
+            case .failed: .failed
+            case .queued: .queued
+            }
+          }
 
           // Phase 1 — independent steps run concurrently, as before.
-          await withTaskGroup(of: (UUID, State.ItemResult, String).self) { group in
+          await withTaskGroup(of: (UUID, ActionIntent, Outcome).self) { group in
             for item in itemsSnapshot where item.dependsOnID == nil {
-              group.addTask { let (r, text) = await execute(item.buildFinalIntent()); return (item.id, r, text) }
+              group.addTask {
+                let intent = item.buildFinalIntent()
+                return (item.id, intent, await execute(intent))
+              }
             }
-            for await (itemID, result, text) in group {
-              outputs[itemID] = text
-              await send(.itemResult(itemID, result))
+            for await (itemID, intent, outcome) in group {
+              outputs[itemID] = outcome.text
+              traces[itemID] = makeTrace(
+                id: itemID,
+                index: indexByID[itemID] ?? 0,
+                title: itemsSnapshot.first { $0.id == itemID }?.displayTitle ?? intent.title,
+                planned: intent,
+                executed: nil,
+                dependsOnIndex: nil,
+                status: traceStatus(outcome.result),
+                outcome: outcome,
+                error: outcome.error
+              )
+              await send(.itemResult(itemID, outcome.result))
             }
           }
 
@@ -384,23 +473,68 @@ struct MultiActionConfirmationFeature {
           // runs an LLM resolve pass over its dependency's output before
           // executing (e.g. fill the email recipient from a lookup result).
           for item in itemsSnapshot where item.dependsOnID != nil {
+            let dependencyIndex = item.dependsOnID.flatMap { indexByID[$0] }
+            let planned = item.buildFinalIntent()
             let priorText = item.dependsOnID.flatMap { outputs[$0] } ?? ""
             guard !priorText.isEmpty else {
               // The step it depends on failed or was queued — don't run a
               // half-filled action (e.g. a draft with no recipient).
-              await send(.itemResult(item.id, .failed("Skipped — a step it depends on didn't complete")))
+              let message = "Skipped — a step it depends on didn't complete"
+              traces[item.id] = makeTrace(
+                id: item.id,
+                index: indexByID[item.id] ?? 0,
+                title: item.displayTitle,
+                planned: planned,
+                executed: nil,
+                dependsOnIndex: dependencyIndex,
+                status: .skipped,
+                outcome: nil,
+                error: message
+              )
+              await send(.itemResult(item.id, .failed(message)))
               continue
             }
-            var intent = item.buildFinalIntent()
+            var intent = planned
+            var resolved: ActionIntent?
             if intent.resolveInstruction != nil {
               intent = (try? await actionParsing.resolveStep(intent, priorText, request, provider)) ?? intent
+              resolved = intent
               // Reflect the resolved values (filled recipient, personalized
               // body) back into the item so the completion summary is accurate.
               await send(.dependentResolved(item.id, intent))
             }
-            let (result, text) = await execute(intent)
-            outputs[item.id] = text
-            await send(.itemResult(item.id, result))
+            let outcome = await execute(intent)
+            outputs[item.id] = outcome.text
+            traces[item.id] = makeTrace(
+              id: item.id,
+              index: indexByID[item.id] ?? 0,
+              title: item.displayTitle,
+              planned: planned,
+              executed: resolved,
+              dependsOnIndex: dependencyIndex,
+              status: traceStatus(outcome.result),
+              outcome: outcome,
+              error: outcome.error
+            )
+            await send(.itemResult(item.id, outcome.result))
+          }
+
+          // Persist the trace. Diagnostic only — a failure here must never
+          // affect the action the user just ran, so it's the last thing done
+          // and nothing downstream depends on it.
+          let orderedTraces = itemsSnapshot.compactMap { traces[$0.id] }.sorted { $0.index < $1.index }
+          guard !orderedTraces.isEmpty else { return }
+          await ActionRunStore.shared.record(
+            ActionRun(
+              startedAt: runStartedAt,
+              finishedAt: Date(),
+              trigger: trigger,
+              request: request,
+              steps: orderedTraces
+            )
+          )
+          await MainActor.run {
+            NotificationCenter.default.post(name: .actionRunRecorded, object: nil)
           }
         }
 

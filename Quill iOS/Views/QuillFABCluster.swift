@@ -15,6 +15,12 @@
 //  Recording state: the + button flips to a red stop button — single
 //  tap to stop, routed to whichever mode started the recording.
 //
+//  Liquid Glass: the cluster is a GlassEffectContainer and each FAB carries
+//  a `glassEffectID`, so fanning out is a morph *out of the + button* rather
+//  than three circles sliding up behind it. That's what the API is for, and
+//  it replaces both the hand-built move/opacity transitions and the drop
+//  shadows the flat design language said we shouldn't be using.
+//
 
 import HexCore
 import SwiftUI
@@ -32,6 +38,7 @@ struct QuillFABCluster: View {
   let onRequestSettings: () -> Void
 
   @State private var expanded = false
+  @Namespace private var glassNamespace
 
   /// Visible diameter of each round FAB.
   private let fabSize: CGFloat = 60
@@ -57,33 +64,33 @@ struct QuillFABCluster: View {
   // MARK: - Body
 
   var body: some View {
-    VStack(alignment: .trailing, spacing: 14) {
-      if expanded {
-        // Top: mode dropdown to the LEFT of the dictate button.
-        // The dropdown is system-Menu-backed so its popup floats above
-        // all of this — no clipping concerns from the cluster.
-        HStack(spacing: 12) {
-          QuillModeDropdown(
-            selectionRaw: $modeSelectionRaw,
-            customModes: customModes,
-            visibleBuiltInModes: visibleBuiltInModes,
-            hasAPIKey: hasAPIKey,
-            onRequestAPIKeySetup: onRequestSettings
-          )
-          dictateFAB
+    // Spacing controls when neighbouring glass merges; matched to the stack
+    // spacing so the FABs read as one fluid cluster mid-morph.
+    GlassEffectContainer(spacing: 14) {
+      VStack(alignment: .trailing, spacing: 14) {
+        if expanded {
+          // Top: mode dropdown to the LEFT of the dictate button.
+          // The dropdown is system-Menu-backed so its popup floats above
+          // all of this — no clipping concerns from the cluster.
+          HStack(spacing: 12) {
+            QuillModeDropdown(
+              selectionRaw: $modeSelectionRaw,
+              customModes: customModes,
+              visibleBuiltInModes: visibleBuiltInModes,
+              hasAPIKey: hasAPIKey,
+              onRequestAPIKeySetup: onRequestSettings
+            )
+            dictateFAB
+          }
+
+          photoFAB
+          typeFAB
         }
-        .transition(.move(edge: .bottom).combined(with: .opacity))
 
-        photoFAB
-          .transition(.move(edge: .bottom).combined(with: .opacity))
-
-        typeFAB
-          .transition(.move(edge: .bottom).combined(with: .opacity))
+        plusButton
       }
-
-      plusButton
     }
-    .animation(.spring(response: 0.32, dampingFraction: 0.78), value: expanded)
+    .quillAnimation(.spring(response: 0.32, dampingFraction: 0.78), value: expanded)
   }
 
   // MARK: - Trigger button (+ when idle, stop when recording)
@@ -109,36 +116,28 @@ struct QuillFABCluster: View {
         expanded.toggle()
       }
     } label: {
-      ZStack {
-        // Filled circle — purple when idle, red when recording, teal
-        // while the agent is parsing. The color IS the state indicator.
-        Circle()
-          .fill(
-            LinearGradient(
-              colors: plusColors,
-              startPoint: .topLeading,
-              endPoint: .bottomTrailing
-            )
-          )
-          .frame(width: plusSize, height: plusSize)
-          .shadow(color: plusColors[0].opacity(0.4), radius: 8, y: 4)
-
+      Group {
         if isActionParsing {
           ProgressView()
             .tint(.white)
             .controlSize(.regular)
         } else {
           Image(systemName: isAnyRecording ? "stop.fill" : "plus")
-            .font(.system(size: 26, weight: .bold))
+            .quillFont(26, weight: .bold)
             .foregroundStyle(.white)
             // Rotation only applies to the +. Stop glyph never rotates;
             // expanding has no meaning while recording.
             .rotationEffect(.degrees(expanded && !isAnyRecording ? 45 : 0))
         }
       }
+      // The tint IS the state indicator — purple idle, red recording, teal
+      // parsing — now carried by the glass rather than a gradient fill.
+      .frame(width: plusSize, height: plusSize)
+      .glassEffect(.regular.tint(plusColors[0]).interactive(), in: .circle)
       .frame(width: fabSlot, height: fabSlot)
     }
     .buttonStyle(.plain)
+    .glassEffectID("plus", in: glassNamespace)
     .accessibilityLabel(plusAccessibilityLabel)
   }
 
@@ -189,6 +188,7 @@ struct QuillFABCluster: View {
         expanded = false
       }
     )
+    .glassEffectID("dictate", in: glassNamespace)
     .accessibilityLabel(recording ? "Stop recording" : "Start dictating (hold for an action)")
   }
 
@@ -202,6 +202,7 @@ struct QuillFABCluster: View {
       fabBubble(glyph: "camera.fill", tint: .purple, glyphSize: 22)
     }
     .buttonStyle(.plain)
+    .glassEffectID("photo", in: glassNamespace)
     .accessibilityLabel("Add photo")
   }
 
@@ -215,6 +216,7 @@ struct QuillFABCluster: View {
       fabBubble(glyph: "keyboard", tint: QuillDesign.actionAccent, glyphSize: 20)
     }
     .buttonStyle(.plain)
+    .glassEffectID("type", in: glassNamespace)
     .accessibilityLabel("Type a command")
   }
 
@@ -224,22 +226,11 @@ struct QuillFABCluster: View {
   /// recording-indicator extras). Centralized so tint changes only
   /// touch one place.
   private func fabBubble(glyph: String, tint: Color, glyphSize: CGFloat) -> some View {
-    ZStack {
-      Circle()
-        .fill(
-          LinearGradient(
-            colors: [tint, tint.opacity(0.82)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-          )
-        )
-        .frame(width: fabSize, height: fabSize)
-        .shadow(color: tint.opacity(0.35), radius: 8, y: 4)
-
-      Image(systemName: glyph)
-        .font(.system(size: glyphSize, weight: .semibold))
-        .foregroundStyle(.white)
-    }
-    .frame(width: fabSlot, height: fabSlot)
+    Image(systemName: glyph)
+      .font(.system(size: glyphSize, weight: .semibold))
+      .foregroundStyle(.white)
+      .frame(width: fabSize, height: fabSize)
+      .glassEffect(.regular.tint(tint).interactive(), in: .circle)
+      .frame(width: fabSlot, height: fabSlot)
   }
 }

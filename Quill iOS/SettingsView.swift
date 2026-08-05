@@ -108,12 +108,12 @@ struct SettingsView: View {
           HStack(spacing: 6) {
             Label("Proactive suggestions", systemImage: "lightbulb.max")
             Text("PRO")
-              .font(.system(size: 9, weight: .heavy))
+              .quillFont(9, weight: .heavy)
               .tracking(0.4)
               .foregroundStyle(.white)
               .padding(.vertical, 1.5)
               .padding(.horizontal, 5)
-              .background(RoundedRectangle(cornerRadius: 5).fill(QuillDesign.brand.color()))
+              .background(RoundedRectangle(cornerRadius: QuillDesign.Radius.badge).fill(QuillDesign.brand.color()))
           }
         }
         .onChange(of: suggestionsEnabled) { _, isOn in

@@ -45,7 +45,7 @@ struct WordRemappingsView: View {
 									.padding(.horizontal, 8)
 									.padding(.vertical, 6)
 									.background(
-										RoundedRectangle(cornerRadius: 6)
+										RoundedRectangle(cornerRadius: QuillDesign.Radius.chip)
 											.fill(Color(nsColor: .controlBackgroundColor))
 									)
 							}
@@ -238,6 +238,7 @@ private struct RemovalRow: View {
 			}
 			.buttonStyle(.borderless)
 			.frame(width: Layout.deleteColumnWidth)
+			.accessibilityLabel("Delete replacement")
 		}
 		.padding(.horizontal, Layout.rowHorizontalPadding)
 		.padding(.vertical, Layout.rowVerticalPadding)

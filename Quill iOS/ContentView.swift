@@ -70,6 +70,15 @@ final class RecordingViewModel: ObservableObject {
   /// processing is hanging.
   @Published var isPreparingModel: Bool = false
 
+  /// Where the agent may route the next action: the destinations left
+  /// enabled on the Act chip row, plus anything pinned with an `@` mention
+  /// in a typed command. ContentView keeps `routable` in sync; the typed
+  /// path sets `pinned` at submit time.
+  ///
+  /// Before this existed the chip toggles were computed and then dropped on
+  /// the floor — muting an app changed the row's look and nothing else.
+  var actTargeting: ActTargeting = .unrestricted
+
   private var recorder = IOSRecordingClient.shared
   private var whisperKit: WhisperKit?
   private var timerTask: Task<Void, Never>?
@@ -441,9 +450,14 @@ final class RecordingViewModel: ObservableObject {
   /// Typed command entry point — same agent pipeline as voice (routines,
   /// memory, MCP, confirmation sheet), just skipping the recorder +
   /// Whisper. For meetings, trains, and anywhere talking is awkward.
-  func runTypedAction(_ text: String, provider: AIProvider) async {
+  func runTypedAction(
+    _ text: String,
+    provider: AIProvider,
+    pinned: [QuillActDestination] = []
+  ) async {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
+    actTargeting.pinned = pinned
     switch phase {
     case .idle, .done, .error:
       break
@@ -507,8 +521,11 @@ final class RecordingViewModel: ObservableObject {
         do {
           // MCP: list connected servers' tools so the LLM can emit
           // mcpCall actions (no-op when no server has a cached catalog).
+          // Servers outside the targeting focus are withheld entirely —
+          // a tool the model never saw is one it can't call.
+          let targeting = actTargeting
           let mcpContext = await MCPToolCatalog.shared.promptContext(
-            servers: MCPServersStorage.load()
+            servers: targeting.allowedServers(from: MCPServersStorage.load())
           )
           // Agent memory: known people/projects/preferences so "email Mike"
           // resolves without clarifying questions.
@@ -522,7 +539,8 @@ final class RecordingViewModel: ObservableObject {
             transcript: cleaned,
             provider: provider,
             memoryContext: memoryContext,
-            mcpContext: mcpContext
+            mcpContext: mcpContext,
+            targeting: targeting
           )
           // Fire-and-forget memory pass: distill durable entities from the
           // transcript so the agent gets smarter with every action.
@@ -538,7 +556,21 @@ final class RecordingViewModel: ObservableObject {
           guard sessionID == recordingSessionID else { return }
           // Every parse — single or multi — flows through the one
           // confirmation sheet (a single action is a one-item list).
-          parsedMultiIntents = response.actions
+          //
+          // An unambiguous pin (exactly one native destination) hard-wins
+          // over whatever the model chose; two or more stay advisory since
+          // "@Gmail draft it and log it in @Dex" is a real two-step command.
+          if let forced = targeting.forcedIntegration {
+            parsedMultiIntents = response.actions.map { intent in
+              guard intent.actionType != .mcpCall, intent.actionType != .open else { return intent }
+              var resolved = intent
+              resolved.targetIntegration = forced
+              return resolved
+            }
+          } else {
+            parsedMultiIntents = response.actions
+          }
+          actTargeting.pinned = []
           phase = .done
           UINotificationFeedbackGenerator().notificationOccurred(.success)
         } catch {
@@ -786,13 +818,13 @@ struct ContentView: View {
         // queue. Auto-dismiss after 3s — long enough to read, short
         // enough not to nag.
         offlineBannerDismissTask?.cancel()
-        withAnimation(.spring(duration: 0.3, bounce: 0.2)) {
+        QuillMotion.run(.spring(duration: 0.3, bounce: 0.2)) {
           showOfflineQueuedBanner = true
         }
         offlineBannerDismissTask = Task { @MainActor in
           try? await Task.sleep(for: .seconds(3))
           guard !Task.isCancelled else { return }
-          withAnimation(.easeOut(duration: 0.3)) {
+          QuillMotion.run(.easeOut(duration: 0.3)) {
             showOfflineQueuedBanner = false
           }
         }
@@ -898,8 +930,8 @@ struct ContentView: View {
         }
       }
       .sheet(isPresented: $showingTypedAction) {
-        TypedActionSheet { text in
-          Task { await vm.runTypedAction(text, provider: aiProvider) }
+        TypedActionSheet(destinations: routableDestinations) { text, pinned in
+          Task { await vm.runTypedAction(text, provider: aiProvider, pinned: pinned) }
         }
       }
       .sheet(isPresented: Binding(
@@ -1036,6 +1068,18 @@ struct ContentView: View {
     .onChange(of: defaultCaptureModeRaw) { _, newRaw in
       captureMode = QuillMode(rawValue: newRaw) ?? .auto
     }
+    // Keep the agent's routing set in step with the chip row. Muting an app
+    // now narrows what the planner is shown, rather than only dimming a chip.
+    .onAppear { syncActTargeting() }
+    .onChange(of: mutedDestinations) { _, _ in syncActTargeting() }
+    .onChange(of: connectedIntegrationsData) { _, _ in syncActTargeting() }
+    .onChange(of: mcpServersData) { _, _ in syncActTargeting() }
+  }
+
+  private func syncActTargeting() {
+    vm.actTargeting.routable = ActTargeting(
+      all: actDestinations, muted: mutedDestinations
+    ).routable
   }
 
   // MARK: - Suggestions
@@ -1568,10 +1612,10 @@ struct ContentView: View {
     }
     .padding(16)
     .background(
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
         .fill(tint.opacity(0.08))
         .overlay(
-          RoundedRectangle(cornerRadius: 16, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .stroke(tint.opacity(0.15), lineWidth: 1)
         )
     )
@@ -1596,9 +1640,9 @@ struct ContentView: View {
             .resizable()
             .aspectRatio(contentMode: .fit)
             .frame(maxWidth: .infinity)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous))
         } else {
-          RoundedRectangle(cornerRadius: 12, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .fill(Color.secondary.opacity(0.12))
             .frame(height: 80)
             .overlay(
@@ -1628,7 +1672,7 @@ struct ContentView: View {
       .padding(10)
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(
-        RoundedRectangle(cornerRadius: 10).fill(Color.purple.opacity(0.06))
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card).fill(Color.purple.opacity(0.06))
       )
     } else if let analysis {
       VStack(alignment: .leading, spacing: 8) {
@@ -1681,7 +1725,7 @@ struct ContentView: View {
       .padding(10)
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(
-        RoundedRectangle(cornerRadius: 10).fill(Color.purple.opacity(0.08))
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card).fill(Color.purple.opacity(0.08))
       )
     } else if let error {
       VStack(alignment: .leading, spacing: 6) {
@@ -1717,7 +1761,7 @@ struct ContentView: View {
       }
       .padding(10)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.1)))
+      .background(RoundedRectangle(cornerRadius: QuillDesign.Radius.card).fill(Color.orange.opacity(0.1)))
     }
   }
 
@@ -1864,10 +1908,10 @@ struct ContentView: View {
     }
     .padding(16)
     .background(
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
         .fill(tint.opacity(0.08))
         .overlay(
-          RoundedRectangle(cornerRadius: 16, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
             .stroke(tint.opacity(0.15), lineWidth: 1)
         )
     )

@@ -56,6 +56,9 @@ struct AppFeature {
     case integrations
     /// Transcription history viewer.
     case history
+    /// Action-run history with per-step traces — what the agent did, and
+    /// what each step's tool actually returned.
+    case actions
     /// Cloud-synced notes (originating on iOS) viewer.
     case notes
   }
@@ -408,7 +411,7 @@ struct AppFeature {
 /// when History is selected the sidebar collapses so the transcript
 /// list and detail get the full window width.
 private enum SidebarMode: String, CaseIterable, Identifiable {
-  case home, settings, history, notes
+  case home, settings, history, actions, notes
   var id: String { rawValue }
 }
 
@@ -421,9 +424,37 @@ struct AppView: View {
     switch store.state.activeTab {
     case .home: .home
     case .history: .history
+    case .actions: .actions
     case .notes: .notes
     default: .settings
     }
+  }
+
+  /// Home's destination row. Extracted from the `.toolbar` call site: with
+  /// four buttons inline the whole `detail:` switch stopped type-checking in
+  /// reasonable time.
+  @ToolbarContentBuilder
+  private var homeToolbar: some ToolbarContent {
+    ToolbarItemGroup(placement: .primaryAction) {
+      homeToolbarButton(.notes, label: "Notes", icon: "list.bullet", help: "Notes")
+      homeToolbarButton(
+        .actions, label: "Actions", icon: "bolt.badge.clock",
+        help: "Action history and traces"
+      )
+      homeToolbarButton(.history, label: "History", icon: "chart.bar.xaxis", help: "History")
+      homeToolbarButton(.general, label: "Settings", icon: "gearshape", help: "Settings")
+    }
+  }
+
+  private func homeToolbarButton(
+    _ tab: AppFeature.ActiveTab, label: String, icon: String, help: String
+  ) -> some View {
+    Button {
+      store.send(.setActiveTab(tab))
+    } label: {
+      Label(label, systemImage: icon)
+    }
+    .help(help)
   }
 
   /// "← Home" for every non-home pane — with the sidebar toggle gone,
@@ -441,15 +472,47 @@ struct AppView: View {
 
   var body: some View {
     NavigationSplitView(columnVisibility: $columnVisibility) {
-      // Home is the navigation hub (toolbar icons + back buttons replace
-      // the old segmented mode toggle), so the sidebar only exists where
-      // it carries real content: Settings sub-tabs and the note list.
-      // Home and History collapse it entirely via `columnVisibility`.
+      sidebarContent
+    } detail: {
+      detailContent
+    }
+    // The shortcut summary in General posts this so its "Change
+    // shortcuts…" row lands on the actual editor.
+    .onReceive(NotificationCenter.default.publisher(for: .openRecordingSettings)) { _ in
+      store.send(.setActiveTab(.recording))
+    }
+    // Home, History and Actions have no sidebar content — collapse the
+    // column entirely there; Settings (sub-tabs) and Notes (note list) keep it.
+    .onChange(of: store.state.activeTab, initial: true) { _, newTab in
+      let hasSidebar = newTab != .home && newTab != .history && newTab != .actions
+      columnVisibility = hasSidebar ? .all : .detailOnly
+    }
+    .sheet(isPresented: Binding(
+      get: { !store.settings.hexSettings.hasCompletedOnboarding },
+      set: { newValue in
+        // The onboarding view fires `.markOnboardingComplete` itself
+        // when it dismisses; this setter just handles the case where
+        // SwiftUI dismisses the sheet for some other reason.
+        if newValue == false {
+          store.send(.settings(.markOnboardingComplete))
+        }
+      }
+    )) {
+      onboardingSheet
+    }
+    .enableInjection()
+  }
+
+  /// Home is the navigation hub (toolbar icons + back buttons replace the
+  /// old segmented mode toggle), so the sidebar only exists where it carries
+  /// real content: Settings sub-tabs and the note list. Home, History and
+  /// Actions collapse it entirely via `columnVisibility`.
+  @ViewBuilder
+  private var sidebarContent: some View {
       Group {
-        // Home and History have no sidebar at all — also drop the
-        // window's sidebar-toggle button there so an empty column can't
-        // be summoned.
-        if sidebarMode == .home || sidebarMode == .history {
+        // Panes with no sidebar at all — also drop the window's
+        // sidebar-toggle button there so an empty column can't be summoned.
+        if sidebarMode == .home || sidebarMode == .history || sidebarMode == .actions {
           VStack(alignment: .leading, spacing: 0) {}
             .toolbar(removing: .sidebarToggle)
         } else {
@@ -471,7 +534,10 @@ struct AppView: View {
         }
       }
       .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 280)
-    } detail: {
+  }
+
+  @ViewBuilder
+  private var detailContent: some View {
       switch store.state.activeTab {
       case .home:
         HomeView(
@@ -484,28 +550,7 @@ struct AppView: View {
           openNotesPane: { store.send(.setActiveTab(.notes)) }
         )
         .navigationTitle("Home")
-        .toolbar {
-          ToolbarItemGroup(placement: .primaryAction) {
-            Button {
-              store.send(.setActiveTab(.notes))
-            } label: {
-              Label("Notes", systemImage: "list.bullet")
-            }
-            .help("Notes")
-            Button {
-              store.send(.setActiveTab(.history))
-            } label: {
-              Label("History", systemImage: "chart.bar.xaxis")
-            }
-            .help("History")
-            Button {
-              store.send(.setActiveTab(.general))
-            } label: {
-              Label("Settings", systemImage: "gearshape")
-            }
-            .help("Settings")
-          }
-        }
+        .toolbar { homeToolbar }
       case .general:
         GeneralSettingsTabView(
           store: store.scope(state: \.settings, action: \.settings),
@@ -542,48 +587,32 @@ struct AppView: View {
         HistoryView(store: store.scope(state: \.history, action: \.history))
           .navigationTitle("History")
           .toolbar { backToHome }
+      case .actions:
+        ActionRunsView()
+          .navigationTitle("Actions")
+          .toolbar { backToHome }
       case .notes:
         NotesView()
           .navigationTitle("Notes")
           .toolbar { backToHome }
       }
     }
-    // The shortcut summary in General posts this so its "Change
-    // shortcuts…" row lands on the actual editor.
-    .onReceive(NotificationCenter.default.publisher(for: .openRecordingSettings)) { _ in
-      store.send(.setActiveTab(.recording))
-    }
-    // Home and History have no sidebar content — collapse the column
-    // entirely there; Settings (sub-tabs) and Notes (note list) keep it.
-    .onChange(of: store.state.activeTab, initial: true) { _, newTab in
-      columnVisibility = (newTab == .home || newTab == .history) ? .detailOnly : .all
-    }
-    .sheet(isPresented: Binding(
-      get: { !store.settings.hexSettings.hasCompletedOnboarding },
-      set: { newValue in
-        // The onboarding view fires `.markOnboardingComplete` itself
-        // when it dismisses; this setter just handles the case where
-        // SwiftUI dismisses the sheet for some other reason.
-        if newValue == false {
-          store.send(.settings(.markOnboardingComplete))
-        }
+
+  /// Extracted from the `.sheet` call site along with the rest of the split
+  /// view's body — inline it and `body` stops type-checking in reasonable time.
+  private var onboardingSheet: some View {
+    OnboardingView(
+      store: store.scope(state: \.settings, action: \.settings),
+      microphonePermission: store.microphonePermission,
+      accessibilityPermission: store.accessibilityPermission,
+      inputMonitoringPermission: store.inputMonitoringPermission,
+      onDismiss: {
+        // Already marked complete inside `OnboardingView.complete`, but the
+        // SwiftUI sheet binding needs us to flip its `isPresented`
+        // source-of-truth, which we do by sending the same action defensively.
+        store.send(.settings(.markOnboardingComplete))
       }
-    )) {
-      OnboardingView(
-        store: store.scope(state: \.settings, action: \.settings),
-        microphonePermission: store.microphonePermission,
-        accessibilityPermission: store.accessibilityPermission,
-        inputMonitoringPermission: store.inputMonitoringPermission,
-        onDismiss: {
-          // Already marked complete inside `OnboardingView.complete`,
-          // but the SwiftUI sheet binding needs us to flip its
-          // `isPresented` source-of-truth, which we do by sending
-          // the same action defensively.
-          store.send(.settings(.markOnboardingComplete))
-        }
-      )
-    }
-    .enableInjection()
+    )
   }
 
   /// The agent tab shows the user's chosen agent name so the sidebar
@@ -611,7 +640,7 @@ struct AppView: View {
           .foregroundStyle(.white)
           .frame(width: 22, height: 22)
           .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
               .fill(tint.gradient)
           )
       }

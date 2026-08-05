@@ -49,7 +49,7 @@ struct AgentSettingsView: View {
             .frame(width: 56, height: 56)
             .shadow(color: Color.purple.opacity(0.35), radius: 8, y: 3)
           Image(systemName: "sparkles")
-            .font(.system(size: 24, weight: .semibold))
+            .quillFont(24, weight: .semibold)
             .foregroundStyle(.white)
         }
         VStack(alignment: .leading, spacing: 3) {
@@ -182,12 +182,12 @@ struct AgentSettingsView: View {
   private func memoryRow(_ memory: MemoryEntity) -> some View {
     HStack(spacing: 10) {
       Image(systemName: memoryIcon(memory.kind))
-        .font(.system(size: 13))
+        .quillFont(13)
         .foregroundStyle(.purple)
         .frame(width: 20)
       VStack(alignment: .leading, spacing: 2) {
         Text(memory.name)
-          .font(.system(size: 14, weight: .medium))
+          .quillFont(14, weight: .medium)
         if !memorySubtitle(memory).isEmpty {
           Text(memorySubtitle(memory))
             .font(.caption2)

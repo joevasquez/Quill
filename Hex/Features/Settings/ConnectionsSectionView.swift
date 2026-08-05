@@ -159,6 +159,7 @@ struct ConnectionsSectionView: View {
               .foregroundStyle(.secondary)
           }
           .buttonStyle(.plain)
+          .accessibilityLabel("Clear search")
         }
       }
       ForEach(visibleAppsItems) { item in
@@ -264,7 +265,7 @@ struct ConnectionsSectionView: View {
     return VStack(alignment: .leading, spacing: 0) {
       HStack(alignment: .center, spacing: 8) {
         chevron(expandedRows.contains(key))
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
           .fill(Color(hex: integration.tintHex) ?? .secondary)
           .frame(width: 24, height: 24)
           .overlay(
@@ -461,7 +462,7 @@ struct ConnectionsSectionView: View {
     return VStack(alignment: .leading, spacing: 0) {
       HStack(alignment: .center, spacing: 8) {
         chevron(expandedRows.contains(brand.id))
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
           .fill(Color(hex: brand.tintHex) ?? .gray)
           .frame(width: 24, height: 24)
           .overlay(
@@ -782,18 +783,21 @@ private struct MCPServerRow: View {
       }
       .buttonStyle(.plain)
       .help(isSignedIn ? "Re-authenticate (browser sign-in)" : "Sign in with browser (OAuth)")
+      .accessibilityLabel(isSignedIn ? "Re-authenticate with browser" : "Sign in with browser")
       Button(action: onRefresh) {
         Image(systemName: "arrow.clockwise")
           .foregroundStyle(.secondary)
       }
       .buttonStyle(.plain)
       .help("Refresh tool list")
+      .accessibilityLabel("Refresh tool list")
       Button(action: onEdit) {
         Image(systemName: "pencil")
           .foregroundStyle(.secondary)
       }
       .buttonStyle(.plain)
       .help("Edit server")
+      .accessibilityLabel("Edit server")
       Toggle("", isOn: Binding(get: { server.isEnabled }, set: onToggleEnabled))
         .toggleStyle(.switch)
         .controlSize(.mini)
@@ -804,6 +808,7 @@ private struct MCPServerRow: View {
       }
       .buttonStyle(.plain)
       .help("Remove server")
+      .accessibilityLabel("Remove server")
     }
   }
 }

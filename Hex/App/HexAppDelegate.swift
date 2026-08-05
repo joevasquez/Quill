@@ -279,8 +279,16 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 		let rawTranscript = (notification.userInfo?[ActionConfirmationNotification.rawTranscriptKey] as? String) ?? ""
 		let autoExecute = (notification.userInfo?[ActionConfirmationNotification.autoExecuteKey] as? Bool) ?? false
 		let sourceAppBundleID = notification.userInfo?[ActionConfirmationNotification.sourceAppBundleIDKey] as? String
+		let trigger = (notification.userInfo?[ActionConfirmationNotification.triggerKey] as? String)
+			.flatMap(ActionRun.Trigger.init(rawValue:)) ?? .voice
 		Task { @MainActor [weak self] in
-			self?.presentMultiActionConfirmation(intents: intents, rawTranscript: rawTranscript, autoExecute: autoExecute, sourceAppBundleID: sourceAppBundleID)
+			self?.presentMultiActionConfirmation(
+				intents: intents,
+				rawTranscript: rawTranscript,
+				autoExecute: autoExecute,
+				sourceAppBundleID: sourceAppBundleID,
+				trigger: trigger
+			)
 		}
 	}
 
@@ -306,14 +314,34 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 	}
 
 	@MainActor
-	func presentMultiActionConfirmation(intents: [ActionIntent], rawTranscript: String = "", autoExecute: Bool = false, sourceAppBundleID: String? = nil) {
+	func presentMultiActionConfirmation(
+		intents: [ActionIntent],
+		rawTranscript: String = "",
+		autoExecute: Bool = false,
+		sourceAppBundleID: String? = nil,
+		trigger: ActionRun.Trigger = .voice
+	) {
 		HexLog.action.info("Presenting multi-action confirmation panel: \(intents.count, privacy: .public) actions")
 		dismissActionPanel()
 
 		let multiStore = Store(
-			initialState: MultiActionConfirmationFeature.State(intents: intents, rawTranscript: rawTranscript, autoExecute: autoExecute, sourceAppBundleID: sourceAppBundleID)
+			initialState: MultiActionConfirmationFeature.State(
+				intents: intents,
+				rawTranscript: rawTranscript,
+				autoExecute: autoExecute,
+				sourceAppBundleID: sourceAppBundleID,
+				trigger: trigger
+			)
 		) {
 			MultiActionConfirmationFeature()
+		}
+
+		// When the Home pane is on screen, the workflow belongs in the window
+		// the user is already looking at — the popdown is for when it isn't.
+		if InAppActionPresenter.shared.canPresentInApp {
+			HexLog.action.info("Hosting multi-action confirmation inline on Home")
+			InAppActionPresenter.shared.present(multiStore)
+			return
 		}
 
 		let panel = ActionConfirmationPanel.hosting(
@@ -363,6 +391,10 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 	private func dismissActionPanel() {
 		actionPanel?.orderOut(nil)
 		actionPanel = nil
+		// The confirmation may have been hosted inline instead of in the
+		// panel; both paths finish through the same executed/cancelled
+		// notifications, so tear down both here.
+		InAppActionPresenter.shared.dismiss()
 	}
 
 	// MARK: - App lifecycle

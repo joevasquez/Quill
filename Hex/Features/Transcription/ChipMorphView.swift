@@ -333,7 +333,7 @@ struct CornerBloomHost: View {
     }
     .onChange(of: store.partialTranscript) { _, text in
       guard isActMode, store.lockedActionIntegration == nil else { return }
-      withAnimation(.easeOut(duration: 0.25)) {
+      QuillMotion.run(.easeOut(duration: 0.25)) {
         intuitedTarget = OrbView.intuitTarget(from: text, integrations: store.availableActionIntegrations)
       }
     }
@@ -376,7 +376,7 @@ struct CornerBloomHost: View {
           .padding(.horizontal, 9)
           .padding(.vertical, 4)
           .frame(maxWidth: .infinity, alignment: .leading)
-          .background(RoundedRectangle(cornerRadius: 7).fill(.red.opacity(0.55)))
+          .background(RoundedRectangle(cornerRadius: QuillDesign.Radius.chip).fill(.red.opacity(0.55)))
       }
 
       if store.pendingEditResult != nil {
@@ -407,14 +407,14 @@ struct CornerBloomHost: View {
     .frame(width: ChipSpec.bloomWidth, alignment: .leading)
     .fixedSize(horizontal: false, vertical: true)
     .background(
-      RoundedRectangle(cornerRadius: 13, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(.ultraThinMaterial)
         .overlay(
-          RoundedRectangle(cornerRadius: 13, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .fill(.black.opacity(0.42))
         )
         .overlay(
-          RoundedRectangle(cornerRadius: 13, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.55), radius: 26, y: 14)
@@ -511,7 +511,7 @@ private struct BloomDestinationRow: View {
       .padding(.horizontal, 8)
       .padding(.vertical, 6)
       .background(
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
           .fill(.white.opacity(isHovering && !isSelected ? 0.06 : 0))
       )
       .contentShape(Rectangle())

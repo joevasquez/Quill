@@ -28,14 +28,19 @@ public enum AgentParsingError: LocalizedError {
 public enum AgentParsing {
   // MARK: - Action parse
 
-  /// Parse a transcript into one or more `ActionIntent`s. `memoryContext`
-  /// and `mcpContext` are appended to the action system prompt when
-  /// present (agent memory / connected MCP servers' tools).
+  /// Parse a transcript into one or more `ActionIntent`s. `memoryContext`,
+  /// `mcpContext` and `targetingContext` are appended to the action system
+  /// prompt when present (agent memory / connected MCP servers' tools /
+  /// the destinations the user pinned or left enabled for this capture).
+  ///
+  /// `targetingContext` goes last so it reads as the final word on where
+  /// the action may land — it exists to overrule the model's own inference.
   public static func parseMulti(
     transcript: String,
     selection: String?,
     memoryContext: String?,
     mcpContext: String?,
+    targetingContext: String? = nil,
     complete: LLMCompleter
   ) async throws -> MultiActionResponse {
     var systemPrompt = ActionSystemPrompt.prompt
@@ -44,6 +49,9 @@ public enum AgentParsing {
     }
     if let mcpContext, !mcpContext.isEmpty {
       systemPrompt += "\n\n" + mcpContext
+    }
+    if let targetingContext, !targetingContext.isEmpty {
+      systemPrompt += "\n\n" + targetingContext
     }
 
     let raw = try await complete(

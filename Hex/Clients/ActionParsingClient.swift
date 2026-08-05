@@ -12,7 +12,11 @@ struct ActionParsingClient {
   var parse: @Sendable (String, AIProvider) async throws -> ActionIntent
   /// The third parameter is optional selected-text context: text the user
   /// had highlighted in the frontmost app, so "add this to …" resolves.
-  var parseMulti: @Sendable (String, AIProvider, String?) async throws -> MultiActionResponse
+  /// The fourth restricts where the action may land — destinations the user
+  /// pinned with an `@` mention, or the set left enabled on the Act chip
+  /// row. `.unrestricted` (the default everywhere but the typed-command
+  /// surfaces) keeps the previous behaviour.
+  var parseMulti: @Sendable (String, AIProvider, String?, ActTargeting) async throws -> MultiActionResponse
   /// Between-steps resolve pass for chained actions: given a dependent
   /// `ActionIntent`, the raw text result of the step it depends on, the user's
   /// original request (for context), and the provider, fills the linking
@@ -37,14 +41,18 @@ extension ActionParsingClient: DependencyKey {
   static var liveValue: Self {
     .init(
       parse: { transcript, provider in
-        let response = try await parseTranscript(transcript, provider: provider, selection: nil)
+        let response = try await parseTranscript(
+          transcript, provider: provider, selection: nil, targeting: .unrestricted
+        )
         guard let intent = response.actions.first else {
           throw ActionParsingError.parseFailure("Empty actions array")
         }
         return intent
       },
-      parseMulti: { transcript, provider, selection in
-        try await parseTranscript(transcript, provider: provider, selection: selection)
+      parseMulti: { transcript, provider, selection, targeting in
+        try await parseTranscript(
+          transcript, provider: provider, selection: selection, targeting: targeting
+        )
       },
       resolveStep: { intent, priorResult, request, provider in
         try await AgentParsing.resolveStep(
@@ -93,7 +101,12 @@ extension ActionParsingClient: DependencyKey {
   }
 }
 
-private func parseTranscript(_ transcript: String, provider: AIProvider, selection: String?) async throws -> MultiActionResponse {
+private func parseTranscript(
+  _ transcript: String,
+  provider: AIProvider,
+  selection: String?,
+  targeting: ActTargeting
+) async throws -> MultiActionResponse {
   // Agent memory: append known people/projects/preferences so "email Mike"
   // resolves without clarifying questions. No-op when the store is empty.
   let memories = await MemoryStore.shared.loadAll()
@@ -101,14 +114,26 @@ private func parseTranscript(_ transcript: String, provider: AIProvider, selecti
 
   // MCP: list the user's connected servers' tools so the LLM can emit
   // mcpCall actions. No-op when no server has a cached tool catalog.
+  //
+  // Withhold the tools of any server outside the targeting focus — a tool
+  // the model never saw is one it can't call, which is a harder guarantee
+  // than asking it nicely in the prompt.
   @Shared(.hexSettings) var hexSettings: HexSettings
-  let mcpContext = await MCPToolCatalog.shared.promptContext(servers: hexSettings.mcpServers)
+  let servers = targeting.allowedServers(from: hexSettings.mcpServers)
+  let mcpContext = await MCPToolCatalog.shared.promptContext(servers: servers)
+
+  if !targeting.isUnrestricted {
+    actionLogger.info(
+      "Action targeting: \(targeting.focus.count, privacy: .public) destination(s), \(targeting.pinned.count, privacy: .public) pinned"
+    )
+  }
 
   return try await AgentParsing.parseMulti(
     transcript: transcript,
     selection: selection,
     memoryContext: memoryContext,
     mcpContext: mcpContext,
+    targetingContext: targeting.promptContext,
     complete: completer(for: provider)
   )
 }

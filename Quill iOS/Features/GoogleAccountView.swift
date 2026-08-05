@@ -60,13 +60,13 @@ struct GoogleAccountView: View {
 
   private var connectedRow: some View {
     HStack(alignment: .center, spacing: 12) {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
         .fill(Color(red: 0.263, green: 0.522, blue: 0.957)) // Google blue
         .frame(width: 38, height: 38)
         .overlay(
           Image(systemName: "checkmark")
             .foregroundStyle(.white)
-            .font(.system(size: 18, weight: .bold))
+            .quillFont(18, weight: .bold)
         )
 
       VStack(alignment: .leading, spacing: 2) {
@@ -93,13 +93,13 @@ struct GoogleAccountView: View {
   private var signedOutRow: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack(alignment: .center, spacing: 12) {
-        RoundedRectangle(cornerRadius: 8, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
           .fill(Color(red: 0.263, green: 0.522, blue: 0.957))
           .frame(width: 38, height: 38)
           .overlay(
             Image(systemName: "globe")
               .foregroundStyle(.white)
-              .font(.system(size: 18, weight: .semibold))
+              .quillFont(18, weight: .semibold)
           )
 
         VStack(alignment: .leading, spacing: 2) {

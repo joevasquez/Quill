@@ -5,9 +5,39 @@ import SwiftUI
 
 struct MultiActionConfirmationView: View {
   @Bindable var store: StoreOf<MultiActionConfirmationFeature>
+  /// Hosted inside the main window (Home) rather than the menu-bar popdown.
+  ///
+  /// This decides the whole colour treatment. The popdown floats over
+  /// whatever app the user was in, so it has to be self-contained and dark —
+  /// it can't know its backdrop. Inline it sits on a themed pane, where a
+  /// dark slab would ignore the user's Appearance setting and read as a
+  /// foreign object, so it follows `QuillTheme` instead.
+  var isInline = false
   @ObserveInjection var inject
+  @Environment(\.colorScheme) private var colorScheme
   @State private var didCopyOutput = false
   @State private var didCopyAnswer = false
+
+  private var theme: QuillTheme { .of(colorScheme) }
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+  /// Opaque stand-in for the popdown's frosted surface. The popdown is always
+  /// dark (it can't know its backdrop); inline follows the theme.
+  private var popdownSolid: Color { isInline ? theme.cardSolid : Color(nsColor: .windowBackgroundColor) }
+
+  // MARK: - Surface palette
+  //
+  // One switch per role. Text that sits on a *filled tint* (the Run button,
+  // the completion badge, the glyph tiles) deliberately stays `.white` at its
+  // call site — it's legible on the fill in both appearances.
+
+  private var onSurface: Color { isInline ? theme.text : .white }
+  private var onSurfaceStrong: Color { isInline ? theme.text : .white.opacity(0.85) }
+  private var onSurfaceSecondary: Color { isInline ? theme.text2 : .white.opacity(0.6) }
+  private var onSurfaceTertiary: Color { isInline ? theme.text3 : .white.opacity(0.45) }
+  private var cardFill: Color { isInline ? theme.card : .white.opacity(0.05) }
+  private var chipFill: Color { isInline ? theme.chip : .white.opacity(0.14) }
+  private var hairline: Color { isInline ? theme.hair : .white.opacity(0.10) }
 
   var body: some View {
     ZStack {
@@ -25,22 +55,29 @@ struct MultiActionConfirmationView: View {
         .padding(18)
       }
     }
-    .frame(width: 380)
-    .frame(minHeight: 320)
+    .frame(width: isInline ? nil : 380)
+    .frame(maxWidth: isInline ? .infinity : nil)
+    .frame(minHeight: isInline ? 0 : 320)
     .animation(.spring(duration: 0.32, bounce: 0.18), value: store.completion)
     .background(
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
-        .fill(.ultraThinMaterial)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
+        // Reduce Transparency: the blur goes, an opaque surface takes over.
+        // The popdown especially — it sits over unknown content, and a
+        // see-through card there is the worst case for legibility.
+        .fill(reduceTransparency ? AnyShapeStyle(popdownSolid) : AnyShapeStyle(Material.ultraThin))
         .overlay(
-          RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .fill(.black.opacity(0.45))
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
+            .fill(reduceTransparency ? Color.clear : (isInline ? theme.card : .black.opacity(0.45)))
         )
-        .shadow(color: .black.opacity(0.35), radius: 18, y: 10)
+        // Elevation is the theme's job inline (hairline + translucency); the
+        // shadow exists only to separate the floating popdown from an
+        // unknown backdrop, which is exactly the documented exception.
+        .shadow(color: .black.opacity(isInline ? 0 : 0.35), radius: isInline ? 0 : 18, y: isInline ? 0 : 10)
     )
-    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous))
     .overlay(
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
-        .strokeBorder(.white.opacity(0.10), lineWidth: 0.5)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
+        .strokeBorder(hairline, lineWidth: 0.5)
     )
     .onAppear { store.send(.onAppear) }
     .enableInjection()
@@ -52,7 +89,7 @@ struct MultiActionConfirmationView: View {
     HStack(alignment: .center, spacing: 12) {
       ZStack {
         Circle()
-          .fill(Color.purple.opacity(0.3))
+          .fill(QuillDesign.brand.color(0.3))
           .frame(width: 36, height: 36)
         Image(systemName: "bolt.horizontal.fill")
           .font(.system(size: 16, weight: .semibold))
@@ -62,10 +99,10 @@ struct MultiActionConfirmationView: View {
       VStack(alignment: .leading, spacing: 2) {
         Text("\(store.items.count) actions detected")
           .font(.system(size: 14, weight: .semibold))
-          .foregroundStyle(.white)
+          .foregroundStyle(onSurface)
         Text("Multi-action mode")
           .font(.system(size: 11))
-          .foregroundStyle(.white.opacity(0.55))
+          .foregroundStyle(onSurfaceSecondary)
       }
       Spacer(minLength: 0)
     }
@@ -80,7 +117,7 @@ struct MultiActionConfirmationView: View {
         sectionLabel("HEARD")
         Text("\u{201C}\(store.rawTranscript)\u{201D}")
           .font(.system(size: 13))
-          .foregroundStyle(.white.opacity(0.85))
+          .foregroundStyle(onSurfaceStrong)
           .lineSpacing(2)
           .frame(maxWidth: .infinity, alignment: .leading)
           .fixedSize(horizontal: false, vertical: true)
@@ -108,15 +145,15 @@ struct MultiActionConfirmationView: View {
   private func actionCard(_ item: MultiActionConfirmationFeature.State.ActionItemState) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(alignment: .center, spacing: 10) {
-        stepTile(for: item, size: 28, cornerRadius: 6)
+        stepTile(for: item, size: 28, cornerRadius: QuillDesign.Radius.chip)
         VStack(alignment: .leading, spacing: 2) {
           Text(item.displayTitle)
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(onSurface)
             .lineLimit(1)
           Text(item.displaySubtitle)
             .font(.system(size: 11))
-            .foregroundStyle(.white.opacity(0.55))
+            .foregroundStyle(onSurfaceSecondary)
             .lineLimit(1)
         }
         Spacer(minLength: 0)
@@ -124,16 +161,18 @@ struct MultiActionConfirmationView: View {
         Button { store.send(.toggleExpanded(item.id)) } label: {
           Image(systemName: item.isExpanded ? "chevron.up" : "chevron.down")
             .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(.white.opacity(0.45))
+            .foregroundStyle(onSurfaceTertiary)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(item.isExpanded ? "Hide details" : "Edit details")
 
         Button { store.send(.removeItem(item.id)) } label: {
           Image(systemName: "xmark")
             .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(.white.opacity(0.45))
+            .foregroundStyle(onSurfaceTertiary)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Remove step \(item.displayTitle)")
       }
       .padding(12)
 
@@ -144,12 +183,12 @@ struct MultiActionConfirmationView: View {
       }
     }
     .background(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .fill(.white.opacity(0.05))
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
+        .fill(cardFill)
     )
     .overlay(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .strokeBorder(.white.opacity(0.08), lineWidth: 0.5)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
+        .strokeBorder(hairline, lineWidth: 0.5)
     )
   }
 
@@ -162,32 +201,32 @@ struct MultiActionConfirmationView: View {
             TextField("e.g. https://www.linkedin.com", text: $store.items[index].editableURL)
               .textFieldStyle(.plain)
               .font(.system(size: 13))
-              .foregroundStyle(.white)
+              .foregroundStyle(onSurface)
           }
           MultiEditableRow(icon: "app", label: "Open with") {
             TextField("Default browser", text: $store.items[index].editableAppName)
               .textFieldStyle(.plain)
               .font(.system(size: 13))
-              .foregroundStyle(.white)
+              .foregroundStyle(onSurface)
           }
         } else if item.intent.targetIntegration == .gmail {
           MultiEditableRow(icon: "person", label: "To") {
             TextField("e.g. mike@acme.com", text: $store.items[index].editableRecipient)
               .textFieldStyle(.plain)
               .font(.system(size: 13))
-              .foregroundStyle(.white)
+              .foregroundStyle(onSurface)
           }
           MultiEditableRow(icon: "envelope", label: "Subject") {
             TextField("Subject", text: $store.items[index].editableSubject)
               .textFieldStyle(.plain)
               .font(.system(size: 13))
-              .foregroundStyle(.white)
+              .foregroundStyle(onSurface)
           }
           MultiEditableRow(icon: "text.alignleft", label: "Body") {
             TextField("Draft body", text: $store.items[index].editableBody, axis: .vertical)
               .textFieldStyle(.plain)
               .font(.system(size: 13))
-              .foregroundStyle(.white)
+              .foregroundStyle(onSurface)
               .lineLimit(2 ... 3)
           }
         } else {
@@ -195,38 +234,40 @@ struct MultiActionConfirmationView: View {
             TextField("Title", text: $store.items[index].editableTitle)
               .textFieldStyle(.plain)
               .font(.system(size: 13))
-              .foregroundStyle(.white)
+              .foregroundStyle(onSurface)
           }
           if item.intent.targetIntegration == .calendar || item.intent.targetIntegration == .googleCalendar {
             MultiEditableRow(icon: "calendar", label: "Start") {
               DatePicker("", selection: $store.items[index].editableStartDate, displayedComponents: [.date, .hourAndMinute])
                 .labelsHidden()
                 .datePickerStyle(.compact)
-                .tint(.white.opacity(0.9))
+                .tint(onSurface)
             }
             MultiEditableRow(icon: "clock", label: "End") {
               DatePicker("", selection: $store.items[index].editableEndDate, displayedComponents: [.date, .hourAndMinute])
                 .labelsHidden()
                 .datePickerStyle(.compact)
-                .tint(.white.opacity(0.9))
+                .tint(onSurface)
             }
           } else {
             MultiEditableRow(icon: "info.circle", label: "Due") {
               TextField("e.g. Friday", text: $store.items[index].editableDueDate)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
-                .foregroundStyle(.white)
+                .foregroundStyle(onSurface)
             }
           }
           MultiEditableRow(icon: "note.text", label: "Notes") {
             TextField("Optional", text: $store.items[index].editableNotes, axis: .vertical)
               .textFieldStyle(.plain)
               .font(.system(size: 13))
-              .foregroundStyle(.white)
+              .foregroundStyle(onSurface)
               .lineLimit(1 ... 2)
           }
         }
       }
+      // Row icons inherit this; each field overrides it with `onSurface`.
+      .foregroundStyle(onSurfaceSecondary)
     }
   }
 
@@ -237,7 +278,7 @@ struct MultiActionConfirmationView: View {
       Button { store.send(.cancel) } label: {
         Text("Dismiss")
           .font(.system(size: 13, weight: .medium))
-          .foregroundStyle(.white.opacity(0.7))
+          .foregroundStyle(onSurfaceSecondary)
           .frame(maxWidth: .infinity)
           .padding(.vertical, 8)
       }
@@ -253,7 +294,7 @@ struct MultiActionConfirmationView: View {
           }
           Text("Run \(store.items.count) actions")
             .font(.system(size: 13, weight: .semibold))
-          RoundedRectangle(cornerRadius: 4, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.badge, style: .continuous)
             .fill(.white.opacity(0.22))
             .frame(width: 18, height: 18)
             .overlay(
@@ -266,8 +307,8 @@ struct MultiActionConfirmationView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
         .background(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(store.isExecuting ? Color.purple.opacity(0.4) : Color.purple)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
+            .fill(store.isExecuting ? QuillDesign.brand.color(0.4) : QuillDesign.brand.color())
         )
       }
       .buttonStyle(.plain)
@@ -295,10 +336,10 @@ struct MultiActionConfirmationView: View {
       VStack(spacing: 3) {
         Text(completionTitle(completion))
           .font(.system(size: 15, weight: .semibold))
-          .foregroundStyle(.white)
+          .foregroundStyle(onSurface)
         Text(completionSubhead(completion))
           .font(.system(size: 12))
-          .foregroundStyle(.white.opacity(0.7))
+          .foregroundStyle(onSurfaceSecondary)
           .multilineTextAlignment(.center)
       }
 
@@ -308,10 +349,10 @@ struct MultiActionConfirmationView: View {
         VStack(alignment: .leading, spacing: 10) {
           Text("Answer")
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.6))
+            .foregroundStyle(onSurfaceSecondary)
           Text(completion.combinedAnswer)
             .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(onSurface)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -323,10 +364,10 @@ struct MultiActionConfirmationView: View {
             } label: {
               Label(didCopyAnswer ? "Copied" : "Copy", systemImage: didCopyAnswer ? "checkmark" : "doc.on.doc")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(didCopyAnswer ? .green : .white)
+                .foregroundStyle(didCopyAnswer ? QuillDesign.success : onSurface)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.white.opacity(0.14)))
+                .background(RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous).fill(chipFill))
             }
             .buttonStyle(.plain)
 
@@ -337,7 +378,7 @@ struct MultiActionConfirmationView: View {
                   .foregroundStyle(.white)
                   .padding(.horizontal, 12)
                   .padding(.vertical, 6)
-                  .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.accentColor.opacity(0.55)))
+                  .background(RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous).fill(Color.accentColor.opacity(0.55)))
               }
               .buttonStyle(.plain)
             }
@@ -346,8 +387,8 @@ struct MultiActionConfirmationView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(.white.opacity(0.10))
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
+            .fill(chipFill)
         )
       }
 
@@ -366,12 +407,12 @@ struct MultiActionConfirmationView: View {
           } label: {
             Label(didCopyOutput ? "Copied" : "Copy", systemImage: didCopyOutput ? "checkmark" : "doc.on.doc")
               .font(.system(size: 12, weight: .medium))
-              .foregroundStyle(didCopyOutput ? .green : .white)
+              .foregroundStyle(didCopyOutput ? QuillDesign.success : onSurface)
               .padding(.horizontal, 12)
               .padding(.vertical, 6)
               .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                  .fill(.white.opacity(0.14))
+                RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
+                  .fill(chipFill)
               )
           }
           .buttonStyle(.plain)
@@ -379,8 +420,8 @@ struct MultiActionConfirmationView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(.white.opacity(0.06))
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
+            .fill(cardFill)
         )
       }
 
@@ -389,12 +430,12 @@ struct MultiActionConfirmationView: View {
         Button { store.send(.completionDismissed) } label: {
           Text("Dismiss")
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(onSurface)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
             .background(
-              RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.white.opacity(0.14))
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
+                .fill(chipFill)
             )
         }
         .buttonStyle(.plain)
@@ -422,14 +463,14 @@ struct MultiActionConfirmationView: View {
           .foregroundStyle(tint)
         Text(step.title)
           .font(.system(size: 12.5, weight: .semibold))
-          .foregroundStyle(.white)
+          .foregroundStyle(onSurface)
           .fixedSize(horizontal: false, vertical: true)
       }
       if !step.detail.isEmpty {
         ScrollView(.vertical, showsIndicators: true) {
           Text(step.detail)
             .font(.system(size: 12, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.85))
+            .foregroundStyle(onSurfaceStrong)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
@@ -469,7 +510,7 @@ struct MultiActionConfirmationView: View {
     Text(text)
       .font(.system(size: 10, weight: .semibold))
       .tracking(1.4)
-      .foregroundStyle(.white.opacity(0.45))
+      .foregroundStyle(onSurfaceTertiary)
   }
 
   private func integrationTile(for id: Integration.Identifier, size: CGFloat, cornerRadius: CGFloat) -> some View {
@@ -535,9 +576,10 @@ private struct MultiEditableRow<Content: View>: View {
 
   var body: some View {
     HStack(spacing: 10) {
+      // No explicit colour: the row inherits the secondary style its
+      // container sets, so it themes with the card instead of pinning white.
       Image(systemName: icon)
         .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(.white.opacity(0.55))
         .frame(width: 14, height: 14)
 
       content()

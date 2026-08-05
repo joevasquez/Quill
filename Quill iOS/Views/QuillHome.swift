@@ -40,7 +40,7 @@ struct QuillTopBar: View {
         .frame(width: 24, height: 24)
 
       Text("Quill")
-        .font(.system(size: 24, weight: .bold))
+        .quillFont(24, weight: .bold)
         .tracking(-0.5)
         .foregroundStyle(theme.text)
 
@@ -60,7 +60,7 @@ struct QuillTopBar: View {
   private func button(_ symbol: String, _ label: String, _ action: @escaping () -> Void) -> some View {
     Button(action: action) {
       Image(systemName: symbol)
-        .font(.system(size: 16, weight: .medium))
+        .quillFont(16, weight: .medium)
         .foregroundStyle(theme.text2)
         .frame(width: 40, height: 40)
         .background(
@@ -111,7 +111,7 @@ struct QuillHome: View {
 
       VStack(spacing: 18) {
         Text("Ready when you are.")
-          .font(.system(size: 28, weight: .semibold))
+          .quillFont(28, weight: .semibold)
           .tracking(-0.5)
           .foregroundStyle(theme.text)
           .frame(maxWidth: .infinity)
@@ -204,7 +204,7 @@ struct QuillHome: View {
       // It doesn't — tap starts and tap stops — so the caption says what
       // actually happens.
       Text("Tap to start · hold to talk")
-        .font(.system(size: 12))
+        .quillFont(12)
         .foregroundStyle(theme.text3)
     }
   }
@@ -212,7 +212,7 @@ struct QuillHome: View {
   private var keyboardButton: some View {
     Button(action: onTapKeyboard) {
       Image(systemName: "keyboard")
-        .font(.system(size: 24, weight: .regular))
+        .quillFont(24, weight: .regular)
         .foregroundStyle(theme.text2)
         .frame(width: QuillDesign.OrbSize.triggerRing, height: QuillDesign.OrbSize.triggerRing)
         .background(
@@ -231,7 +231,7 @@ struct QuillHome: View {
   private var recentRail: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text("Recent Notes")
-        .font(.system(size: 13, weight: .semibold))
+        .quillFont(13, weight: .semibold)
         .tracking(0.3)
         .textCase(.uppercase)
         .foregroundStyle(theme.text3)
@@ -348,12 +348,12 @@ struct QuillNoteCard: View {
     Button(action: onOpen) {
       VStack(alignment: .leading, spacing: 8) {
         Text(note.displayTitle)
-          .font(.system(size: 17, weight: .semibold))
+          .quillFont(17, weight: .semibold)
           .foregroundStyle(theme.text)
           .lineLimit(1)
 
         Text(NoteContent.stripPhotos(from: note.body))
-          .font(.system(size: 14))
+          .quillFont(14)
           .foregroundStyle(theme.text2)
           .lineLimit(2)
           .multilineTextAlignment(.leading)

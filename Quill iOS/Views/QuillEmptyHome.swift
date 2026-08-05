@@ -32,13 +32,13 @@ struct QuillEmptyHome: View {
           .fill(Color.purple.opacity(0.16))
           .frame(width: 96, height: 96)
         Image(systemName: "mic.fill")
-          .font(.system(size: 38, weight: .medium))
+          .quillFont(38, weight: .medium)
           .foregroundStyle(.purple)
       }
 
       VStack(spacing: 10) {
         Text("Ready when you are.")
-          .font(.system(size: 32, weight: .bold, design: .serif))
+          .quillFont(32, weight: .bold, design: .serif)
           .foregroundStyle(.primary)
           .multilineTextAlignment(.center)
 
@@ -101,11 +101,11 @@ private struct ExampleUtteranceChip: View {
     .padding(.horizontal, 14)
     .padding(.vertical, 10)
     .background(
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
         .fill(Color(.systemBackground))
     )
     .overlay(
-      RoundedRectangle(cornerRadius: 14, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
         .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
     )
   }

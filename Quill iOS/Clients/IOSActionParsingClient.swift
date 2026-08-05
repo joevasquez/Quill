@@ -35,18 +35,22 @@ enum IOSActionParsingClient {
 
   /// Parse a transcript into one or more intents. `memoryContext` /
   /// `mcpContext` are appended to the system prompt when provided
-  /// (agent memory + connected MCP servers).
+  /// (agent memory + connected MCP servers). `targeting` restricts where
+  /// the action may land — destinations the user pinned with an `@`
+  /// mention, or the set left enabled on the Act chip row.
   static func parseMulti(
     transcript: String,
     provider: AIProvider,
     memoryContext: String? = nil,
-    mcpContext: String? = nil
+    mcpContext: String? = nil,
+    targeting: ActTargeting = .unrestricted
   ) async throws -> MultiActionResponse {
     try await AgentParsing.parseMulti(
       transcript: transcript,
       selection: nil,
       memoryContext: memoryContext,
       mcpContext: mcpContext,
+      targetingContext: targeting.promptContext,
       complete: completer(for: provider)
     )
   }

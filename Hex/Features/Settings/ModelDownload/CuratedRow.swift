@@ -2,6 +2,7 @@ import ComposableArchitecture
 import Darwin
 import Inject
 import SwiftUI
+import HexCore
 
 struct CuratedRow: View {
 	@ObserveInjection var inject
@@ -40,7 +41,7 @@ struct CuratedRow: View {
 								.padding(.horizontal, 6)
 								.padding(.vertical, 2)
 								.background(Color.accentColor)
-								.clipShape(RoundedRectangle(cornerRadius: 4))
+								.clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.badge))
 						}
 					}
 					HStack(spacing: 24) {
@@ -87,6 +88,7 @@ struct CuratedRow: View {
 							}
 							.buttonStyle(.borderless)
 							.help("Download")
+							.accessibilityLabel("Download")
 							.frame(width: 24, height: 24)
 						}
 					}
@@ -94,11 +96,11 @@ struct CuratedRow: View {
 			}
 			.padding(10)
 			.background(
-				RoundedRectangle(cornerRadius: 10)
+				RoundedRectangle(cornerRadius: QuillDesign.Radius.card)
 					.fill(isSelected ? Color.blue.opacity(0.08) : Color(NSColor.controlBackgroundColor))
 			)
 			.overlay(
-				RoundedRectangle(cornerRadius: 10)
+				RoundedRectangle(cornerRadius: QuillDesign.Radius.card)
 					.stroke(isSelected ? Color.blue.opacity(0.35) : Color.gray.opacity(0.18))
 			)
 			.contentShape(.rect)

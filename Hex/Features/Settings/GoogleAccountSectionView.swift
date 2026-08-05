@@ -76,7 +76,7 @@ struct GoogleAccountSectionView: View {
 
   private var connectedRow: some View {
     HStack(alignment: .center, spacing: 12) {
-      RoundedRectangle(cornerRadius: 6, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
         .fill(Color(red: 0.263, green: 0.522, blue: 0.957)) // Google blue
         .frame(width: 32, height: 32)
         .overlay(
@@ -106,7 +106,7 @@ struct GoogleAccountSectionView: View {
 
   private var signedOutRow: some View {
     HStack(alignment: .center, spacing: 12) {
-      RoundedRectangle(cornerRadius: 6, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
         .fill(Color(red: 0.263, green: 0.522, blue: 0.957))
         .frame(width: 32, height: 32)
         .overlay(

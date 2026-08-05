@@ -19,6 +19,7 @@
 
 import Combine
 import SwiftUI
+import HexCore
 
 /// The big "Live transcript" card that lives in the scrollable canvas
 /// area. The waveform is rendered separately by `WaveformBottomBar`
@@ -62,7 +63,7 @@ struct QuillRecordingTranscriptCard: View {
           // Defer the scroll so the new text has laid out before we
           // ask for the bottom — otherwise SwiftUI sometimes scrolls
           // to the prior bottom and falls one line behind.
-          withAnimation(.easeOut(duration: 0.18)) {
+          QuillMotion.run(.easeOut(duration: 0.18)) {
             proxy.scrollTo(bottomAnchor, anchor: .bottom)
           }
         }
@@ -78,11 +79,11 @@ struct QuillRecordingTranscriptCard: View {
     .padding(14)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
         .fill(Color(.systemBackground))
     )
     .overlay(
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
         .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
     )
     // No external bottom padding — the outer ScrollView's recording-
@@ -128,7 +129,7 @@ struct WaveformBottomBar: View {
     .padding(.vertical, 14)
     .frame(maxWidth: .infinity)
     .background(
-      RoundedRectangle(cornerRadius: 20, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.sheet, style: .continuous)
         .fill(
           LinearGradient(
             colors: colorScheme == .dark
@@ -142,7 +143,7 @@ struct WaveformBottomBar: View {
         )
     )
     .overlay(
-      RoundedRectangle(cornerRadius: 20, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.sheet, style: .continuous)
         .stroke(
           Color(red: 0.486, green: 0.227, blue: 0.929).opacity(colorScheme == .dark ? 0.30 : 0.18),
           lineWidth: 0.5

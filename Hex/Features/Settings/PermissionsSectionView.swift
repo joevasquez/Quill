@@ -54,7 +54,7 @@ struct PermissionsSectionView: View {
 			}
 			.padding(12)
 			.background(Color(nsColor: .controlBackgroundColor))
-			.clipShape(RoundedRectangle(cornerRadius: 10))
+			.clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.card))
 		}
 
 		} header: {
@@ -101,7 +101,7 @@ struct PermissionsSectionView: View {
 		.padding(.vertical, 8)
 		.frame(maxWidth: .infinity)
 		.background(Color(nsColor: .controlBackgroundColor))
-		.clipShape(RoundedRectangle(cornerRadius: 8))
+		.clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.chip))
 	}
 
 	private var combinedAccessibilityStatus: PermissionStatus {

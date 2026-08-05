@@ -65,11 +65,11 @@ private struct NotePDFView: View {
     VStack(alignment: .leading, spacing: 18) {
       VStack(alignment: .leading, spacing: 6) {
         Text(note.displayTitle)
-          .font(.system(size: 26, weight: .bold, design: .serif))
+          .quillFont(26, weight: .bold, design: .serif)
           .foregroundColor(.black)
 
         Text(metadataLine)
-          .font(.system(size: 11))
+          .quillFont(11)
           .foregroundColor(.gray)
       }
 
@@ -95,7 +95,7 @@ private struct NotePDFView: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(maxWidth: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous))
             }
             if let analysis = analyses[id] {
               analysisBlock(analysis)
@@ -107,7 +107,7 @@ private struct NotePDFView: View {
       Spacer(minLength: 8)
 
       Text("Exported from Quill · \(Date().formatted(date: .abbreviated, time: .shortened))")
-        .font(.system(size: 9))
+        .quillFont(9)
         .foregroundColor(.gray)
     }
     .padding(40)
@@ -118,20 +118,20 @@ private struct NotePDFView: View {
   private func analysisBlock(_ analysis: PhotoAnalysis) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       Text("AI Analysis")
-        .font(.system(size: 9, weight: .semibold))
+        .quillFont(9, weight: .semibold)
         .foregroundColor(.gray)
       if !analysis.summary.isEmpty {
         Text(analysis.summary)
-          .font(.system(size: 11))
+          .quillFont(11)
           .foregroundColor(.black)
           .frame(maxWidth: .infinity, alignment: .leading)
           .fixedSize(horizontal: false, vertical: true)
       }
       ForEach(Array(analysis.keyDetails.enumerated()), id: \.offset) { _, detail in
         HStack(alignment: .firstTextBaseline, spacing: 4) {
-          Text("•").font(.system(size: 11)).foregroundColor(.gray)
+          Text("•").quillFont(11).foregroundColor(.gray)
           Text(detail)
-            .font(.system(size: 11))
+            .quillFont(11)
             .foregroundColor(.black)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
@@ -139,11 +139,11 @@ private struct NotePDFView: View {
       }
       if let transcribed = analysis.transcribedText, !transcribed.isEmpty {
         Text("Transcribed text:")
-          .font(.system(size: 9, weight: .semibold))
+          .quillFont(9, weight: .semibold)
           .foregroundColor(.gray)
           .padding(.top, 2)
         Text(transcribed)
-          .font(.system(size: 10, design: .monospaced))
+          .quillFont(10, design: .monospaced)
           .foregroundColor(.black)
           .frame(maxWidth: .infinity, alignment: .leading)
           .fixedSize(horizontal: false, vertical: true)
@@ -151,7 +151,7 @@ private struct NotePDFView: View {
     }
     .padding(8)
     .background(Color.gray.opacity(0.08))
-    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous))
   }
 
   private var metadataLine: String {

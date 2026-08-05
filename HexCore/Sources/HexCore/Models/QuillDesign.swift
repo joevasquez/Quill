@@ -79,11 +79,37 @@ public enum QuillDesign {
 
   // MARK: - Geometry
 
+  /// The one corner-radius scale.
+  ///
+  /// Five steps, deliberately placed at the values the codebase already used
+  /// most (4/8/12/16), so consolidating moved the majority of surfaces by 2pt
+  /// or less rather than redrawing the app. Glass and material shapes both
+  /// take a radius, so a single scale is what keeps a chip inside a card
+  /// inside a sheet reading as nested rather than as three unrelated shapes.
+  ///
+  /// Use the semantic aliases at call sites — `Radius.card`, not `Radius.md`.
+  /// The step names exist so the scale can be reasoned about as a scale.
   public enum Radius {
-    public static let card: CGFloat = 20
-    public static let sheet: CGFloat = 30
-    public static let chip: CGFloat = 11
-    public static let group: CGFloat = 20
+    /// Badges, micro tiles, keycaps.
+    public static let xs: CGFloat = 4
+    /// Chips, small controls, icon tiles.
+    public static let sm: CGFloat = 8
+    /// Rows, fields, buttons, standard cards.
+    public static let md: CGFloat = 12
+    /// Panels and prominent cards.
+    public static let lg: CGFloat = 16
+    /// Sheets and full-width containers.
+    public static let xl: CGFloat = 24
+
+    // Semantic aliases — what call sites should say.
+    public static let badge = xs
+    public static let chip = sm
+    public static let tile = sm
+    public static let control = md
+    public static let card = md
+    public static let panel = lg
+    public static let group = lg
+    public static let sheet = xl
   }
 
   public enum OrbSize {
@@ -95,9 +121,13 @@ public enum QuillDesign {
   }
 
   // MARK: - Card metrics (existing surfaces — see `quillCard`)
+  //
+  // These predate `Radius` and disagreed with it (a card was 10 here and 20
+  // there). They now forward to the scale so there is exactly one answer to
+  // "what radius is a card?".
 
-  public static let cardCornerRadius: CGFloat = 10
-  public static let sheetCornerRadius: CGFloat = 12
+  public static let cardCornerRadius = Radius.card
+  public static let sheetCornerRadius = Radius.panel
 }
 
 // MARK: - Theme
@@ -191,21 +221,34 @@ private struct QuillThemeKey: EnvironmentKey {
 /// replaces the hand-rolled rounded-rect styles that had drifted apart.
 public struct QuillCardModifier: ViewModifier {
   @Environment(\.colorScheme) private var colorScheme
+  /// Quill's elevation is translucency, so this setting has to be honoured
+  /// here or it has no effect anywhere: a 5%-alpha fill over a busy page is
+  /// exactly the low-contrast surface the user turned it on to avoid.
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
   var cornerRadius: CGFloat
 
   public init(cornerRadius: CGFloat = QuillDesign.cardCornerRadius) {
     self.cornerRadius = cornerRadius
   }
 
+  private var theme: QuillTheme { .of(colorScheme) }
+
   public func body(content: Content) -> some View {
     content
       .background(
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-          .fill(colorScheme == .dark ? Color.white.opacity(0.05) : Color.black.opacity(0.03))
+          .fill(reduceTransparency ? AnyShapeStyle(theme.cardSolid) : AnyShapeStyle(theme.card))
       )
       .overlay(
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-          .strokeBorder(colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.08), lineWidth: 0.5)
+          .strokeBorder(
+            // A hairline that survives an opaque fill needs more contrast
+            // than one floating over a blur.
+            reduceTransparency
+              ? (colorScheme == .dark ? Color.white.opacity(0.22) : Color.black.opacity(0.22))
+              : (colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.08)),
+            lineWidth: reduceTransparency ? 1 : 0.5
+          )
       )
   }
 }

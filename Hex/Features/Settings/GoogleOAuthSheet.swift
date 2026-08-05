@@ -73,7 +73,7 @@ struct GoogleOAuthSheet: View {
 
   private var header: some View {
     HStack(spacing: 10) {
-      RoundedRectangle(cornerRadius: 6, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
         .fill(Color(red: 0.263, green: 0.522, blue: 0.957)) // Google blue #4285F4
         .frame(width: 32, height: 32)
         .overlay(

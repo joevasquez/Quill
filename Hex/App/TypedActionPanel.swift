@@ -29,8 +29,10 @@ final class TypedActionPanelController {
     }
 
     let content = TypedActionView(
-      onSubmit: { [weak self] text in
-        store.send(.typedActionSubmitted(text))
+      onSubmit: { [weak self] text, pinned in
+        store.send(
+          .typedActionSubmitted(text, targeting: ActTargeting(routable: [], pinned: pinned))
+        )
         self?.close()
       },
       onCancel: { [weak self] in self?.close() }
@@ -44,7 +46,7 @@ final class TypedActionPanelController {
     panel.isFloatingPanel = true
     panel.level = .floating
     panel.isReleasedWhenClosed = false
-    panel.setContentSize(NSSize(width: 440, height: 150))
+    panel.setContentSize(NSSize(width: 440, height: 248))
     panel.center()
 
     self.panel = panel
@@ -59,14 +61,20 @@ final class TypedActionPanelController {
 }
 
 private struct TypedActionView: View {
-  var onSubmit: (String) -> Void
+  var onSubmit: (String, [QuillActDestination]) -> Void
   var onCancel: () -> Void
 
-  @State private var text = ""
-  @FocusState private var focused: Bool
+  @AppStorage(IntegrationConnectionStore.userDefaultsKey) private var connectedIntegrationsData = Data()
+  @Shared(.hexSettings) private var hexSettings: HexSettings
 
-  private var canRun: Bool {
-    !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  /// Everything connected right now — the `@` menu's contents. The panel
+  /// has no chip row of its own (it's a 440pt scratchpad), so nothing is
+  /// muted here; pins are the only targeting signal.
+  private var destinations: [QuillActDestination] {
+    QuillActDestination.connected(
+      integrations: IntegrationConnectionStore.decode(connectedIntegrationsData),
+      servers: hexSettings.mcpServers
+    )
   }
 
   var body: some View {
@@ -80,11 +88,14 @@ private struct TypedActionView: View {
         Spacer()
       }
 
-      TextField("Remind me to send the deck tomorrow at 9…", text: $text)
-        .textFieldStyle(.roundedBorder)
-        .font(.system(size: 13))
-        .focused($focused)
-        .onSubmit { run() }
+      ActCommandField(
+        destinations: destinations,
+        placeholder: "Remind me to send the deck tomorrow at 9…",
+        hint: "Type @ to send this to a specific app",
+        onSubmit: onSubmit
+      )
+
+      Spacer(minLength: 0)
 
       HStack {
         Text("Runs through your agent — routines, memory, and connections included.")
@@ -93,19 +104,11 @@ private struct TypedActionView: View {
         Spacer()
         Button("Cancel", action: onCancel)
           .keyboardShortcut(.cancelAction)
-        Button("Run", action: run)
-          .keyboardShortcut(.defaultAction)
-          .disabled(!canRun)
       }
     }
     .padding(16)
-    .frame(width: 440)
-    .onAppear { focused = true }
-  }
-
-  private func run() {
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return }
-    onSubmit(trimmed)
+    // Tall enough that the `@` menu — an overlay, so it never grows its
+    // parent — isn't clipped by the panel's content bounds.
+    .frame(width: 440, height: 248, alignment: .top)
   }
 }

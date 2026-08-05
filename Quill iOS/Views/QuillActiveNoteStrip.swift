@@ -13,6 +13,7 @@
 //
 
 import SwiftUI
+import HexCore
 
 struct QuillActiveNoteStrip: View {
   /// The currently-active note, if any. When `nil` the strip renders a
@@ -37,7 +38,7 @@ struct QuillActiveNoteStrip: View {
         .foregroundStyle(Color(red: 0.486, green: 0.227, blue: 0.929))
         .frame(width: 32, height: 32)
         .background(
-          RoundedRectangle(cornerRadius: 8, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
             .fill(Color(red: 0.753, green: 0.518, blue: 0.988).opacity(0.22))
         )
 
@@ -127,7 +128,7 @@ private struct PulsingOpacity: ViewModifier {
     content
       .opacity(dim ? 0.4 : 1.0)
       .onAppear {
-        withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+        QuillMotion.run(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
           dim = true
         }
       }

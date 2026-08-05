@@ -366,6 +366,7 @@ struct AIProcessingSectionView: View {
               Image(systemName: "trash")
             }
             .controlSize(.small)
+            .accessibilityLabel("Delete mode \(mode.name)")
           }
           .padding(.vertical, 4)
         }
@@ -578,6 +579,7 @@ struct AppModeRuleRow: View {
       }
       .buttonStyle(.borderless)
       .help("Remove this rule.")
+      .accessibilityLabel("Remove this rule")
     }
   }
 

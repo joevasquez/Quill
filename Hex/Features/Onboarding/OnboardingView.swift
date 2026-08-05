@@ -352,7 +352,7 @@ private struct OnboardingButton: View {
   private var backgroundView: some View {
     switch variant {
     case .primary:
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(
           LinearGradient(
             colors: [OB.purple, OB.purpleDark],
@@ -362,14 +362,14 @@ private struct OnboardingButton: View {
         )
         .shadow(color: OB.purple.opacity(0.30), radius: 9, y: 3)
     case .secondary:
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(Color.white)
         .shadow(color: Color.black.opacity(0.04), radius: 1, y: 1)
     case .ghost:
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(Color.clear)
     case .dark:
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(OB.ink)
     }
   }
@@ -378,7 +378,7 @@ private struct OnboardingButton: View {
   private var borderView: some View {
     switch variant {
     case .secondary:
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .stroke(OB.line, lineWidth: 1)
     default:
       EmptyView()
@@ -440,12 +440,12 @@ private struct Kbd: View {
       .padding(.horizontal, 7)
       .frame(minWidth: 24, minHeight: 24)
       .background(
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
           .fill(Color.white)
           .shadow(color: Color.black.opacity(0.08), radius: 0, y: 1)
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
           .stroke(OB.line, lineWidth: 1)
       )
   }
@@ -468,7 +468,7 @@ private struct PermissionRow: View {
           .foregroundStyle(OB.purpleDark)
           .frame(width: 32, height: 32)
           .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
               .fill(OB.purpleLight)
           )
 
@@ -486,11 +486,11 @@ private struct PermissionRow: View {
       .padding(14)
       .padding(.horizontal, 2)
       .background(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .fill(Color.white)
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .stroke(state == .granted ? OB.proGreen.opacity(0.3) : OB.line, lineWidth: 1)
       )
     }
@@ -563,11 +563,11 @@ private struct WelcomeStep: View {
         .offset(y: featherOffset)
         .opacity(featherOpacity)
         .onAppear {
-          withAnimation(.spring(duration: 1.0, bounce: 0.3)) {
+          QuillMotion.run(.spring(duration: 1.0, bounce: 0.3)) {
             featherOffset = 0
             featherOpacity = 1
           }
-          withAnimation(.easeIn(duration: 0.4).delay(0.5)) {
+          QuillMotion.run(.easeIn(duration: 0.4).delay(0.5)) {
             contentOpacity = 1
           }
         }
@@ -776,11 +776,11 @@ private struct PlanChoiceStep: View {
     .padding(18)
     .padding(.horizontal, 2)
     .background(
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
         .fill(Color.white)
     )
     .overlay(
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
         .stroke(OB.line, lineWidth: 1)
     )
   }
@@ -828,7 +828,7 @@ private struct PlanChoiceStep: View {
     .padding(.horizontal, 2)
     .background(
       ZStack {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
           .fill(
             LinearGradient(
               colors: [Color.white, OB.purpleLight],
@@ -850,10 +850,10 @@ private struct PlanChoiceStep: View {
           .frame(width: 200, height: 200)
           .offset(x: 60, y: -80)
       }
-      .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+      .clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous))
     )
     .overlay(
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
         .stroke(OB.purpleMid, lineWidth: 1)
     )
     .shadow(color: OB.purple.opacity(0.18), radius: 16, y: 6)
@@ -912,7 +912,7 @@ private struct ProTrialStep: View {
             .font(.system(size: 11, weight: .semibold))
             .tracking(0.44)
             .foregroundStyle(OB.inkMute)
-          RoundedRectangle(cornerRadius: 9, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
             .stroke(OB.purple, lineWidth: 1.5)
             .frame(height: 42)
             .overlay(
@@ -930,11 +930,11 @@ private struct ProTrialStep: View {
               .font(.system(size: 11, weight: .semibold))
               .tracking(0.44)
               .foregroundStyle(OB.inkMute)
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
               .fill(OB.paperElev)
               .frame(height: 42)
               .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
                   .stroke(OB.line, lineWidth: 1)
               )
               .overlay(
@@ -951,11 +951,11 @@ private struct ProTrialStep: View {
               .font(.system(size: 11, weight: .semibold))
               .tracking(0.44)
               .foregroundStyle(OB.inkMute)
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
               .fill(OB.paperElev)
               .frame(height: 42)
               .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
                   .stroke(OB.line, lineWidth: 1)
               )
               .overlay(
@@ -970,11 +970,11 @@ private struct ProTrialStep: View {
       }
       .padding(18)
       .background(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .fill(Color.white)
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .stroke(OB.line, lineWidth: 1)
       )
 
@@ -991,11 +991,11 @@ private struct ProTrialStep: View {
       }
       .padding(14)
       .background(
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .fill(OB.purpleLight)
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .stroke(OB.purpleMid.opacity(0.2), lineWidth: 1)
       )
 
@@ -1099,7 +1099,7 @@ private struct BYOKProviderStep: View {
           .foregroundStyle(.white)
           .frame(width: 36, height: 36)
           .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
               .fill(color)
           )
 
@@ -1128,11 +1128,11 @@ private struct BYOKProviderStep: View {
       .padding(14)
       .padding(.horizontal, 2)
       .background(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .fill(Color.white)
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .stroke(
             isSelected ? OB.purple : OB.line,
             lineWidth: isSelected ? 1.5 : 1
@@ -1223,7 +1223,7 @@ private struct BYOKGetKeyStep: View {
               .padding(.vertical, 2)
               .frame(maxWidth: .infinity, alignment: .leading)
               .background(
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                RoundedRectangle(cornerRadius: QuillDesign.Radius.badge, style: .continuous)
                   .fill(Color.white)
               )
           }
@@ -1246,7 +1246,7 @@ private struct BYOKGetKeyStep: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .background(
-                  RoundedRectangle(cornerRadius: 6, style: .continuous)
+                  RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
                     .fill(OB.ink)
                 )
             }
@@ -1260,9 +1260,9 @@ private struct BYOKGetKeyStep: View {
           .padding(16)
         }
         .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous))
         .overlay(
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .stroke(OB.line, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.08), radius: 12, y: 4)
@@ -1301,11 +1301,11 @@ private struct BYOKGetKeyStep: View {
     .padding(12)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(Color.white)
     )
     .overlay(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .stroke(OB.line, lineWidth: 1)
     )
   }
@@ -1323,11 +1323,11 @@ private struct BYOKGetKeyStep: View {
     .padding(.horizontal, 10)
     .padding(.vertical, 8)
     .background(
-      RoundedRectangle(cornerRadius: 6, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
         .fill(Color(red: 0.98, green: 0.98, blue: 0.965))
     )
     .overlay(
-      RoundedRectangle(cornerRadius: 6, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
         .stroke(OB.line, lineWidth: 1)
     )
   }
@@ -1402,11 +1402,11 @@ private struct BYOKVerifyStep: View {
           }
           .padding(12)
           .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
               .fill(Color(red: 0.941, green: 0.980, blue: 0.953))
           )
           .overlay(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
               .stroke(OB.proGreen.opacity(0.4), lineWidth: 1.5)
           )
         } else {
@@ -1416,11 +1416,11 @@ private struct BYOKVerifyStep: View {
             .foregroundStyle(OB.ink)
             .padding(12)
             .background(
-              RoundedRectangle(cornerRadius: 9, style: .continuous)
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
                 .fill(Color.white)
             )
             .overlay(
-              RoundedRectangle(cornerRadius: 9, style: .continuous)
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
                 .stroke(OB.purple, lineWidth: 1.5)
             )
         }
@@ -1443,11 +1443,11 @@ private struct BYOKVerifyStep: View {
       }
       .padding(18)
       .background(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .fill(Color.white)
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .stroke(OB.line, lineWidth: 1)
       )
 
@@ -1469,11 +1469,11 @@ private struct BYOKVerifyStep: View {
       }
       .padding(14)
       .background(
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .fill(OB.paperElev)
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .stroke(OB.line, lineWidth: 1)
       )
 
@@ -1497,7 +1497,7 @@ private struct BYOKVerifyStep: View {
   private func saveKey() {
     store.send(.saveAPIKey(apiKey, forProvider: provider))
     store.send(.setAIProvider(provider))
-    withAnimation(.spring(duration: 0.4)) {
+    QuillMotion.run(.spring(duration: 0.4)) {
       isVerified = true
     }
   }
@@ -1565,11 +1565,11 @@ private struct GoogleSignInStep: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-          RoundedRectangle(cornerRadius: 12, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .fill(Color.white)
         )
         .overlay(
-          RoundedRectangle(cornerRadius: 12, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
             .stroke(OB.proGreen.opacity(0.3), lineWidth: 1)
         )
         .transition(.opacity)
@@ -1619,7 +1619,7 @@ private struct GoogleSignInStep: View {
       do {
         _ = try await googleOAuth.authorize(scopes: GoogleOAuthClient.defaultScopes)
         let email = await googleOAuth.fetchUserEmail()
-        withAnimation { connectedEmail = email ?? "your Google account" }
+        QuillMotion.run { connectedEmail = email ?? "your Google account" }
       } catch {
         errorMessage = error.localizedDescription
       }
@@ -1685,7 +1685,7 @@ private struct FirstDictationStep: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(
-              RoundedRectangle(cornerRadius: 6, style: .continuous)
+              RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
                 .fill(.white.opacity(0.06))
             )
         }
@@ -1710,7 +1710,7 @@ private struct FirstDictationStep: View {
         HStack(spacing: 3) {
           ForEach(0 ..< 16, id: \.self) { i in
             let baseHeight: CGFloat = [8, 16, 6, 20, 10, 18, 8, 14, 10, 22, 12, 8, 18, 10, 6, 16][i]
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.badge, style: .continuous)
               .fill(OB.purpleMid)
               .frame(width: 3, height: wavePhase ? baseHeight : baseHeight * 0.6)
               .animation(
@@ -1727,7 +1727,7 @@ private struct FirstDictationStep: View {
       .padding(.vertical, 20)
       .frame(width: 420)
       .background(
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
           .fill(
             LinearGradient(
               colors: [OB.ink, Color(red: 0.086, green: 0.086, blue: 0.094)],
@@ -1837,7 +1837,7 @@ private struct DoneStep: View {
       }
       .padding(.horizontal, 60)
     }
-    .onAppear { withAnimation { burst = true } }
+    .onAppear { QuillMotion.run { burst = true } }
   }
 
   private func quickStartCard(title: String, shortcut: String) -> some View {
@@ -1853,11 +1853,11 @@ private struct DoneStep: View {
     .padding(.vertical, 10)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(Color.white)
     )
     .overlay(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .stroke(OB.line, lineWidth: 1)
     )
   }

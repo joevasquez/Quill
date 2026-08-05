@@ -182,19 +182,19 @@ struct OrbView: View {
       displayedLightness = targetPalette.L
     }
     .onChange(of: targetPalette) { _, palette in
-      withAnimation(.easeInOut(duration: 0.6)) {
+      QuillMotion.run(.easeInOut(duration: 0.6)) {
         displayedHue = OKLCH.nearestEquivalentHue(to: palette.H, from: displayedHue)
         displayedLightness = palette.L
       }
     }
     .onChange(of: targetChroma) { _, chroma in
-      withAnimation(.easeInOut(duration: 0.4)) {
+      QuillMotion.run(.easeInOut(duration: 0.4)) {
         displayedChroma = chroma
       }
     }
     .onChange(of: partialTranscript) { _, text in
       guard isActMode, lockedActionIntegration == nil else { return }
-      withAnimation(.easeOut(duration: 0.25)) {
+      QuillMotion.run(.easeOut(duration: 0.25)) {
         intuitedTarget = Self.intuitRingTarget(
           from: text,
           integrations: actionIntegrations,
@@ -546,11 +546,11 @@ struct OrbView: View {
           .foregroundStyle(.white.opacity(0.6))
           .frame(width: OrbSize.satelliteTileSize, height: OrbSize.satelliteTileSize)
           .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
               .fill(Color.white.opacity(0.06))
           )
           .overlay(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
               .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
           )
           .offset(
@@ -660,7 +660,7 @@ struct OrbView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(
-          RoundedRectangle(cornerRadius: 7, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
             .fill(.white.opacity(0.08))
         )
       }
@@ -674,7 +674,7 @@ struct OrbView: View {
             .font(.system(size: 9, weight: .bold))
           Text("Keep")
             .font(.system(size: 11, weight: .semibold))
-          RoundedRectangle(cornerRadius: 3, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.badge, style: .continuous)
             .fill(.white.opacity(0.25))
             .frame(width: 14, height: 14)
             .overlay(
@@ -687,7 +687,7 @@ struct OrbView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(
-          RoundedRectangle(cornerRadius: 7, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
             .fill(.green)
         )
       }
@@ -695,7 +695,7 @@ struct OrbView: View {
     }
     .padding(3)
     .background(
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
         .fill(.black.opacity(0.7))
     )
   }
@@ -712,17 +712,17 @@ private struct OrbBreathModifier: ViewModifier {
       .scaleEffect(active && breathing ? 1.045 : 1.0)
       .onAppear {
         guard active else { return }
-        withAnimation(.easeInOut(duration: 2.3).repeatForever(autoreverses: true)) {
+        QuillMotion.run(.easeInOut(duration: 2.3).repeatForever(autoreverses: true)) {
           breathing = true
         }
       }
       .onChange(of: active) { _, newValue in
         if newValue {
-          withAnimation(.easeInOut(duration: 2.3).repeatForever(autoreverses: true)) {
+          QuillMotion.run(.easeInOut(duration: 2.3).repeatForever(autoreverses: true)) {
             breathing = true
           }
         } else {
-          withAnimation(.easeOut(duration: 0.3)) {
+          QuillMotion.run(.easeOut(duration: 0.3)) {
             breathing = false
           }
         }
@@ -746,7 +746,7 @@ private struct OrbPulseRing: View {
       .scaleEffect(animating ? 2.1 : 1.0)
       .opacity(animating ? 0 : 0.5 + audioLevel * 0.3)
       .onAppear {
-        withAnimation(
+        QuillMotion.run(
           .easeOut(duration: 2.2)
           .repeatForever(autoreverses: false)
           .delay(delay)
@@ -798,7 +798,7 @@ private struct OrbMeterBar: View {
     let h = 5.0 + level * 18.0 * (0.35 + 0.65 * local) * multiplier
     let scaleY = h / 6.0
 
-    RoundedRectangle(cornerRadius: 3)
+    RoundedRectangle(cornerRadius: QuillDesign.Radius.badge)
       .fill(color)
       .frame(width: 2, height: 6)
       .scaleEffect(y: scaleY, anchor: .bottom)
@@ -829,7 +829,7 @@ private struct OrbSpinnerArc: View {
           .frame(width: OrbSize.arcFrame, height: OrbSize.arcFrame)
       )
       .onAppear {
-        withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
+        QuillMotion.run(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
           rotation = 360
         }
       }
@@ -902,14 +902,14 @@ private struct OrbParticle: View {
       .onAppear {
         let initialAngle = Double(delayIndex) * 60.0
         orbitAngle = initialAngle
-        withAnimation(
+        QuillMotion.run(
           .linear(duration: duration)
           .repeatForever(autoreverses: false)
         ) {
           orbitAngle = initialAngle + (reverse ? -360 : 360)
         }
         if !reduceMotion {
-          withAnimation(
+          QuillMotion.run(
             .easeInOut(duration: 1.7)
             .repeatForever(autoreverses: true)
             .delay(Double(delayIndex) * 0.4)
@@ -976,11 +976,11 @@ private struct OrbSatelliteTile: View {
         .foregroundStyle(isTarget ? .white : .white.opacity(0.7))
         .frame(width: OrbSize.satelliteTileSize, height: OrbSize.satelliteTileSize)
         .background(
-          RoundedRectangle(cornerRadius: 9, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
             .fill(isTarget ? accentColor : Color.white.opacity(0.08))
         )
         .overlay(
-          RoundedRectangle(cornerRadius: 9, style: .continuous)
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
             .strokeBorder(
               isTarget ? accentColor : Color.white.opacity(0.15),
               lineWidth: 1
@@ -993,6 +993,9 @@ private struct OrbSatelliteTile: View {
         .scaleEffect(isTarget ? 1.16 : 1.0)
     }
     .buttonStyle(.plain)
+    .accessibilityLabel(target.connection.displayName)
+    .accessibilityAddTraits(isTarget ? [.isSelected] : [])
+    .accessibilityHint("Send this action to \(target.connection.displayName)")
     .offset(x: x, y: y)
     .animation(.spring(response: 0.35, dampingFraction: 0.7), value: isTarget)
     .accessibilityLabel("Send to \(target.connection.displayName)")

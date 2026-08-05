@@ -50,7 +50,7 @@ struct HotKeyView: View {
       }
     }
     .background(
-      RoundedRectangle(cornerRadius: 6)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.chip)
         .fill(Color.blue.opacity(isActive ? 0.1 : 0))
         .stroke(Color.blue.opacity(isActive ? 0.2 : 0), lineWidth: 1)
     )
@@ -72,7 +72,7 @@ struct KeyView: View {
       .foregroundColor(.white)
       .frame(width: 48, height: 48)
       .background(
-        RoundedRectangle(cornerRadius: 8)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.chip)
           .fill(
             .black.mix(with: .white, by: 0.2)
               .shadow(.inner(color: .white.opacity(0.3), radius: 1, y: 1))

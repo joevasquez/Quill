@@ -75,7 +75,7 @@ struct TodoistTokenSheet: View {
 
   private var header: some View {
     HStack(spacing: 10) {
-      RoundedRectangle(cornerRadius: 6, style: .continuous)
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
         .fill(Color(red: 0.894, green: 0.263, blue: 0.196)) // Todoist red #E44332
         .frame(width: 32, height: 32)
         .overlay(

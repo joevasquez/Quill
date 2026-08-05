@@ -29,6 +29,9 @@ extension NSNotification.Name {
   /// mode-switch HUD can show a brief bubble when the menu bar is hidden
   /// (full-screen app) and the status-item feather/chip isn't visible.
   static let modeDidChange = NSNotification.Name("ModeDidChange")
+  /// Posted after an Action run's trace is written to `ActionRunStore`, so
+  /// an open Actions pane refreshes without polling.
+  static let actionRunRecorded = NSNotification.Name("ActionRunRecorded")
 }
 
 enum ModeChangeNotification {
@@ -53,6 +56,9 @@ enum ActionConfirmationNotification {
   /// Bundle ID of the app frontmost at record-start, so the panel can paste an
   /// extracted answer back where the user was typing.
   static let sourceAppBundleIDKey = "sourceAppBundleID"
+  /// How the run was started (`ActionRun.Trigger` rawValue) — recorded on
+  /// the trace so Actions history distinguishes dictated from typed.
+  static let triggerKey = "trigger"
 
   static func post(intent: ActionIntent, rawTranscript: String = "") {
     NotificationCenter.default.post(
@@ -65,7 +71,13 @@ enum ActionConfirmationNotification {
     )
   }
 
-  static func postMulti(intents: [ActionIntent], rawTranscript: String = "", autoExecute: Bool = false, sourceAppBundleID: String? = nil) {
+  static func postMulti(
+    intents: [ActionIntent],
+    rawTranscript: String = "",
+    autoExecute: Bool = false,
+    sourceAppBundleID: String? = nil,
+    trigger: ActionRun.Trigger = .voice
+  ) {
     NotificationCenter.default.post(
       name: .presentMultiActionConfirmation,
       object: nil,
@@ -74,6 +86,7 @@ enum ActionConfirmationNotification {
         rawTranscriptKey: rawTranscript,
         autoExecuteKey: autoExecute,
         sourceAppBundleIDKey: sourceAppBundleID as Any,
+        triggerKey: trigger.rawValue,
       ]
     )
   }

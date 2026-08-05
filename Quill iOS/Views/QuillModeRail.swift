@@ -33,14 +33,7 @@ struct QuillModeRail: View {
       }
     }
     .padding(4)
-    .background(
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .fill(theme.chip)
-        .overlay(
-          RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .strokeBorder(theme.hair, lineWidth: 0.5)
-        )
-    )
+    .glassEffect(in: .rect(cornerRadius: QuillDesign.Radius.panel))
   }
 
   private func railButton(_ m: QuillMode) -> some View {
@@ -48,13 +41,13 @@ struct QuillModeRail: View {
     let p = m.palette
 
     return Button {
-      withAnimation(.easeInOut(duration: 0.18)) { mode = m }
+      QuillMotion.run(.easeInOut(duration: 0.18)) { mode = m }
     } label: {
       HStack(spacing: 6) {
         Image(systemName: m.systemImage)
-          .font(.system(size: 15, weight: isOn ? .semibold : .medium))
+          .quillFont(15, weight: isOn ? .semibold : .medium)
         Text(m.label)
-          .font(.system(size: 14.5, weight: isOn ? .bold : .medium))
+          .quillFont(14.5, weight: isOn ? .bold : .medium)
       }
       .foregroundStyle(
         isOn
@@ -65,10 +58,10 @@ struct QuillModeRail: View {
       .padding(.vertical, compact ? 7 : 9)
       .padding(.horizontal, 8)
       .background(
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
           .fill(isOn ? p.color(0.14) : .clear)
           .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
               .strokeBorder(isOn ? p.color(0.5) : .clear, lineWidth: 1)
           )
       )
@@ -96,7 +89,7 @@ private struct QuillChip<Label: View>: View {
   var body: some View {
     Button(action: action) {
       label()
-        .font(.system(size: 13, weight: isOn ? .semibold : .medium))
+        .quillFont(13, weight: isOn ? .semibold : .medium)
         .foregroundStyle(foreground)
         .padding(.vertical, 6)
         .padding(.horizontal, 11)
@@ -132,9 +125,9 @@ private struct QuillAddChip: View {
     Button(action: action) {
       HStack(spacing: 5) {
         Image(systemName: "plus")
-          .font(.system(size: 11, weight: .semibold))
+          .quillFont(11, weight: .semibold)
         Text(label)
-          .font(.system(size: 13, weight: .medium))
+          .quillFont(13, weight: .medium)
       }
       .foregroundStyle(theme.text2)
       .padding(.vertical, 6)
@@ -195,11 +188,11 @@ struct QuillFormatChips: View {
     let tint = QuillDesign.ModePalette.dictate
     return HStack(spacing: 6) {
       Image(systemName: format.iosIconName)
-        .font(.system(size: 13, weight: .medium))
+        .quillFont(13, weight: .medium)
       Text(format.iosDisplayName)
-        .font(.system(size: 13, weight: .semibold))
+        .quillFont(13, weight: .semibold)
       Image(systemName: "chevron.down")
-        .font(.system(size: 9, weight: .semibold))
+        .quillFont(9, weight: .semibold)
         .opacity(0.7)
     }
     .foregroundStyle(tint.lightnessCapped(at: theme.isDark ? 0.82 : 0.5).color())
@@ -218,113 +211,10 @@ struct QuillFormatChips: View {
 }
 
 // MARK: - Act: destinations
-
-/// A destination the agent can route to — a native integration or an MCP
-/// server. The rail only offers things that are actually connected;
-/// "+ Add" goes to Connections rather than pretending a toggle can
-/// authenticate.
-struct QuillActDestination: Identifiable, Equatable {
-  enum Kind: Equatable {
-    case integration(Integration.Identifier)
-    case mcp(String)
-  }
-
-  var kind: Kind
-  var name: String
-  var systemImage: String
-  var hue: Double
-
-  var id: String {
-    switch kind {
-    case .integration(let i): "integration:\(i.rawValue)"
-    case .mcp(let name): "mcp:\(name)"
-    }
-  }
-
-  var isMCP: Bool {
-    if case .mcp = kind { return true }
-    return false
-  }
-
-  var palette: OKLCH { QuillDesign.destination(hue: hue) }
-
-  /// Everything the agent could actually route to right now: connected
-  /// native integrations plus enabled MCP servers.
-  ///
-  /// Unlike the design prototype — where destinations were a hardcoded list
-  /// with a bool toggle — connecting is a real act of authentication, so
-  /// this only reflects what's already set up. "+ Add" leads to Connections.
-  static func connected(
-    integrationData: Data,
-    mcpData: Data
-  ) -> [QuillActDestination] {
-    let connectedIDs = IntegrationConnectionStore.decode(integrationData)
-    let integrations = Integration.all
-      .filter { connectedIDs.contains($0.identifier) }
-      .map {
-        QuillActDestination(
-          kind: .integration($0.identifier),
-          name: $0.name,
-          systemImage: $0.systemImage,
-          hue: $0.satelliteHue
-        )
-      }
-
-    let servers = MCPServersStorage.decode(mcpData)
-      .filter(\.isEnabled)
-      .map { server -> QuillActDestination in
-        // A known server gets its brand; an unknown one a neutral tone.
-        let brand = ConnectionDirectory.brand(forServerNamed: server.name, url: server.url)
-        return QuillActDestination(
-          kind: .mcp(server.name),
-          name: brand?.name ?? server.name,
-          systemImage: brand?.systemImage ?? "puzzlepiece.extension.fill",
-          hue: brand.flatMap { OKLCH(hex: $0.tintHex)?.H } ?? Self.neutralMCPHue
-        )
-      }
-
-    return integrations + servers
-  }
-
-  /// Steel — for MCP servers with no brand of their own.
-  private static let neutralMCPHue: Double = 250
-
-  /// The destination a partial transcript points at, or nil if nothing has
-  /// been said yet that names one.
-  ///
-  /// Mirrors the macOS orb's ring intuition: a server named outright beats
-  /// an integration matched on a generic verb, since "linear" is a much
-  /// stronger signal than "issue". This only previews the guess — the LLM
-  /// parse still decides, and the user can override by tapping a chip.
-  static func intuit(
-    from transcript: String,
-    among destinations: [QuillActDestination]
-  ) -> QuillActDestination? {
-    let haystack = " \(transcript.lowercased()) "
-    guard haystack.count > 2 else { return nil }
-
-    // A destination named explicitly wins outright.
-    if let named = destinations.first(where: {
-      haystack.contains(" \($0.name.lowercased()) ")
-    }) {
-      return named
-    }
-
-    // Otherwise fall back to each integration's keywords, most hits first.
-    var best: (destination: QuillActDestination, hits: Int)?
-    for destination in destinations {
-      guard case .integration(let id) = destination.kind,
-            let integration = Integration.all.first(where: { $0.identifier == id })
-      else { continue }
-
-      let hits = integration.intuitKeywords.filter { haystack.contains($0) }.count
-      if hits > 0, hits > (best?.hits ?? 0) {
-        best = (destination, hits)
-      }
-    }
-    return best?.destination
-  }
-}
+//
+// `QuillActDestination` moved to HexCore (Models/ActDestination.swift) so the
+// macOS Home command bar offers the same destinations, in the same order,
+// with the same brand visuals.
 
 struct QuillActChips: View {
   var destinations: [QuillActDestination]
@@ -358,7 +248,7 @@ struct QuillActChips: View {
           withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { isExpanded = false }
         } label: {
           Text("Done")
-            .font(.system(size: 13, weight: .semibold))
+            .quillFont(13, weight: .semibold)
             .foregroundStyle(theme.text2)
             .padding(.vertical, 5)
             .padding(.horizontal, 16)
@@ -384,7 +274,7 @@ struct QuillActChips: View {
         HStack(spacing: -7) {
           ForEach(enabled.prefix(5)) { d in
             Image(systemName: d.systemImage)
-              .font(.system(size: 11, weight: .semibold))
+              .quillFont(11, weight: .semibold)
               .foregroundStyle(d.palette.color())
               .frame(width: 26, height: 26)
               .background(
@@ -397,7 +287,7 @@ struct QuillActChips: View {
         }
 
         Text(summaryText)
-          .font(.system(size: 13, weight: .medium))
+          .quillFont(13, weight: .medium)
           .foregroundStyle(theme.text2)
           .lineLimit(1)
 
@@ -405,19 +295,19 @@ struct QuillActChips: View {
 
         HStack(spacing: 3) {
           Text("Manage")
-            .font(.system(size: 13, weight: .semibold))
+            .quillFont(13, weight: .semibold)
           Image(systemName: "chevron.down")
-            .font(.system(size: 10, weight: .semibold))
+            .quillFont(10, weight: .semibold)
         }
         .foregroundStyle(theme.text2)
       }
       .padding(.vertical, 7)
       .padding(.horizontal, 11)
       .background(
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
           .fill(theme.card)
           .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
               .strokeBorder(theme.hair, lineWidth: 0.5)
           )
       )
@@ -446,19 +336,19 @@ struct QuillActChips: View {
         } label: {
           HStack(spacing: 7) {
             Image(systemName: d.systemImage)
-              .font(.system(size: 13, weight: .medium))
+              .quillFont(13, weight: .medium)
               .foregroundStyle(d.palette.color())
             Text(d.name)
               .foregroundStyle(isOn ? theme.text : theme.text2)
             if d.isMCP {
               Text("MCP")
-                .font(.system(size: 9, weight: .heavy))
+                .quillFont(9, weight: .heavy)
                 .tracking(0.4)
                 .foregroundStyle(theme.text3)
                 .padding(.horizontal, 4)
                 .padding(.vertical, 1)
                 .overlay(
-                  RoundedRectangle(cornerRadius: 4, style: .continuous)
+                  RoundedRectangle(cornerRadius: QuillDesign.Radius.badge, style: .continuous)
                     .strokeBorder(theme.hair, lineWidth: 0.5)
                 )
             }
@@ -503,9 +393,9 @@ struct QuillEditChips: View {
     } label: {
       HStack(spacing: 6) {
         Image(systemName: isLearned ? "clock" : "sparkles")
-          .font(.system(size: 12, weight: .medium))
+          .quillFont(12, weight: .medium)
         Text(cmd)
-          .font(.system(size: 13, weight: .semibold))
+          .quillFont(13, weight: .semibold)
       }
       .foregroundStyle(p.lightnessCapped(at: 0.84).color())
       .padding(.vertical, 6)
