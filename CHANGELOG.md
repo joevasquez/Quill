@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.26.0
+
+### Minor Changes
+
+- bc6a757: Show the Action workflow inside the app: when the Home pane is open, the confirmation card renders under the command bar instead of dropping out of the menu bar
+- bc6a757: VoiceOver labels across the Mac app (6 to 41), plus Reduce Motion on every animation and Reduce Transparency on card surfaces
+- bc6a757: Add an Actions pane recording every agent run with a per-step trace (tool, arguments, raw result, and the before/after of a chained step's resolve pass)
+- bc6a757: Adopt Liquid Glass on iOS 26: the capture cluster now morphs out of the + button, and the search field, note composer, and mode rail use system glass
+- bc6a757: Consolidate the corner-radius scale: one 5-step token set replaces 14 ad-hoc radii across 269 call sites, and Radius.card no longer contradicts cardCornerRadius
+- bc6a757: Mac Home: move the Act/Notes toggle above the input bar, bring the iOS destination chip row to macOS in Act mode, and add @-mention tagging so a typed command can pin the exact integration or MCP server it should run against. The input bar now grows to four lines as you type. Chip mutes and @ pins both reach the planner — muted apps and their MCP tools are withheld from the prompt entirely, and a single pin hard-overrides the parsed target.
+- bc6a757: iOS now supports Dynamic Type: 211 fixed font sizes scale with the text-size setting, and text-bearing controls grow instead of clipping
+
+### Patch Changes
+
+- bc6a757: The in-app Action card now follows the Appearance setting instead of rendering dark chrome on a light Home pane
+- bc6a757: Fix a "Publishing changes from within view updates" warning when the Home pane appears or is navigated away from
+- bc6a757: Act command bar: render @ tags as small inline pills in the typed text (macOS), close the suggestion menu once a destination is picked, position the menu below the field instead of over it, and loosen vertical spacing on the Mac Home pane.
+- bc6a757: Fix chained contact lookups dropping the email address: the planner now always inserts a get-detail step between a search and any action that consumes a detail field
+- bc6a757: Fix a "Modifying state during view update" warning when accepting an @ destination in the command bar, and land the caret past the inserted tag when tagging mid-sentence
+- bc6a757: Pretty-print and syntax-highlight JSON results in the Actions trace viewer, with a Raw toggle for the exact text a step returned
+
 ## 0.25.0
 
 ### Minor Changes
