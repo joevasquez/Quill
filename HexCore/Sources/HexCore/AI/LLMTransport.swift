@@ -43,8 +43,17 @@ public enum LLMTransportError: LocalizedError, HTTPStatusCarrying {
 }
 
 public enum LLMTransport {
-  /// Quill AI proxy Cloud Function endpoint (GCP project quill-495210).
-  public static let proProxyURL = "https://us-central1-quill-495210.cloudfunctions.net/quill-ai-proxy"
+  /// Quill AI proxy — a Cloudflare Worker (`tools/cloudflare/quill-ai-proxy`).
+  ///
+  /// Moved off GCP Cloud Functions on 2026-08-05: project quill-495210's
+  /// Artifact Registry was left unusable by the 2026-07-31 delete/undelete,
+  /// so the function could no longer be redeployed. The Worker also reads Pro
+  /// entitlement straight from the dashboard's D1 rather than over HTTP.
+  ///
+  /// The request/response contract is unchanged. Builds shipped before this
+  /// change still point at the Cloud Function URL, so leave that deployment
+  /// running until they have aged out.
+  public static let proProxyURL = "https://quill-api.joevasquez.com"
 
   /// One LLM completion. `jsonResponse` opts OpenAI into
   /// `response_format: json_object` (the system prompt must mention JSON);

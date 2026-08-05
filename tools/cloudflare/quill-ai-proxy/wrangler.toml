@@ -1,0 +1,23 @@
+name = "quill-ai-proxy"
+main = "index.js"
+compatibility_date = "2026-08-01"
+
+# Reads `quill_entitlements` (written by the dashboard's Quill Admin tab) and
+# maintains `quill_proxy_usage`. Same database the Athena dashboard binds.
+[[d1_databases]]
+binding = "ATHENA_DB"
+database_name = "athena-db"
+database_id = "df1a2f32-64f7-4dbf-8bcc-60bb13d3f752"
+
+[vars]
+# Override per-deploy if the OAuth client changes or a cheaper/larger model
+# is wanted. ANTHROPIC_API_KEY and ALLOWED_EMAILS are secrets, not vars.
+QUILL_OAUTH_CLIENT_IDS = "897102622833-ugs83fdspt94d9g373nh1v19gm4elive.apps.googleusercontent.com"
+ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+DAILY_REQUEST_LIMIT = "500"
+
+# Served from a stable custom hostname rather than *.workers.dev, so the URL
+# baked into shipped Quill builds never depends on the workers.dev subdomain.
+[[routes]]
+pattern = "quill-api.joevasquez.com"
+custom_domain = true
