@@ -58,9 +58,22 @@ public enum AgentParsing {
       TranscriptWrapper.wrapWithSelection(transcript, selection: selection),
       systemPrompt
     )
-    let response = try decodeMultiOrSingle(LLMTransport.stripFences(raw))
-    agentLogger.info("Parsed \(response.actions.count, privacy: .public) action(s)")
-    return response
+    let cleaned = LLMTransport.stripFences(raw)
+    do {
+      let response = try decodeMultiOrSingle(cleaned)
+      agentLogger.info("Parsed \(response.actions.count, privacy: .public) action(s)")
+      return response
+    } catch {
+      // "Draft a response to this" tempts the model to answer the message
+      // instead of planning an action — it returns the reply as prose with
+      // no JSON at all. That prose IS what the user asked for, so keep it
+      // rather than failing the command.
+      if let salvaged = ComposeSalvage.intent(forTranscript: transcript, modelReply: cleaned) {
+        agentLogger.notice("Model replied with prose instead of JSON on a compose request — salvaged as a drafted reply")
+        return MultiActionResponse(actions: [salvaged])
+      }
+      throw error
+    }
   }
 
   /// Decode a model reply as `MultiActionResponse`, falling back to a bare
@@ -69,11 +82,40 @@ public enum AgentParsing {
     guard let data = json.data(using: .utf8) else {
       throw AgentParsingError.parseFailure(json)
     }
-    if let response = try? JSONDecoder().decode(MultiActionResponse.self, from: data) {
-      return response
+    let decoder = JSONDecoder()
+    do {
+      return try decoder.decode(MultiActionResponse.self, from: data)
+    } catch let multiError {
+      if let intent = try? decoder.decode(ActionIntent.self, from: data) {
+        return MultiActionResponse(actions: [intent])
+      }
+      // Strict decode failed both ways. Try once more with control
+      // characters inside string literals escaped — the way a model breaks
+      // its own JSON when a field holds multi-paragraph prose. Valid JSON
+      // is unaffected by the repair, so this only rescues replies that
+      // were already going to fail.
+      if let repaired = JSONRepair.escapingControlCharactersInStrings(json).data(using: .utf8) {
+        if let response = try? decoder.decode(MultiActionResponse.self, from: repaired) {
+          agentLogger.notice("Action parse recovered after escaping raw control characters in the model's JSON")
+          return response
+        }
+        if let intent = try? decoder.decode(ActionIntent.self, from: repaired) {
+          agentLogger.notice("Action parse recovered after escaping raw control characters in the model's JSON")
+          return MultiActionResponse(actions: [intent])
+        }
+      }
+      // Both shapes failed. Throw the `{"actions":…}` error, not the
+      // single-object fallback's: the fallback fails with a generic "isn't
+      // in the correct format" for ANY wrapper payload, which is what the
+      // user (and the log) used to see instead of the real problem.
+      //
+      // The error carries the coding path — which field, which action index
+      // — and no user content, so it's safe to log publicly. The payload
+      // itself can quote the user's selection, so it stays private.
+      agentLogger.error("Action parse failed to decode: \(String(describing: multiError), privacy: .public)")
+      agentLogger.error("Raw model reply: \(json, privacy: .private)")
+      throw multiError
     }
-    let intent = try JSONDecoder().decode(ActionIntent.self, from: data)
-    return MultiActionResponse(actions: [intent])
   }
 
   // MARK: - Dependent-step resolve

@@ -57,11 +57,11 @@ struct GeneralSectionView: View {
 					get: { store.hexSettings.displayMode },
 					set: { store.send(.setDisplayMode($0)) }
 				)) {
-					Text("Standard HUD").tag(DisplayMode.hud)
-					Text("Orb").tag(DisplayMode.orb)
-					Text("Chip").tag(DisplayMode.chip)
+					ForEach(DisplayMode.allCases, id: \.self) { option in
+						Text(option.label).tag(option)
+					}
 				}
-				.pickerStyle(.segmented)
+				.pickerStyle(.menu)
 			} icon: {
 				Image(systemName: "circle.circle")
 			}

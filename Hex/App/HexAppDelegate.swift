@@ -336,9 +336,10 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 			MultiActionConfirmationFeature()
 		}
 
-		// When the Home pane is on screen, the workflow belongs in the window
-		// the user is already looking at — the popdown is for when it isn't.
-		if InAppActionPresenter.shared.canPresentInApp {
+		// Typed into Home (or reviewed there) → render in the window the user
+		// is already looking at. Dictated via the global hotkey → popdown,
+		// even with the window open behind it.
+		if InAppActionPresenter.shared.canPresentInApp(trigger: trigger) {
 			HexLog.action.info("Hosting multi-action confirmation inline on Home")
 			InAppActionPresenter.shared.present(multiStore)
 			return

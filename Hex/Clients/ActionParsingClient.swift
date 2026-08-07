@@ -149,7 +149,14 @@ private func completer(for provider: AIProvider) -> LLMCompleter {
     return try await LLMTransport.complete(
       userMessage: userMessage,
       systemPrompt: systemPrompt,
-      credential: credential
+      credential: credential,
+      // The default 1024 was sized for terse action JSON. A `composeReply`
+      // now puts a whole drafted reply inside that JSON, and a long
+      // selection produces a long reply — past the cap the response is cut
+      // mid-string and the decode fails with "isn't in the correct format",
+      // which the user sees as the command silently doing nothing. This is a
+      // ceiling, not a spend: short parses still cost what they always did.
+      maxTokens: 4096
     )
   }
 }

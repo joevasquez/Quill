@@ -250,7 +250,10 @@ final class MultiActionConfirmationViewModel: ObservableObject {
     self.completion = nil
     self.isExecuting = false
     self.results = [:]
+    // A pure compose has nothing to run — the text was written during the
+    // parse. Skip the confirm step so the sheet lands straight on the draft.
     self.autoExecute = autoExecute
+      || (!intents.isEmpty && intents.allSatisfy { $0.actionType == .composeReply })
     extractionTask?.cancel()
     extractionTask = nil
   }
@@ -394,7 +397,15 @@ final class MultiActionConfirmationViewModel: ObservableObject {
         steps.append(.init(id: item.id, title: item.displayTitle, status: .queued,
                            detail: "Saved — will retry when you're back online", reviewable: true))
       case let .succeeded(text):
-        if item.intent.actionType == .mcpCall {
+        if item.intent.actionType == .composeReply {
+          // The drafted text is both the step detail and the answer — no
+          // extraction pass, it's already the thing the user wants.
+          steps.append(.init(id: item.id, title: item.displayTitle, status: .succeeded,
+                             detail: text, reviewable: true))
+          if !text.isEmpty {
+            outputs.append(.init(itemID: item.id, title: item.displayTitle, text: text, answer: text))
+          }
+        } else if item.intent.actionType == .mcpCall {
           // Lookup/query: show the formatted result ("what was found").
           let formatted = (!text.isEmpty && text != "Done") ? MCPResultFormatter.format(text) : "Done"
           steps.append(.init(id: item.id, title: item.displayTitle, status: .succeeded, detail: formatted, reviewable: true))

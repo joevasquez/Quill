@@ -93,6 +93,7 @@ struct MultiActionConfirmationFeature {
           }
           return editableAppName.isEmpty ? "Open" : "Launch \(editableAppName)"
         }
+        if intent.actionType == .composeReply { return "Draft to copy" }
         switch intent.targetIntegration {
         case .calendar, .googleCalendar:
           let formatter = DateFormatter()
@@ -198,6 +199,10 @@ struct MultiActionConfirmationFeature {
       /// Text results worth showing the user — e.g. what an MCP read/query
       /// tool returned. Also copied to the clipboard.
       var outputs: [Output] = []
+      /// True when the result is composed prose the user will paste (a
+      /// drafted reply) rather than a looked-up value. The card labels and
+      /// typesets the two differently.
+      var isDraft: Bool = false
 
       struct Output: Equatable {
         let itemID: UUID
@@ -235,6 +240,17 @@ struct MultiActionConfirmationFeature {
 
       /// Keep the panel up (don't auto-dismiss) when any step is worth reading.
       var hasReviewableStep: Bool { steps.contains { $0.reviewable } }
+
+      /// Whether to render the per-step outcome list under the result.
+      ///
+      /// A successful draft is already fully presented by the answer card
+      /// above — text, Copy, Paste. The step list would add a second box
+      /// repeating the draft's title and a second Copy button. Failures
+      /// still need their rows, so only an all-succeeded draft hides it.
+      var showsStepList: Bool {
+        guard isDraft else { return !steps.isEmpty }
+        return steps.contains { $0.status != .succeeded }
+      }
     }
 
     init(
@@ -256,7 +272,11 @@ struct MultiActionConfirmationFeature {
         }
       }
       self.items = IdentifiedArrayOf(uniqueElements: built)
+      // A pure compose has nothing to run — the text was written during the
+      // parse. Skip the confirm step so the panel lands straight on the
+      // draft, one click from the clipboard.
       self.autoExecute = autoExecute
+        || (!intents.isEmpty && intents.allSatisfy { $0.actionType == .composeReply })
     }
   }
 
@@ -360,7 +380,12 @@ struct MultiActionConfirmationFeature {
             let integration = finalIntent.targetIntegration
             do {
               let id: String
-              if finalIntent.actionType == .mcpCall {
+              if finalIntent.actionType == .composeReply {
+                // Nothing to create or send — the drafted text IS the
+                // deliverable. It's already written; hand it straight to
+                // the result card.
+                id = finalIntent.notes ?? ""
+              } else if finalIntent.actionType == .mcpCall {
                 id = try await MCPActionExecutor.execute(finalIntent)
               } else if finalIntent.actionType == .open {
                 id = try await OpenActionExecutor.execute(finalIntent)
@@ -566,7 +591,19 @@ struct MultiActionConfirmationFeature {
               steps.append(.init(id: item.id, title: item.displayTitle, status: .queued,
                                  detail: "Saved — will retry when you're back online", reviewable: true))
             case let .succeeded(text):
-              if item.intent.actionType == .mcpCall {
+              if item.intent.actionType == .composeReply {
+                // The draft goes in the answer card (which has Copy AND
+                // Paste) — no extraction pass, it's already the thing the
+                // user wants. The step row stays a bare titled checkmark:
+                // repeating the body underneath showed the same draft twice.
+                // Still `reviewable` so the panel doesn't auto-dismiss out
+                // from under something the user has to read.
+                steps.append(.init(id: item.id, title: item.displayTitle, status: .succeeded,
+                                   detail: "", reviewable: true))
+                if !text.isEmpty {
+                  outputs.append(.init(itemID: item.id, title: item.displayTitle, text: text, answer: text))
+                }
+              } else if item.intent.actionType == .mcpCall {
                 // Lookup/query: show the formatted result ("what was found").
                 let formatted = (!text.isEmpty && text != "Done") ? MCPResultFormatter.format(text) : "Done"
                 steps.append(.init(id: item.id, title: item.displayTitle, status: .succeeded, detail: formatted, reviewable: true))
@@ -589,7 +626,9 @@ struct MultiActionConfirmationFeature {
           soundEffect.play(failed > 0 ? .cancel : .pasteTranscript)
           state.completion = .init(
             succeeded: succeeded, failed: failed, queued: queued,
-            failureReasons: reasons, outputs: outputs, steps: steps
+            failureReasons: reasons, outputs: outputs,
+            isDraft: state.items.contains { $0.intent.actionType == .composeReply },
+            steps: steps
           )
           actionLogger.info("Multi-action complete: \(succeeded) succeeded, \(failed) failed, \(queued) queued, \(outputs.count) output(s)")
 

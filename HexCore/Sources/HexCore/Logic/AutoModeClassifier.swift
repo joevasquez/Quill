@@ -19,6 +19,7 @@ public enum AutoModeClassifier {
   /// yet — just keyword analysis on the partial text.
   public static func classifyPartial(_ transcript: String) -> TranscriptionMode {
     let lowered = transcript.lowercased()
+    if ComposeSalvage.isComposeAboutSelection(transcript) { return .action }
     if matchesActionKeywords(lowered) { return .action }
     if matchesEditKeywords(lowered) { return .edit }
     return .dictate
@@ -35,6 +36,12 @@ public enum AutoModeClassifier {
     hasIntegrations: Bool
   ) -> TranscriptionMode {
     let lowered = transcript.lowercased()
+    // "Draft a response to this" is an Action (a compose), and it is checked
+    // before everything else for two reasons: it needs no integrations, so
+    // the `hasIntegrations` gate below would wrongly skip it; and with a
+    // selection present it would otherwise reach the Edit path, which
+    // REPLACES the selection — overwriting the very message being replied to.
+    if ComposeSalvage.isComposeAboutSelection(transcript) { return .action }
     // Action keywords are checked first — they're more specific
     // ("remind me", "add to todoist") than edit keywords, and they
     // don't depend on a text selection being present.

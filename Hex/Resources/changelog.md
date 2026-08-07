@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.27.0
+
+### Minor Changes
+
+- Add the Owl display mode — a pixel-art owl that waits, writes while you dictate, and thinks while a task runs. At rest, the pill under it names your current mode (Auto/Dictate/Edit/Action). Drag it anywhere on screen; click it to cycle modes. New installs start in Owl mode, and Display Mode in Settings → General is now a dropdown.
+- Act mode can now draft a reply to whatever you have highlighted. Say "draft a response to this" and the confirmation panel drops down with the finished text, ready to copy or paste — nothing is created or sent. Works in Auto mode too.
+- Onboarding now lets you set your recording hotkey and try it before finishing setup, and adds a step explaining the four capture modes where you can set the cycle-mode shortcut and watch it switch.
+
+### Patch Changes
+
+- Dictated actions always confirm in the menu-bar popdown, even with the Quill window open — only typed commands and reviewed suggestions render inside the app.
+- Owl display mode no longer flashes the mode-switch bubble when you cycle modes — the pill under the owl already shows it.
+- Fix Action mode losing your highlighted text to a race with transcription, which made commands referring to "this" intermittently act as though nothing was selected.
+
 ## 0.26.1
 
 ### Patch Changes

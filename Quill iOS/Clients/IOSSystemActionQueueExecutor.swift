@@ -33,6 +33,9 @@ public final class IOSSystemActionQueueExecutor: ActionQueueExecutor {
       return try await IOSMCPActionExecutor.execute(intent)
     case .open:
       return try await IOSOpenActionExecutor.execute(intent)
+    case .composeReply:
+      // Nothing to create or send — the drafted text is the deliverable.
+      return intent.notes ?? ""
     default:
       break
     }

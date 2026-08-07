@@ -11,8 +11,11 @@
 //    4a. Pro trial (branch A — placeholder during beta).
 //    4b. BYOK provider → get key → verify (branch B, 3 sub-steps).
 //    5. Google sign-in (optional).
-//    6. First dictation — visual HUD mock.
-//    7. Done — quick-start cards + "Open Quill".
+//    6. First dictation — set the recording hotkey and try it for real;
+//       the HUD mock fills in with what the user actually said.
+//    7. Modes — what Auto/Dictate/Edit/Action do, plus the cycle
+//       shortcut, tested live against the real HUD.
+//    8. Done — quick-start cards + "Open Quill".
 //
 //  Navigation branches at step 3: Pro goes through proTrial then
 //  rejoins at googleSignIn; BYOK goes through provider → getKey →
@@ -57,7 +60,8 @@ private enum OnboardingStep: Int {
   case byokVerify = 6    // branch B 3/3
   case googleSignIn = 7
   case firstDictation = 8
-  case done = 9
+  case modes = 9
+  case done = 10
 }
 
 private enum PlanChoice {
@@ -77,7 +81,8 @@ private func dotPosition(for step: OnboardingStep) -> Int {
   case .byokVerify:     return 3
   case .googleSignIn:   return 4
   case .firstDictation: return 5
-  case .done:           return 6
+  case .modes:          return 6
+  case .done:           return 7
   }
 }
 
@@ -96,7 +101,8 @@ private func nextStep(from step: OnboardingStep, plan: PlanChoice?) -> Onboardin
   case .byokGetKey:     return .byokVerify
   case .byokVerify:     return .googleSignIn
   case .googleSignIn:   return .firstDictation
-  case .firstDictation: return .done
+  case .firstDictation: return .modes
+  case .modes:          return .done
   case .done:           return nil
   }
 }
@@ -117,7 +123,8 @@ private func previousStep(from step: OnboardingStep, plan: PlanChoice?) -> Onboa
     case .none: return .planChoice
     }
   case .firstDictation: return .googleSignIn
-  case .done:           return .firstDictation
+  case .modes:          return .firstDictation
+  case .done:           return .modes
   }
 }
 
@@ -200,6 +207,14 @@ struct OnboardingView: View {
 
         case .firstDictation:
           FirstDictationStep(
+            store: store,
+            onContinue: { advance() },
+            onSkip: { advance() }
+          )
+
+        case .modes:
+          ModesStep(
+            store: store,
             onContinue: { advance() },
             onSkip: { advance() }
           )
@@ -283,7 +298,7 @@ private struct StepDots: View {
 
   init(step: OnboardingStep) {
     self.currentPosition = dotPosition(for: step)
-    self.total = 7
+    self.total = 8
   }
 
   var body: some View {
@@ -1631,11 +1646,28 @@ private struct GoogleSignInStep: View {
 // MARK: - Step 6: First dictation
 
 private struct FirstDictationStep: View {
+  @Bindable var store: StoreOf<SettingsFeature>
   let onContinue: () -> Void
   let onSkip: () -> Void
 
   // Animated waveform
   @State private var wavePhase = false
+  /// Transcript count when this step appeared. Anything above it is a
+  /// dictation the user just performed here — which is the whole test:
+  /// a transcript only lands after hold → speak → release → transcribe.
+  @State private var baselineTranscripts: Int?
+
+  private var hotKey: HotKey { store.hexSettings.hotkey }
+
+  /// The transcript from a test dictation done on this screen, if any.
+  private var testedTranscript: String? {
+    guard let baselineTranscripts,
+          store.transcriptionHistory.history.count > baselineTranscripts,
+          let latest = store.transcriptionHistory.history.first
+    else { return nil }
+    let text = latest.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    return text.isEmpty ? nil : text
+  }
 
   var body: some View {
     VStack(spacing: 18) {
@@ -1662,24 +1694,22 @@ private struct FirstDictationStep: View {
           .multilineTextAlignment(.center)
       }
 
-      Text("You can configure your hotkey in Settings after setup.")
-        .font(.system(size: 12))
-        .foregroundStyle(OB.inkMute)
-        .padding(.top, 6)
+      hotkeyPicker
+        .padding(.top, 10)
 
       // HUD mock card
       VStack(spacing: 0) {
         // Header
         HStack(spacing: 10) {
           Circle()
-            .fill(Color(red: 1.0, green: 0.263, blue: 0.227))
+            .fill(testedTranscript == nil ? Color(red: 1.0, green: 0.263, blue: 0.227) : QuillDesign.success)
             .frame(width: 8, height: 8)
-            .shadow(color: Color(red: 1.0, green: 0.263, blue: 0.227), radius: 5)
-          Text("00:03")
+            .shadow(color: testedTranscript == nil ? Color(red: 1.0, green: 0.263, blue: 0.227) : QuillDesign.success, radius: 5)
+          Text(testedTranscript == nil ? "00:03" : "You")
             .font(.system(size: 12, design: .monospaced))
             .foregroundStyle(.white.opacity(0.6))
           Spacer()
-          Text("Listening")
+          Text(testedTranscript == nil ? "Listening" : "Transcribed")
             .font(.system(size: 11))
             .foregroundStyle(.white.opacity(0.7))
             .padding(.horizontal, 8)
@@ -1693,16 +1723,22 @@ private struct FirstDictationStep: View {
 
         // Transcript
         HStack(spacing: 0) {
-          Text("\u{201C}This is Quill \u{2014} hi mom\u{201D}")
+          Text("\u{201C}\(testedTranscript ?? "This is Quill \u{2014} hi mom")\u{201D}")
             .font(.system(size: 18, weight: .regular, design: .serif).italic())
             .foregroundStyle(.white)
-          Rectangle()
-            .fill(OB.purpleMid)
-            .frame(width: 2, height: 18)
-            .padding(.leading, 4)
-          Spacer()
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
+            .multilineTextAlignment(.leading)
+          if testedTranscript == nil {
+            Rectangle()
+              .fill(OB.purpleMid)
+              .frame(width: 2, height: 18)
+              .padding(.leading, 4)
+          }
+          Spacer(minLength: 0)
         }
         .padding(.vertical, 6)
+        .animation(.easeOut(duration: 0.25), value: testedTranscript)
 
         Spacer().frame(height: 14)
 
@@ -1741,6 +1777,9 @@ private struct FirstDictationStep: View {
       .padding(.top, 8)
       .onAppear {
         wavePhase = true
+        if baselineTranscripts == nil {
+          baselineTranscripts = store.transcriptionHistory.history.count
+        }
       }
 
       Spacer()
@@ -1748,7 +1787,10 @@ private struct FirstDictationStep: View {
       HStack {
         OnboardingButton("Skip for now", variant: .ghost, action: onSkip)
         Spacer()
-        OnboardingButton("Looks good \u{2014} finish setup \u{2192}", action: onContinue)
+        OnboardingButton(
+          testedTranscript == nil ? "Looks good \u{2014} finish setup \u{2192}" : "That's it \u{2014} finish setup \u{2192}",
+          action: onContinue
+        )
       }
       .padding(.horizontal, 60)
     }
@@ -1756,9 +1798,211 @@ private struct FirstDictationStep: View {
     .padding(.top, 32)
     .padding(.bottom, 40)
   }
+
+  /// Set the hotkey here rather than sending people to Settings afterwards,
+  /// and let them prove it works before the flow ends. Reuses the same
+  /// `HotKeyView` + `.startSettingHotKey` capture the Settings pane uses, so
+  /// there's one recorder implementation.
+  private var hotkeyPicker: some View {
+    VStack(spacing: 8) {
+      HotKeyView(
+        modifiers: store.isSettingHotKey ? store.currentModifiers : hotKey.modifiers,
+        key: store.isSettingHotKey ? nil : hotKey.key,
+        isActive: store.isSettingHotKey
+      )
+      .animation(.spring(), value: hotKey.key)
+      .animation(.spring(), value: store.currentModifiers)
+      .contentShape(Rectangle())
+      .onTapGesture { store.send(.startSettingHotKey) }
+      .accessibilityLabel("Recording hotkey")
+      .accessibilityHint("Activate, then press the key combination you want")
+
+      Group {
+        if store.isSettingHotKey {
+          Text("Press the keys you want to use\u{2026}")
+        } else if testedTranscript != nil {
+          Label("That's your dictation \u{2014} it's already on your clipboard.", systemImage: "checkmark.circle.fill")
+            .foregroundStyle(OB.proGreen)
+        } else {
+          Text("Click to change it. Then hold it, say something, and let go to try.")
+        }
+      }
+      .font(.system(size: 12))
+      .foregroundStyle(store.isSettingHotKey ? OB.purpleDark : OB.inkMute)
+      .multilineTextAlignment(.center)
+      .animation(.easeOut(duration: 0.2), value: store.isSettingHotKey)
+    }
+  }
 }
 
-// MARK: - Step 7: Done
+
+// MARK: - Step 7: Modes
+
+/// Teaches the four capture modes and lets the user set + exercise the
+/// cycle shortcut before the flow ends.
+///
+/// The live half matters more than the copy: `cycleModeHotkey` ships as
+/// `nil`, so a new user has no way to change mode except the menu-bar Mode
+/// submenu or clicking the HUD — neither of which they've discovered yet.
+/// Setting it here and watching the tiles respond is the whole point.
+private struct ModesStep: View {
+  @Bindable var store: StoreOf<SettingsFeature>
+  let onContinue: () -> Void
+  let onSkip: () -> Void
+
+  /// Mirrors `TranscriptionFeature.State.selectedMode`. Onboarding only
+  /// holds the settings store, so the current mode is read once from the
+  /// app store and then tracked via `.modeDidChange` — which is posted on
+  /// an actual change, whatever caused it (shortcut, menu, clicking the owl).
+  @State private var currentMode: TranscriptionIndicatorView.Mode = .auto
+  /// Set once the user actually cycles, so the step can confirm it worked.
+  @State private var didCycle = false
+
+  private var cycleHotkey: HotKey? { store.hexSettings.cycleModeHotkey }
+
+  private static let blurbs: [(mode: TranscriptionIndicatorView.Mode, blurb: String)] = [
+    (.auto, "Picks for you from what you say."),
+    (.dictate, "Speak, and the text lands where you're typing."),
+    (.edit, "Highlight text, say how to change it."),
+    (.action, "\u{201C}Remind me\u{2026}\u{201D}, \u{201C}draft a reply to this\u{2026}\u{201D}"),
+  ]
+
+  var body: some View {
+    VStack(spacing: 18) {
+      StepDots(step: .modes)
+
+      VStack(spacing: 6) {
+        (Text("Four ")
+          .font(.system(size: 30, weight: .regular, design: .serif))
+          .foregroundStyle(OB.ink)
+        + Text("modes")
+          .font(.system(size: 30, weight: .regular, design: .serif).italic())
+          .foregroundStyle(OB.purpleDark)
+        )
+        .tracking(-0.45)
+        .padding(.top, 4)
+
+        Text("Quill does more than dictate. The owl shows which mode you're in \u{2014} and you can switch without leaving what you're doing.")
+          .font(.system(size: 13.5))
+          .foregroundStyle(OB.inkSoft)
+          .frame(maxWidth: 460)
+          .multilineTextAlignment(.center)
+      }
+
+      HStack(spacing: 10) {
+        ForEach(Self.blurbs, id: \.mode) { entry in
+          modeTile(entry.mode, blurb: entry.blurb)
+        }
+      }
+      .padding(.top, 4)
+
+      cycleShortcut
+        .padding(.top, 2)
+
+      Spacer()
+
+      HStack {
+        OnboardingButton("Skip for now", variant: .ghost, action: onSkip)
+        Spacer()
+        OnboardingButton(didCycle ? "Got it \u{2014} finish setup \u{2192}" : "Continue \u{2192}", action: onContinue)
+      }
+      .padding(.horizontal, 60)
+    }
+    .padding(.horizontal, 60)
+    .padding(.top, 32)
+    .padding(.bottom, 40)
+    .onAppear {
+      currentMode = HexApp.appStore.state.transcription.selectedMode
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .modeDidChange)) { note in
+      guard let name = note.userInfo?[ModeChangeNotification.modeNameKey] as? String,
+            let mode = TranscriptionIndicatorView.Mode(rawValue: name)
+      else { return }
+      withAnimation(.spring(duration: 0.3, bounce: 0.2)) {
+        currentMode = mode
+        didCycle = true
+      }
+    }
+  }
+
+  private func modeTile(_ mode: TranscriptionIndicatorView.Mode, blurb: String) -> some View {
+    let isCurrent = mode == currentMode
+    let accent = mode.orbPalette.color()
+    return VStack(spacing: 7) {
+      Image(systemName: mode.icon)
+        .font(.system(size: 17, weight: .medium))
+        .foregroundStyle(isCurrent ? accent : OB.inkMute)
+      Text(mode.rawValue)
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(isCurrent ? OB.ink : OB.inkSoft)
+      Text(blurb)
+        .font(.system(size: 11))
+        .foregroundStyle(OB.inkMute)
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .frame(width: 118)
+    .padding(.vertical, 14)
+    .padding(.horizontal, 8)
+    .background(
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
+        .fill(isCurrent ? OB.purpleLight : OB.paperElev)
+    )
+    .overlay(
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
+        .strokeBorder(isCurrent ? accent.opacity(0.55) : OB.line, lineWidth: isCurrent ? 1.5 : 1)
+    )
+    .accessibilityElement(children: .combine)
+    .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
+  }
+
+  private var cycleShortcut: some View {
+    VStack(spacing: 8) {
+      Text("SWITCH MODES")
+        .font(.system(size: 10, weight: .semibold))
+        .tracking(1.1)
+        .foregroundStyle(OB.inkMute)
+
+      let key = store.isSettingCycleModeHotkey ? nil : cycleHotkey?.key
+      let modifiers = store.isSettingCycleModeHotkey
+        ? store.currentCycleModeModifiers
+        : (cycleHotkey?.modifiers ?? .init(modifiers: []))
+
+      ZStack {
+        HotKeyView(modifiers: modifiers, key: key, isActive: store.isSettingCycleModeHotkey)
+        if !store.isSettingCycleModeHotkey, cycleHotkey == nil {
+          Text("Not set")
+            .font(.system(size: 12))
+            .foregroundStyle(OB.inkMute)
+        }
+      }
+      .contentShape(Rectangle())
+      .onTapGesture { store.send(.startSettingCycleModeHotkey) }
+      .accessibilityLabel("Cycle mode shortcut")
+      .accessibilityHint("Activate, then press the key combination you want")
+
+      Group {
+        if store.isSettingCycleModeHotkey {
+          Text("Use at least one modifier (\u{2318}, \u{2325}, \u{21E7}, \u{2303}) plus a key.")
+        } else if didCycle {
+          Label("Nice \u{2014} you're in \(currentMode.rawValue). You can also click the owl to switch.", systemImage: "checkmark.circle.fill")
+            .foregroundStyle(OB.proGreen)
+        } else if cycleHotkey == nil {
+          Text("Click to set a shortcut \u{2014} or click the owl any time to switch.")
+        } else {
+          Text("Press it now \u{2014} the tiles above follow along.")
+        }
+      }
+      .font(.system(size: 12))
+      .foregroundStyle(store.isSettingCycleModeHotkey ? OB.purpleDark : OB.inkMute)
+      .multilineTextAlignment(.center)
+      .animation(.easeOut(duration: 0.2), value: didCycle)
+      .animation(.easeOut(duration: 0.2), value: store.isSettingCycleModeHotkey)
+    }
+  }
+}
+
+// MARK: - Step 8: Done
 
 private struct DoneStep: View {
   let onFinish: () -> Void

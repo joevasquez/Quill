@@ -139,6 +139,8 @@ public enum ConnectionTarget: Equatable, Sendable {
   case integration(Integration.Identifier)
   case mcpServer(String)
   case open
+  /// Text written for the user to copy — goes to no service at all.
+  case compose
 
   public static func forIntent(_ intent: ActionIntent) -> ConnectionTarget {
     switch intent.actionType {
@@ -146,6 +148,8 @@ public enum ConnectionTarget: Equatable, Sendable {
       return .mcpServer(intent.mcpServerName ?? "MCP")
     case .open:
       return .open
+    case .composeReply:
+      return .compose
     default:
       return .integration(intent.targetIntegration)
     }
@@ -159,6 +163,8 @@ public enum ConnectionTarget: Equatable, Sendable {
       return ConnectionDirectory.brand(forServerNamed: name)?.name.capitalized ?? name
     case .open:
       return "Open"
+    case .compose:
+      return "Draft"
     }
   }
 
@@ -170,6 +176,8 @@ public enum ConnectionTarget: Equatable, Sendable {
       return ConnectionDirectory.brand(forServerNamed: name)?.systemImage ?? "puzzlepiece.extension.fill"
     case .open:
       return "globe"
+    case .compose:
+      return "text.bubble.fill"
     }
   }
 
@@ -181,7 +189,7 @@ public enum ConnectionTarget: Equatable, Sendable {
       return Integration.all.first { $0.identifier == id }?.tintHex
     case .mcpServer(let name):
       return ConnectionDirectory.brand(forServerNamed: name)?.tintHex
-    case .open:
+    case .open, .compose:
       return nil
     }
   }

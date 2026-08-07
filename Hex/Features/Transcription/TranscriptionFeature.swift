@@ -446,7 +446,8 @@ struct TranscriptionFeature {
             let response = try await actionParsing.parseMulti(typed, typedProvider, nil, targeting)
             await send(.aiProcessingFinished)
             if response.isSingleAction, let intent = response.actions.first,
-               intent.actionType != .mcpCall, intent.actionType != .open {
+               intent.actionType != .mcpCall, intent.actionType != .open,
+             intent.actionType != .composeReply {
               await send(.actionIntentParsed(intent))
             } else {
               await send(.multiActionIntentsParsed(response.actions))
@@ -499,7 +500,8 @@ struct TranscriptionFeature {
             var r = intent
             // Never retarget a step that isn't integration-bound — an MCP
             // call or an app/URL open has no `targetIntegration` to speak of.
-            guard r.actionType != .mcpCall, r.actionType != .open else { return r }
+            guard r.actionType != .mcpCall, r.actionType != .open,
+                  r.actionType != .composeReply else { return r }
             r.targetIntegration = locked
             return r
           }
@@ -515,6 +517,10 @@ struct TranscriptionFeature {
         state.pendingAction = routine.steps.first
         let rawRoutineTranscript = state.lastActionTranscript
         let routineBundleID = state.sourceAppBundleID
+        // A routine fired by typing into Home stays "typed" so it confirms
+        // in the window the user typed into; only spoken ones read as
+        // `.routine`, which sends them to the popdown.
+        let routineTrigger: ActionRun.Trigger = state.actionTrigger == .typed ? .typed : .routine
         return .run { _ in
           await MainActor.run {
             ActionConfirmationNotification.postMulti(
@@ -522,7 +528,7 @@ struct TranscriptionFeature {
               rawTranscript: rawRoutineTranscript,
               autoExecute: routine.autoRun,
               sourceAppBundleID: routineBundleID,
-              trigger: .routine
+              trigger: routineTrigger
             )
           }
         }
@@ -1095,9 +1101,15 @@ private extension TranscriptionFeature {
     // a conversational LLM reply. So for VDI we only attempt the clipboard
     // fallback in explicit Edit mode, where the user is deliberately
     // editing a selection; in Dictate/Auto we skip it and paste normally.
+    //
+    // Action mode is listed explicitly rather than riding on
+    // `inlineEditEnabled`: Chrome and Electron never answer AX, so
+    // "draft a reply to this" depends on the Cmd+C path, and that must
+    // not quietly stop working because the user turned inline edit off.
+    // VDI still only falls back in explicit Edit mode.
     let allowClipboardFallback = isVDI
       ? isEditMode
-      : (isEditMode || isAutoMode || state.hexSettings.inlineEditEnabled)
+      : (isEditMode || isAutoMode || isActionMode || state.hexSettings.inlineEditEnabled)
     if allowClipboardFallback && state.inlineEditSelection == nil {
       let clipboardTimeout: TimeInterval = isVDI ? 0.5 : 0.15
       transcriptionFeatureLogger.info(
@@ -1214,10 +1226,19 @@ private extension TranscriptionFeature {
       return .none
     }
 
-    // ── Fix A: If clipboard fallback is still in flight (Edit/Auto mode,
-    // AX failed), stash the transcription result and wait. The result
+    // ── Fix A: If clipboard fallback is still in flight (Edit/Auto/Action
+    // mode, AX failed), stash the transcription result and wait. The result
     // will be replayed once editClipboardFallbackResult arrives.
-    if state.editClipboardFallbackPending && (state.selectedMode == .edit || state.selectedMode == .auto) && state.inlineEditSelection == nil {
+    //
+    // Action mode belongs here for the same reason Edit does: a warm
+    // Parakeet transcribes in ~0.1s and the Cmd+C fallback takes ~0.15s, so
+    // the race is one Action mode LOSES more often than it wins. Without
+    // this, "draft a response to this" parsed with no selection about half
+    // the time — the agent had nothing to respond to and the command
+    // appeared to randomly not work.
+    if state.editClipboardFallbackPending
+      && (state.selectedMode == .edit || state.selectedMode == .auto || state.selectedMode == .action)
+      && state.inlineEditSelection == nil {
       transcriptionFeatureLogger.info(
         "Stashing transcription result — clipboard fallback still pending"
       )
@@ -1403,6 +1424,25 @@ private extension TranscriptionFeature {
     // Parse the voice command into a structured action intent via the
     // LLM, then surface the confirmation panel.
     if effectiveMode == .action && !modifiedResult.isEmpty {
+      // "Draft a response to this" with nothing captured cannot work. Say so
+      // instead of asking the model anyway: it answers with a paragraph
+      // explaining that it can't see a selection, and the salvage path — which
+      // can't tell one piece of prose from another — then presents that
+      // explanation to the user as their draft. Refusing here also means the
+      // command doesn't paste anything into the document it failed on.
+      if state.inlineEditSelection == nil, ComposeSalvage.isComposeAboutSelection(modifiedResult) {
+        transcriptionFeatureLogger.notice(
+          "Compose request with no selection captured — asking the user to highlight first"
+        )
+        state.isAIProcessing = false
+        state.editNeedsSelectionMessage = "Highlight the text you want a reply to"
+        try? FileManager.default.removeItem(at: audioURL)
+        return .run { send in
+          try? await Task.sleep(for: .seconds(3))
+          await send(.editNeedsSelectionDismiss)
+        }
+        .cancellable(id: CancelID.editNeedsSelectionTimer, cancelInFlight: true)
+      }
       state.$usageStats.withLock { stats in
         stats.actionCount += 1
         stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
@@ -1471,7 +1511,8 @@ private extension TranscriptionFeature {
           // MCP + open actions always go through the multi-action panel — the
           // single-action panel's per-integration editors don't apply.
           if response.isSingleAction, let intent = response.actions.first,
-             intent.actionType != .mcpCall, intent.actionType != .open {
+             intent.actionType != .mcpCall, intent.actionType != .open,
+             intent.actionType != .composeReply {
             await send(.actionIntentParsed(intent))
           } else {
             await send(.multiActionIntentsParsed(response.actions))
@@ -1798,6 +1839,19 @@ struct TranscriptionView: View {
         // nothing — but this view must stay alive: its `.task` below runs
         // the feature's long-lived effects (hotkeys, meters).
         Color.clear.frame(width: 1, height: 1)
+      } else if store.hexSettings.displayMode == .owl {
+        OwlView(
+          status: status,
+          mode: store.selectedMode,
+          meter: store.meter,
+          editMessage: store.editNeedsSelectionMessage,
+          pendingEditResult: store.pendingEditResult,
+          partialTranscript: store.partialTranscript,
+          autoDetectedMode: store.autoDetectedMode,
+          onCycleMode: { store.send(.cycleMode) },
+          onEditAccept: { store.send(.inlineEditAccept) },
+          onEditUndo: { store.send(.inlineEditUndo) }
+        )
       } else if store.hexSettings.displayMode == .orb {
         OrbView(
           status: status,

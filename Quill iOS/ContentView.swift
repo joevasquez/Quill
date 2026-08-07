@@ -562,7 +562,8 @@ final class RecordingViewModel: ObservableObject {
           // "@Gmail draft it and log it in @Dex" is a real two-step command.
           if let forced = targeting.forcedIntegration {
             parsedMultiIntents = response.actions.map { intent in
-              guard intent.actionType != .mcpCall, intent.actionType != .open else { return intent }
+              guard intent.actionType != .mcpCall, intent.actionType != .open,
+                    intent.actionType != .composeReply else { return intent }
               var resolved = intent
               resolved.targetIntegration = forced
               return resolved

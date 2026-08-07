@@ -28,6 +28,14 @@ public final class SystemActionQueueExecutor: ActionQueueExecutor {
       _ = try await MCPActionExecutor.execute(intent)
       return
     }
+    // A composed reply has no side effect to replay — it only ever existed
+    // to be shown and copied. Reaching here means the *parse* was queued
+    // offline and resolved to a compose, so the text has nowhere to go: log
+    // it rather than throwing, since there's nothing to retry.
+    if intent.actionType == .composeReply {
+      HexLog.action.notice("Queued action resolved to a composed reply — nothing to replay, dropping")
+      return
+    }
     // Open actions are macOS-native (NSWorkspace), not integration-routed.
     if intent.actionType == .open {
       _ = try await OpenActionExecutor.execute(intent)

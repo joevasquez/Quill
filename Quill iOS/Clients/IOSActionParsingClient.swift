@@ -140,7 +140,11 @@ enum IOSActionParsingClient {
       return try await LLMTransport.complete(
         userMessage: userMessage,
         systemPrompt: systemPrompt,
-        credential: credential
+        credential: credential,
+        // Matches macOS: a `composeReply` carries a full drafted reply
+        // inside the action JSON, which overruns the terse 1024 default and
+        // fails the decode mid-string. A ceiling, not a spend.
+        maxTokens: 4096
       )
     }
   }

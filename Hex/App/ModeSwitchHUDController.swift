@@ -10,12 +10,16 @@
 //  hidden OR occluded (e.g. a full-screen app, or Citrix drawing over the
 //  bar) — situations that can't be detected reliably, so we don't try.
 //
-//  Driven purely by the `.modeDidChange` notification, so it's independent
-//  of the display mode (HUD/Orb/Chip). Owned for the app's lifetime by
+//  Driven by the `.modeDidChange` notification. Suppressed in Owl display
+//  mode, where the avatar's pill already names the current mode in words,
+//  on an always-Spaces panel — a bubble saying the same thing a moment
+//  later is just noise. Owned for the app's lifetime by
 //  QuillStatusItemController.
 //
 
 import AppKit
+import ComposableArchitecture
+import HexCore
 import SwiftUI
 
 @MainActor
@@ -62,7 +66,12 @@ final class ModeSwitchHUDController {
     )
   }
 
+  @Shared(.hexSettings) private var hexSettings: HexSettings
+
   @objc private func modeDidChange(_ note: Notification) {
+    // The owl already carries the mode name under it, on a panel that floats
+    // over full-screen Spaces — the case this bubble exists to cover.
+    guard hexSettings.displayMode != .owl else { return }
     guard let name = note.userInfo?[ModeChangeNotification.modeNameKey] as? String,
           let mode = TranscriptionIndicatorView.Mode(rawValue: name)
     else { return }

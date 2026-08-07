@@ -13,6 +13,12 @@ public struct ActionIntent: Codable, Equatable, Sendable {
     /// Open a website and/or launch an app (macOS). Uses `urlString` /
     /// `appName`; `targetIntegration` is ignored for this type.
     case open
+    /// Write text for the user to paste somewhere Quill can't reach — a
+    /// reply to whatever they had highlighted, typically. Nothing is
+    /// created or sent: the finished text is in `notes`, and the
+    /// confirmation panel shows it with Copy/Paste. `targetIntegration`
+    /// is ignored for this type.
+    case composeReply
   }
 
   public var actionType: ActionType

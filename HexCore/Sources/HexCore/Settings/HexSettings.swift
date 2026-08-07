@@ -14,6 +14,18 @@ public enum DisplayMode: String, Codable, CaseIterable, Equatable, Sendable {
 	/// feather at rest and morphs into a mode-hued orb while capturing,
 	/// with a Corner Bloom transcript card. Designed to be minimal/quiet.
 	case chip
+	/// A pixel-art owl that acts out the app's state — waits when idle,
+	/// writes on its notepad while you dictate, thinks while a task runs.
+	case owl
+
+	public var label: String {
+		switch self {
+		case .hud: return "Standard HUD"
+		case .orb: return "Orb"
+		case .chip: return "Menu Bar Chip"
+		case .owl: return "Owl"
+		}
+	}
 }
 
 /// App-wide light/dark override. `system` follows the OS. The AppKit
@@ -168,7 +180,7 @@ public struct HexSettings: Codable, Equatable, Sendable {
 		selectedPlan: String? = nil,
 		cloudSyncEnabled: Bool = false,
 		hudPinnedToTop: Bool = false,
-		displayMode: DisplayMode = .hud,
+		displayMode: DisplayMode = .owl,
 		appearance: AppAppearance = .system,
 		appPasteDelays: [AppPasteDelay] = AppPasteDelay.defaults,
 		agentName: String = "Hermes",

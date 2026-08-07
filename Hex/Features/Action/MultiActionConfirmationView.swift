@@ -320,6 +320,16 @@ struct MultiActionConfirmationView: View {
   // MARK: - Completion Badge
 
   private func multiCompletionBadge(_ completion: MultiActionConfirmationFeature.State.Completion) -> some View {
+    // The popdown is a fixed 460pt tall and a drafted reply is prose of
+    // unknown length, so the completion content scrolls. Exactly ONE scroll
+    // view: anything nested inside it has no intrinsic height and collapses
+    // (which is how the draft card ended up showing a single line).
+    ScrollView(.vertical, showsIndicators: true) {
+      completionContent(completion)
+    }
+  }
+
+  private func completionContent(_ completion: MultiActionConfirmationFeature.State.Completion) -> some View {
     VStack(spacing: 14) {
       ZStack {
         Circle()
@@ -347,15 +357,33 @@ struct MultiActionConfirmationView: View {
       // prominently with Copy + Paste — appears once extraction returns.
       if !completion.combinedAnswer.isEmpty {
         VStack(alignment: .leading, spacing: 10) {
-          Text("Answer")
+          Text(completion.isDraft ? "Draft reply" : "Answer")
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(onSurfaceSecondary)
-          Text(completion.combinedAnswer)
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(onSurface)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
+          // A looked-up value is short and wants emphasis; a drafted reply is
+          // prose and wants to be read — and capped, so a long one can't push
+          // the Copy button off the panel.
+          Group {
+            if completion.isDraft {
+              // NO ScrollView here: the whole panel body is already inside
+              // one (see `body`), and a nested scroll view has no intrinsic
+              // height — it collapsed to a single line. Let the text lay out
+              // in full and scroll with the panel.
+              Text(completion.combinedAnswer)
+                .font(.system(size: 13))
+                .lineSpacing(3)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+              Text(completion.combinedAnswer)
+                .font(.system(size: 16, weight: .semibold))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+          }
+          .foregroundStyle(onSurface)
           HStack(spacing: 8) {
             Button {
               store.send(.copyAnswer)
@@ -395,7 +423,7 @@ struct MultiActionConfirmationView: View {
       // Per-step outcome: what each step found or created, so a chained
       // command (look up X → draft email) shows both the lookup result and
       // the drafted email — not just "2 created".
-      if !completion.steps.isEmpty {
+      if completion.showsStepList {
         VStack(alignment: .leading, spacing: 10) {
           ForEach(completion.steps) { step in
             stepOutcomeRow(step)
@@ -467,16 +495,16 @@ struct MultiActionConfirmationView: View {
           .fixedSize(horizontal: false, vertical: true)
       }
       if !step.detail.isEmpty {
-        ScrollView(.vertical, showsIndicators: true) {
-          Text(step.detail)
-            .font(.system(size: 12, design: .monospaced))
-            .foregroundStyle(onSurfaceStrong)
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxHeight: 160)
-        .padding(.leading, 19)
+        // No inner ScrollView — the completion view provides the only one.
+        // A long result now scrolls with the panel instead of inside a 160pt
+        // window that collapsed to nothing once it was nested.
+        Text(step.detail)
+          .font(.system(size: 12, design: .monospaced))
+          .foregroundStyle(onSurfaceStrong)
+          .textSelection(.enabled)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.leading, 19)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -551,7 +579,7 @@ struct MultiActionConfirmationView: View {
     // Unified ConnectionTarget branding: known MCP servers (Dex, Notion…)
     // get their directory icon; unknown ones the neutral puzzle piece.
     switch item.intent.actionType {
-    case .mcpCall, .open: return ConnectionTarget.forIntent(item.intent).systemImage
+    case .mcpCall, .open, .composeReply: return ConnectionTarget.forIntent(item.intent).systemImage
     default: return integrationIcon(item.intent.targetIntegration)
     }
   }
@@ -562,6 +590,7 @@ struct MultiActionConfirmationView: View {
       return ConnectionTarget.forIntent(item.intent).tintHex.flatMap { Color(hex: $0) }
         ?? Color(hex: "8E8E93") ?? .gray
     case .open: return Color(hex: "0A84FF") ?? .blue
+    case .composeReply: return QuillDesign.ModePalette.act.color()
     default: return integrationTint(item.intent.targetIntegration)
     }
   }
