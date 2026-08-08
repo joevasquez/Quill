@@ -32,7 +32,19 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>31</string>
+	<string>32</string>
+	<!-- Quill uses only exempt encryption: HTTPS to the AI providers, Google,
+	     and MCP servers, plus the system Keychain. Whisper runs on-device.
+	     Declaring it here answers the export-compliance question at upload
+	     time. Without it Apple asks per build, and a build still sitting in
+	     MISSING_EXPORT_COMPLIANCE when processing completes is skipped by the
+	     internal group's automatic distribution — permanently, since Apple
+	     then refuses manual assignment to an all-builds group. That is how
+	     builds 22, 30, and 31 became undeliverable to internal testers.
+	     NOTE: testflight.sh bumps CFBundleVersion with PlistBuddy, which
+	     rewrites this file and strips comments. Re-add this after a release. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCalendarsFullAccessUsageDescription</key>
