@@ -105,6 +105,9 @@ struct QuillHome: View {
   @Environment(\.colorScheme) private var colorScheme
   private var theme: QuillTheme { .of(colorScheme) }
 
+  @AppStorage(QuillIOSSettingsKey.captureAvatar)
+  private var avatarStyleRaw = QuillIOSSettingsKey.defaultCaptureAvatarValue
+
   var body: some View {
     VStack(spacing: 0) {
       Spacer(minLength: 12)
@@ -210,17 +213,22 @@ struct QuillHome: View {
   }
 
   private var keyboardButton: some View {
-    Button(action: onTapKeyboard) {
+    // Matches whatever shape the trigger beside it takes — see
+    // QuillCaptureChipShape.
+    let chip = QuillCaptureChipShape(
+      isSquared: QuillCaptureAvatar.showsOwl(styleRaw: avatarStyleRaw, in: .trigger)
+    )
+    return Button(action: onTapKeyboard) {
       Image(systemName: "keyboard")
         .quillFont(24, weight: .regular)
         .foregroundStyle(theme.text2)
         .frame(width: QuillDesign.OrbSize.triggerRing, height: QuillDesign.OrbSize.triggerRing)
         .background(
-          Circle()
+          chip
             .fill(theme.chip)
-            .overlay(Circle().strokeBorder(theme.hair, lineWidth: 1))
+            .overlay(chip.strokeBorder(theme.hair, lineWidth: 1))
         )
-        .contentShape(Circle())
+        .contentShape(chip)
     }
     .buttonStyle(QuillPressStyle())
     .accessibilityLabel("Type instead")
@@ -268,11 +276,16 @@ struct QuillTriggerButton: View {
   var onRelease: () -> Void
 
   var size: CGFloat = QuillDesign.OrbSize.triggerRing
-  var orbSize: CGFloat = QuillDesign.OrbSize.trigger
+  /// Which avatar slot the ring holds. The composer's smaller ring passes
+  /// `.inlineTrigger`, which keeps the orb even when the owl is selected.
+  var slot: QuillCaptureAvatar.Slot = .trigger
 
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private var theme: QuillTheme { .of(colorScheme) }
+
+  @AppStorage(QuillIOSSettingsKey.captureAvatar)
+  private var avatarStyleRaw = QuillIOSSettingsKey.defaultCaptureAvatarValue
 
   @State private var isHolding = false
   @State private var holdTask: Task<Void, Never>?
@@ -281,13 +294,16 @@ struct QuillTriggerButton: View {
   private static let holdThreshold: Duration = .milliseconds(280)
 
   var body: some View {
-    QuillOrb(palette: mode.palette, phase: .idle, size: orbSize)
+    let chip = QuillCaptureChipShape(
+      isSquared: QuillCaptureAvatar.showsOwl(styleRaw: avatarStyleRaw, in: slot)
+    )
+    return QuillCaptureAvatar(palette: mode.palette, phase: .idle, slot: slot)
       .frame(width: size, height: size)
       .background(
-        Circle()
+        chip
           .fill(theme.chip)
           .overlay(
-            Circle().strokeBorder(
+            chip.strokeBorder(
               isHolding ? mode.palette.color(0.7) : theme.hair,
               lineWidth: 1.5
             )
@@ -298,7 +314,7 @@ struct QuillTriggerButton: View {
         reduceMotion ? nil : .spring(response: 0.18, dampingFraction: 0.6),
         value: isHolding
       )
-      .contentShape(Circle())
+      .contentShape(chip)
       .gesture(
         DragGesture(minimumDistance: 0)
           .onChanged { _ in beginPress() }

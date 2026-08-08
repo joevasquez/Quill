@@ -27,9 +27,15 @@ struct OwlView: View {
   var partialTranscript: String = ""
   /// When mode is .auto, the detected sub-mode (dictate/edit/action).
   var autoDetectedMode: Mode = .dictate
+  /// Non-nil for a few seconds after an Auto run lands — drives the
+  /// "wrong mode?" strip that re-runs the same transcript elsewhere.
+  var rerouteOffer: TranscriptionFeature.RerouteOffer?
+  /// Formatted cycle-mode hotkey, shown on the first re-route chip.
+  var cycleHotkeyHint: String?
   var onCycleMode: () -> Void
   var onEditAccept: () -> Void
   var onEditUndo: () -> Void
+  var onReroute: (Mode) -> Void = { _ in }
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -129,6 +135,19 @@ struct OwlView: View {
           editAcceptancePill
             .transition(.move(edge: .top).combined(with: .opacity))
         }
+        if let rerouteOffer {
+          RerouteOfferCard(
+            appliedMode: rerouteOffer.appliedMode,
+            alternatives: rerouteOffer.alternatives,
+            shortcutHint: cycleHotkeyHint,
+            onReroute: onReroute
+          )
+          // `.fixedSize` for the same reason the error banner has it: the
+          // column is pinned to the card width so the owl can't be nudged
+          // sideways, and this strip is wider than that.
+          .fixedSize()
+          .transition(.move(edge: .top).combined(with: .opacity))
+        }
       }
       .frame(width: Layout.column)
     }
@@ -136,6 +155,7 @@ struct OwlView: View {
     .quillAnimation(.snappy(duration: 0.25), value: mode)
     .quillAnimation(.snappy(duration: 0.25), value: editMessage != nil)
     .quillAnimation(.snappy(duration: 0.25), value: pendingEditResult != nil)
+    .quillAnimation(.snappy(duration: 0.25), value: rerouteOffer)
   }
 
   // MARK: - Avatar

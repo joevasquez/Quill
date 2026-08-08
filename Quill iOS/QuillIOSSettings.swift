@@ -51,6 +51,9 @@ enum QuillIOSSettingsKey {
   /// Theme override. Empty string = follow the device.
   static let appearance = "quill.appearance"
 
+  /// Which avatar the capture surfaces draw — the orb or the owl.
+  static let captureAvatar = "quill.captureAvatar"
+
   /// JSON-encoded `[String: Int]` of Edit-command usage counts, so the
   /// commands the user actually reaches for float to the front of the
   /// chip row.
@@ -79,6 +82,27 @@ enum QuillIOSSettingsKey {
   /// Auto is the default: it's the mode that decides for you, and it wears
   /// the brand colour.
   static let defaultCaptureModeValue = QuillMode.auto.rawValue
+  /// The orb stays the iOS default. macOS defaults to the owl, but the orb
+  /// is what the iOS redesign was drawn around — switching it out from under
+  /// existing users isn't a change they asked for.
+  static let defaultCaptureAvatarValue = QuillCaptureAvatarStyle.orb.rawValue
+}
+
+/// Which avatar the capture surfaces draw. The Mac calls this a display
+/// mode and includes its HUD skins; on iOS the only question is what the
+/// hero circle contains, so the choice is just these two.
+enum QuillCaptureAvatarStyle: String, CaseIterable, Identifiable {
+  case orb
+  case owl
+
+  var id: String { rawValue }
+
+  var label: String {
+    switch self {
+    case .orb: "Orb"
+    case .owl: "Owl"
+    }
+  }
 }
 
 /// The user's theme choice. The control is three-way even though the design

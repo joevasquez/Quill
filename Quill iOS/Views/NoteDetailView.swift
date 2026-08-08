@@ -55,6 +55,12 @@ struct NoteDetailView: View {
   /// doing nothing at all.
   var editError: String?
   var onDismissEditError: () -> Void = {}
+  /// True for a few seconds after an Auto capture landed here, offering to
+  /// re-run it as an action instead. Same reasoning as `editError` for why
+  /// it renders in the composer and not as a root status pill.
+  var canRerouteToAction: Bool = false
+  var onRerouteToAction: () -> Void = {}
+  var onDismissReroute: () -> Void = {}
 
   @ObservedObject private var notes = NotesStore.shared
   @Environment(\.dismiss) private var dismiss
@@ -68,7 +74,9 @@ struct NoteDetailView: View {
       header
       QuillNoteMeta(note: note)
         .padding(.horizontal, 20)
-        .padding(.bottom, 8)
+        // Enough of a gap that the metadata reads as a caption on the
+        // header rather than as the note's first line.
+        .padding(.bottom, 18)
       if let pending = note.pendingEdit {
         editBanner(pending)
           .padding(.horizontal, 16)
@@ -433,6 +441,58 @@ struct NoteDetailView: View {
     .accessibilityHint("Dismisses this message")
   }
 
+  /// "Saved as a note — meant it as a command?" Takes the chip row's slot
+  /// for a few seconds after an Auto capture lands, then gets out of the way.
+  /// The transcript still exists, so this costs a tap instead of a re-take.
+  private var rerouteBanner: some View {
+    HStack(spacing: 8) {
+      Image(systemName: "note.text")
+        .quillFont(13)
+        .foregroundStyle(theme.text3)
+
+      Text("Saved as a note")
+        .quillFont(13)
+        .foregroundStyle(theme.text2)
+        .fixedSize(horizontal: false, vertical: true)
+
+      Spacer(minLength: 0)
+
+      Button(action: onRerouteToAction) {
+        HStack(spacing: 5) {
+          Image(systemName: "bolt.fill")
+            .quillFont(11, weight: .bold)
+          Text("Run as action")
+            .quillFont(13, weight: .semibold)
+        }
+        .foregroundStyle(QuillDesign.ModePalette.act.lightnessCapped(at: theme.isDark ? 0.84 : 0.44).color())
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
+            .fill(QuillDesign.ModePalette.act.color(0.18))
+        )
+      }
+      .buttonStyle(.plain)
+
+      Button(action: onDismissReroute) {
+        Image(systemName: "xmark")
+          .quillFont(11, weight: .semibold)
+          .foregroundStyle(theme.text3)
+          .padding(4)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Keep as a note")
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 7)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
+        .fill(theme.chip)
+    )
+  }
+
   // MARK: - Composer
 
   private var composer: some View {
@@ -449,6 +509,8 @@ struct NoteDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
       } else if let editError {
         editErrorBanner(editError)
+      } else if canRerouteToAction {
+        rerouteBanner
       } else {
         subRow
       }
@@ -485,7 +547,7 @@ struct NoteDetailView: View {
             onHold: onHoldTrigger,
             onRelease: onReleaseTrigger,
             size: 48,
-            orbSize: 44
+            slot: .inlineTrigger
           )
         }
       }

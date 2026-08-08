@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.28.0
+
+### Minor Changes
+
+- iOS: bring the owl avatar over from macOS as an Appearance choice (Orb or Owl), and let an Auto capture that landed in a note be re-run as an action without dictating it again.
+- Auto mode: re-route a misclassified dictation instead of re-recording it. After an Auto run lands, a short-lived strip on the HUD offers the modes it didn't pick — one click (or a tap of the cycle-mode hotkey) re-runs the same transcript through Dictate, Edit, or Action, retracting whatever the first branch did.
+
+### Patch Changes
+
+- iOS: create and open a dictated note immediately instead of waiting on a location lookup that could stall for 10+ seconds. Auto mode now recognizes 'reminder'/'remind' in any phrasing, and keyword matching is word-boundary aware so ordinary prose ('fix the schedule for things') no longer misroutes. More space between a note's metadata line and its text.
+
 ## 0.27.0
 
 ### Minor Changes

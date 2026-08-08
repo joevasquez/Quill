@@ -193,6 +193,52 @@ final class NotesStore: ObservableObject {
     save(syncNoteID: id)
   }
 
+  /// Attaches a location to a note after the fact.
+  ///
+  /// New notes are created without waiting for a location fix — the lookup
+  /// can take many seconds (permission dialog, GPS, reverse geocode) and the
+  /// note must not be held hostage to it. This lands the result when it
+  /// arrives. No-op if the note is gone by then.
+  func setLocation(id: UUID, location: NoteLocation?) {
+    guard let location,
+          let idx = notes.firstIndex(where: { $0.id == id }),
+          notes[idx].location == nil else { return }
+    notes[idx].location = location
+    // Deliberately does NOT bump `updatedAt`: this is metadata arriving late
+    // for a note the user already finished, not an edit they made.
+    save(syncNoteID: id)
+  }
+
+  /// Undoes an append that `appendToActiveNote` / `appendToNote` just made,
+  /// restoring the body to what it was. Used when a dictation is re-routed
+  /// to the agent — the words belonged in a command, not in this note.
+  ///
+  /// Only an exact suffix is stripped. If the user typed, or an AI edit
+  /// landed, in the seconds between, the note no longer ends in what we
+  /// wrote and it's left alone — better a stray paragraph than eating an
+  /// edit we didn't make.
+  @discardableResult
+  func retractAppend(id: UUID, text: String) -> Bool {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty,
+          let idx = notes.firstIndex(where: { $0.id == id }) else { return false }
+
+    let body = notes[idx].body
+    let restored: String
+    if body == trimmed {
+      restored = ""
+    } else if body.hasSuffix("\n\n" + trimmed) {
+      restored = String(body.dropLast(trimmed.count + 2))
+    } else {
+      return false
+    }
+
+    notes[idx].body = restored
+    notes[idx].updatedAt = Date()
+    save(syncNoteID: id)
+    return true
+  }
+
   // MARK: - Edit mode
 
   /// Apply an Edit-mode revision, stashing the previous body so the user

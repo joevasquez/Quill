@@ -12,6 +12,21 @@ import SwiftUI
 import UIKit
 import WhisperKit
 
+/// A dictation that Auto left as a note, still re-runnable as an action.
+///
+/// Holds what's needed to take it back out of the note: the exact text that
+/// was appended, and whether this capture is what created the note (in which
+/// case retracting should take the empty shell with it).
+struct NoteRerouteOffer: Equatable {
+  let transcript: String
+  let noteID: UUID
+  let appendedText: String
+  let createdNote: Bool
+}
+
+/// How long a note capture stays re-routable. Matches the macOS HUD window.
+let noteRerouteWindowSeconds: Double = 10
+
 @MainActor
 final class RecordingViewModel: ObservableObject {
   enum Phase: Equatable {
@@ -47,6 +62,12 @@ final class RecordingViewModel: ObservableObject {
   /// milk to my groceries note") instead of the active note. ContentView
   /// shows a confirmation pill and skips the default append.
   @Published var noteTargetBanner: String?
+  /// Set for a few seconds after an Auto capture lands in a note, so a
+  /// command the classifier read as dictation can be re-run through the
+  /// agent without saying it again. The counterpart to the confirmation
+  /// sheet's "Save to note instead", which covers the other direction.
+  @Published var noteRerouteOffer: NoteRerouteOffer?
+  private var noteRerouteExpiry: Task<Void, Never>?
   /// Set when the transcript matched a saved routine's trigger phrase —
   /// `parsedMultiIntents` then carries the routine's stored steps and the
   /// multi sheet honors `matchedRoutine.autoRun`.
@@ -447,6 +468,23 @@ final class RecordingViewModel: ObservableObject {
     await transcriptionTask?.value
   }
 
+  /// Opens the re-route window on a capture that just landed in a note.
+  func armNoteReroute(_ offer: NoteRerouteOffer) {
+    noteRerouteOffer = offer
+    noteRerouteExpiry?.cancel()
+    noteRerouteExpiry = Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .seconds(noteRerouteWindowSeconds))
+      guard !Task.isCancelled else { return }
+      self?.noteRerouteOffer = nil
+    }
+  }
+
+  func clearNoteReroute() {
+    noteRerouteExpiry?.cancel()
+    noteRerouteExpiry = nil
+    noteRerouteOffer = nil
+  }
+
   /// Typed command entry point — same agent pipeline as voice (routines,
   /// memory, MCP, confirmation sheet), just skipping the recorder +
   /// Whisper. For meetings, trains, and anywhere talking is awkward.
@@ -466,6 +504,24 @@ final class RecordingViewModel: ObservableObject {
     }
     isActionRecording = true
     wasAutoRouted = false
+    matchedRoutine = nil
+    routineDraft = nil
+    parsedMultiIntents = nil
+    recordingSessionID = UUID()
+    rawTranscript = trimmed
+    await routeActionTranscript(trimmed, provider: provider, sessionID: recordingSessionID)
+  }
+
+  /// Re-runs an already-transcribed capture through the agent — the
+  /// re-route path, when Auto left a command sitting in a note.
+  ///
+  /// No recorder and no Whisper: the transcript is the one we already have,
+  /// which is the whole point (the user shouldn't have to say it twice).
+  /// `wasAutoRouted` is left as the caller set it so the confirmation sheet
+  /// still offers "Save to note instead" — the way back.
+  func rerunAsAction(_ transcript: String, provider: AIProvider) async {
+    let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
     matchedRoutine = nil
     routineDraft = nil
     parsedMultiIntents = nil
@@ -1300,7 +1356,10 @@ struct ContentView: View {
         onAddFormat: { showingCustomModes = true },
         isEditing: vm.isEditingNote,
         editError: vm.noteEditError,
-        onDismissEditError: { vm.noteEditError = nil }
+        onDismissEditError: { vm.noteEditError = nil },
+        canRerouteToAction: vm.noteRerouteOffer?.noteID == note.id,
+        onRerouteToAction: runNoteReroute,
+        onDismissReroute: { vm.clearNoteReroute() }
       )
     }
   }
@@ -1425,22 +1484,69 @@ struct ContentView: View {
     guard !text.isEmpty, text != lastAppendedTranscript else { return }
     lastAppendedTranscript = text
 
-    // If we need to create a new note, fetch location first (best-effort).
-    if notes.activeNote == nil {
-      Task {
-        let loc = await LocationClient.shared.currentPlace()
-        let note = notes.appendToActiveNote(text, locationIfCreating: loc)
-        // Kick off AI title generation on the background. No-op if
-        // the note already has a locked-in title (user-renamed or
-        // previously AI-titled) — see `generateTitleIfNeeded`.
-        notes.generateTitleIfNeeded(noteID: note.id, provider: aiProvider)
-        if navigate { path = [.note(note.id)] }
-      }
-    } else {
-      let note = notes.appendToActiveNote(text, locationIfCreating: nil)
-      notes.generateTitleIfNeeded(noteID: note.id, provider: aiProvider)
-      if navigate { path = [.note(note.id)] }
+    // The note is created and opened synchronously, always.
+    //
+    // This used to `await LocationClient.currentPlace()` first when there was
+    // no active note — which meant the note didn't exist and the app didn't
+    // navigate until a permission dialog (up to 10 s), a GPS fix, and a
+    // network reverse-geocode had all resolved. The user finished speaking
+    // and stared at a screen with no note on it, reasonably concluding it
+    // had been lost. Location is decoration; it lands later via `setLocation`.
+    let isNewNote = notes.activeNote == nil
+    let note = notes.appendToActiveNote(text, locationIfCreating: nil)
+    // Kick off AI title generation on the background. No-op if the note
+    // already has a locked-in title (user-renamed or previously AI-titled)
+    // — see `generateTitleIfNeeded`.
+    notes.generateTitleIfNeeded(noteID: note.id, provider: aiProvider)
+    if navigate { path = [.note(note.id)] }
+    offerNoteReroute(noteID: note.id, appended: text, createdNote: isNewNote)
+
+    if isNewNote {
+      Task { notes.setLocation(id: note.id, location: await LocationClient.shared.currentPlace()) }
     }
+  }
+
+  /// Offers "run as action" on a capture that just became note text.
+  ///
+  /// Only in Auto: picking Dictate is the user saying "this is a note", and
+  /// second-guessing that is noise. This is the mirror of the confirmation
+  /// sheet's "Save to note instead" — together they make Auto's guess
+  /// reversible in both directions.
+  private func offerNoteReroute(noteID: UUID, appended: String, createdNote: Bool) {
+    guard captureMode == .auto, !vm.isActionRecording else { return }
+    // The raw transcript is what the agent should parse — `appended` may
+    // have been through an AI format pass, which rewrites a command into
+    // prose and loses the instruction.
+    let transcript = vm.rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !transcript.isEmpty else { return }
+    vm.armNoteReroute(NoteRerouteOffer(
+      transcript: transcript,
+      noteID: noteID,
+      appendedText: appended,
+      createdNote: createdNote
+    ))
+  }
+
+  /// Takes the dictation back out of the note and hands it to the agent.
+  private func runNoteReroute() {
+    guard let offer = vm.noteRerouteOffer else { return }
+    vm.clearNoteReroute()
+
+    let retracted = notes.retractAppend(id: offer.noteID, text: offer.appendedText)
+    // A note this capture created, now empty again, is a shell the user
+    // never asked for — take it with us. A note that already existed stays.
+    if retracted, offer.createdNote,
+       let note = notes.notes.first(where: { $0.id == offer.noteID }),
+       note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      notes.deleteNote(id: offer.noteID)
+      if path == [.note(offer.noteID)] { path = [] }
+    }
+    // Let the same transcript append again if the user re-routes back.
+    lastAppendedTranscript = ""
+
+    vm.isActionRecording = true
+    vm.wasAutoRouted = true
+    Task { await vm.rerunAsAction(offer.transcript, provider: aiProvider) }
   }
 
   // MARK: - Background

@@ -17,14 +17,13 @@
 //
 
 import CoreGraphics
-import HexCore
 import SwiftUI
 
 // MARK: - Mode
 
 /// What the owl is *doing*. Distinct from `TranscriptionIndicatorView.Mode`
 /// (which is what Quill is *for* — Auto/Dictate/Edit/Action).
-enum OwlSpriteMode: Equatable {
+public enum OwlSpriteMode: Equatable {
   case ready
   case writing
   case working
@@ -32,8 +31,8 @@ enum OwlSpriteMode: Equatable {
 
 // MARK: - Sprite
 
-enum QuillOwlSprite {
-  static let spriteSize = 48
+public enum QuillOwlSprite {
+  public static let spriteSize = 48
 
   // MARK: Geometry constants (from the handoff)
 
@@ -63,7 +62,7 @@ enum QuillOwlSprite {
   private static let tau = Double.pi * 2
 
   /// That state's loop length in seconds.
-  static func cycle(_ mode: OwlSpriteMode) -> Double {
+  public static func cycle(_ mode: OwlSpriteMode) -> Double {
     switch mode {
     case .writing: return writeCycle
     case .working: return workCycle * 2
@@ -211,7 +210,7 @@ enum QuillOwlSprite {
   }
 
   /// Colours the dynamic (per-frame) drawing needs, as SwiftUI colours.
-  struct DynamicColors {
+  public struct DynamicColors {
     let ink = Color(hex: "#5b4a72")!
     let paperEdge = Color(hex: "#d8d0bd")!       // pal.W
     let progressTrack = Color(hex: "#c8bfa8")!
@@ -223,6 +222,10 @@ enum QuillOwlSprite {
     let gold = Color(hex: "#ffd97a")!            // pal.g — sparkles
     let sparkCore = Color(hex: "#fffdf5")!
     let accent: Color
+
+    public init(accent: Color) {
+      self.accent = accent
+    }
   }
 
   private static func hexColor(_ hex: String) -> CGColor {
@@ -263,12 +266,12 @@ enum QuillOwlSprite {
 
   // MARK: - Rasterization
 
-  struct Layers {
+  public struct Layers {
     let body: Image
     let head: Image
     let quill: Image
     /// Quill layer size in sprite pixels (16 × 9) — the other two are 48².
-    static let quillSize = (w: 16, h: 9)
+    public static let quillSize = (w: 16, h: 9)
   }
 
   private static func rasterize(_ g: Grid, palette: [Character: CGColor], scale: Int) -> CGImage? {
@@ -301,7 +304,7 @@ enum QuillOwlSprite {
   /// pixels per sprite pixel and must be a whole number or the art shimmers.
   /// Callers should hold onto the result — this walks 2 × 48² + 16 × 9 cells,
   /// so it belongs in a `@State`, not in a per-frame draw.
-  static func makeLayers(accent: OKLCH, scale: Int) -> Layers? {
+  public static func makeLayers(accent: OKLCH, scale: Int) -> Layers? {
     let rgb = accent.sRGB
     let accentCG = CGColor(
       srgbRed: CGFloat(rgb.red), green: CGFloat(rgb.green), blue: CGFloat(rgb.blue), alpha: 1
@@ -327,7 +330,7 @@ enum QuillOwlSprite {
   ///   - t: elapsed **seconds** on one monotonic clock. Never reset it on a
   ///     mode change — each state loops on its own period, so a shared clock
   ///     keeps the motion continuous through the cut.
-  static func draw(
+  public static func draw(
     in context: GraphicsContext,
     unit: CGFloat,
     t: Double,

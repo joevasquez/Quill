@@ -14,6 +14,7 @@ struct SettingsView: View {
 
   @AppStorage(QuillIOSSettingsKey.selectedModel) private var selectedModel: String = QuillIOSSettingsKey.defaultModel
   @AppStorage(QuillIOSSettingsKey.appearance) private var appearanceRaw: String = QuillAppearance.system.rawValue
+  @AppStorage(QuillIOSSettingsKey.captureAvatar) private var captureAvatarRaw: String = QuillIOSSettingsKey.defaultCaptureAvatarValue
   /// Doubles as "last mode used on the home rail" — the rail writes back
   /// here so a relaunch reopens where the user left off.
   @AppStorage(QuillIOSSettingsKey.defaultCaptureMode) private var defaultCaptureModeRaw: String = QuillIOSSettingsKey.defaultCaptureModeValue
@@ -187,10 +188,17 @@ struct SettingsView: View {
             }
           }
           .pickerStyle(.segmented)
+
+          Picker("Avatar", selection: $captureAvatarRaw) {
+            ForEach(QuillCaptureAvatarStyle.allCases) { style in
+              Text(style.label).tag(style.rawValue)
+            }
+          }
+          .pickerStyle(.segmented)
         } header: {
           Text("Appearance")
         } footer: {
-          Text("Auto follows your device. The orb keeps its mode colors in both themes.")
+          Text("Auto follows your device. Both avatars keep their mode colors in both themes. The note composer's small record button always shows the orb — the owl needs more room to stay legible.")
         }
 
         // Grouped into sub-screens: the root was 16 stacked sections,

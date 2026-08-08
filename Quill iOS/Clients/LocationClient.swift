@@ -57,8 +57,22 @@ final class LocationClient: NSObject {
 
   // MARK: - Internals
 
-  private func requestOneShotLocation() async -> CLLocation? {
-    await withCheckedContinuation { continuation in
+  /// `requestLocation` promises exactly one delegate callback, but "eventually"
+  /// — indoors or with a cold GPS it can sit for a long time, and a dropped
+  /// callback would strand the continuation for the life of the process.
+  /// Give up after `timeout` and report no location, which callers already
+  /// handle. Resuming is guarded by nilling `pendingContinuation`, so the
+  /// delegate and the timeout can't both resume it.
+  private func requestOneShotLocation(timeout: Duration = .seconds(8)) async -> CLLocation? {
+    let timeoutTask = Task { @MainActor in
+      try? await Task.sleep(for: timeout)
+      guard !Task.isCancelled else { return }
+      self.pendingContinuation?.resume(returning: nil)
+      self.pendingContinuation = nil
+    }
+    defer { timeoutTask.cancel() }
+
+    return await withCheckedContinuation { continuation in
       self.pendingContinuation = continuation
       manager.requestLocation()
     }

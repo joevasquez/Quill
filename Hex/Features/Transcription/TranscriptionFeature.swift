@@ -76,6 +76,14 @@ struct TranscriptionFeature {
     /// clipboard result arrives.
     var editClipboardFallbackPending: Bool = false
     var pendingTranscriptionForEdit: PendingTranscription?
+    /// Set for a few seconds after an Auto-mode run lands, so a
+    /// misclassification can be re-run through a different branch
+    /// without the user speaking again. Nil at all other times.
+    var rerouteOffer: RerouteOffer?
+    /// Modes this transcript has already been routed through. Survives the
+    /// gap between one offer being consumed and the replacement arriving;
+    /// cleared when the next recording starts.
+    var rerouteTried: Set<TranscriptionIndicatorView.Mode> = []
     var recordingSessionID = UUID()
     @Shared(.hexSettings) var hexSettings: HexSettings
     @Shared(.isRemappingScratchpadFocused) var isRemappingScratchpadFocused: Bool = false
@@ -128,6 +136,18 @@ struct TranscriptionFeature {
     case inlineEditApplied(PendingEditResult)
     case inlineEditAccept
     case inlineEditUndo
+
+    // Auto-mode re-routing
+    /// An Auto-mode run finished. Opens a short window in which the same
+    /// transcript can be re-run through a different branch.
+    case rerouteOffered(RerouteOffer)
+    /// Re-run the offered transcript as `mode`, retracting whatever the
+    /// first branch did.
+    case reroute(TranscriptionIndicatorView.Mode)
+    /// Second phase of `.reroute`, sent once the retraction has finished so
+    /// the replacement can't write before the undo lands.
+    case rerouteDispatch(RerouteOffer, TranscriptionIndicatorView.Mode)
+    case rerouteExpired
 
     // Action mode
     /// A command typed (not spoken) via Home or the menu bar's "Type a
@@ -185,6 +205,49 @@ struct TranscriptionFeature {
     let sessionID: UUID
   }
 
+  /// Everything needed to re-run a finished Auto-mode transcript through a
+  /// different branch. Created only after a branch has actually landed —
+  /// arming it earlier would let the user trigger an undo against work that
+  /// hadn't been applied yet, sending a stray Cmd+Z into their document.
+  ///
+  /// The audio is deliberately absent: by this point the first dispatch has
+  /// already filed it into history (or deleted it), so a re-route re-uses
+  /// that entry rather than creating a second one for one utterance.
+  struct RerouteOffer: Equatable {
+    /// Post-remapping transcript — the same string the first branch saw.
+    let transcript: String
+    let appliedMode: TranscriptionIndicatorView.Mode
+    let selection: String?
+    let sourceAppBundleID: String?
+    let sourceAppName: String?
+    let duration: TimeInterval
+    /// True when the applied branch wrote text into the source app, which is
+    /// what a re-route has to retract. False for Action, which only opened a
+    /// confirmation panel and changed nothing.
+    let didWriteText: Bool
+
+    /// Modes already used for this transcript, so repeated cycle-hotkey taps
+    /// walk the whole set instead of ping-ponging between the first two.
+    var tried: Set<TranscriptionIndicatorView.Mode> = []
+
+    /// The modes worth offering, in a stable order. Edit is omitted without a
+    /// selection — with nothing highlighted it has no text to transform, and
+    /// the standalone-instruction fallback isn't what a misroute wants.
+    var alternatives: [TranscriptionIndicatorView.Mode] {
+      [.dictate, .edit, .action].filter { candidate in
+        guard candidate != appliedMode else { return false }
+        if candidate == .edit { return selection != nil }
+        return true
+      }
+    }
+
+    /// Where the cycle hotkey sends the next tap: the first alternative not yet
+    /// used, or — once they've all been seen — back to the start.
+    var nextAlternative: TranscriptionIndicatorView.Mode? {
+      alternatives.first { !tried.contains($0) } ?? alternatives.first
+    }
+  }
+
   enum CancelID {
     case metering
     case recordingCleanup
@@ -192,6 +255,7 @@ struct TranscriptionFeature {
     case liveTranscription
     case editNeedsSelectionTimer
     case editAcceptanceTimer
+    case rerouteWindow
   }
 
   @Dependency(\.transcription) var transcription
@@ -299,6 +363,13 @@ struct TranscriptionFeature {
         return .none
 
       case .cycleMode:
+        // While a re-route is on offer, the cycle hotkey means "that was the
+        // wrong mode" rather than "change the next one" — which is what the
+        // user is reaching for anyway in the seconds after a misclassification.
+        // Repeated taps walk the alternatives; each re-route re-arms the offer.
+        if let next = state.rerouteOffer?.nextAlternative {
+          return .send(.reroute(next))
+        }
         return .send(.setMode(state.selectedMode.next))
 
       case let .setMode(newMode):
@@ -393,6 +464,91 @@ struct TranscriptionFeature {
             soundEffect.play(.cancel)
           }
         )
+
+      // MARK: - Auto-mode Re-routing
+
+      case let .rerouteOffered(offer):
+        // Nothing to re-route to (Action with no selection and no other
+        // plausible destination) — don't show a card with no buttons.
+        guard !offer.alternatives.isEmpty else { return .none }
+        var offer = offer
+        // Carry forward what this transcript has already been through, so a
+        // second tap of the cycle hotkey advances instead of going back.
+        offer.tried = state.rerouteTried.union([offer.appliedMode])
+        state.rerouteOffer = offer
+        return .run { send in
+          try? await Task.sleep(for: .seconds(rerouteWindowSeconds))
+          await send(.rerouteExpired)
+        }
+        .cancellable(id: CancelID.rerouteWindow, cancelInFlight: true)
+
+      case .rerouteExpired:
+        state.rerouteOffer = nil
+        return .none
+
+      case let .reroute(newMode):
+        guard let offer = state.rerouteOffer else { return .none }
+        state.rerouteOffer = nil
+        state.rerouteTried = offer.tried.union([offer.appliedMode, newMode])
+        transcriptionFeatureLogger.info(
+          "Re-routing transcript from \(offer.appliedMode.rawValue) to \(newMode.rawValue)"
+        )
+
+        // Correct the counters the first branch bumped. The word count
+        // stays put — the user spoke those words once.
+        state.$usageStats.withLock { stats in
+          decrementUsageCount(&stats, for: offer.appliedMode)
+          incrementUsageCount(&stats, for: newMode)
+        }
+
+        // Patch the history entry in place rather than writing a second one:
+        // one utterance should be one row, labelled with where it ended up.
+        state.$transcriptionHistory.withLock { history in
+          if let idx = history.history.firstIndex(where: { $0.text == offer.transcript }) {
+            history.history[idx].mode = newMode.transcriptionMode
+          }
+        }
+
+        // The inline-edit Accept/Undo pill belongs to the branch we're
+        // abandoning; its undo is about to be performed by the retraction.
+        state.pendingEditResult = nil
+        state.isAIProcessing = false
+
+        // Retraction and re-dispatch are two phases on purpose. Merged, they
+        // would race: re-routing Edit → Dictate fires a Cmd+Z at the source
+        // app while Branch 4 is already pasting, and with AI processing off
+        // the paste can win — undoing the *replacement* instead of the edit.
+        return .merge(
+          .cancel(id: CancelID.editAcceptanceTimer),
+          .cancel(id: CancelID.rerouteWindow),
+          .run { [inlineEdit] send in
+            if offer.didWriteText {
+              await inlineEdit.undoLastEdit(offer.sourceAppBundleID)
+            }
+            if offer.appliedMode == .action {
+              // The first run opened a confirmation panel and executed
+              // nothing; close it before the replacement opens.
+              await MainActor.run {
+                NotificationCenter.default.post(name: .actionConfirmationCancelled, object: nil)
+              }
+            }
+            await send(.rerouteDispatch(offer, newMode))
+          }
+        )
+
+      case let .rerouteDispatch(offer, newMode):
+        return dispatchTranscript(&state, TranscriptDispatch(
+          mode: newMode,
+          transcript: offer.transcript,
+          // nil: the audio was filed by the first dispatch. Passing it again
+          // would double-store the entry `.reroute` just patched.
+          audioURL: nil,
+          duration: offer.duration,
+          selection: offer.selection,
+          sourceAppBundleID: offer.sourceAppBundleID,
+          sourceAppName: offer.sourceAppName,
+          isReroute: true
+        ))
 
       // MARK: - Action Mode
 
@@ -903,6 +1059,10 @@ private extension TranscriptionFeature {
     state.inlineEditSelection = nil
     state.editClipboardFallbackPending = false
     state.pendingTranscriptionForEdit = nil
+    // A new take retires the previous one's re-route offer — otherwise the
+    // cycle hotkey would still be aimed at the transcript before this one.
+    state.rerouteOffer = nil
+    state.rerouteTried = []
     state.isTranscribing = false
     state.isAIProcessing = false
     state.autoDetectedMode = .dictate
@@ -1135,6 +1295,38 @@ private func transcriptionWordCount(of text: String) -> Int {
   text.split { $0.isWhitespace || $0.isNewline }.count
 }
 
+/// Deletes a recording, tolerating the nil a re-route passes (the first
+/// dispatch already consumed the file).
+private func removeRecordingFile(_ url: URL?) {
+  guard let url else { return }
+  try? FileManager.default.removeItem(at: url)
+}
+
+/// How long a finished Auto-mode run stays re-routable.
+///
+/// Long enough to read what landed and react, short enough that the cycle-mode
+/// hotkey goes back to meaning "cycle" well before the next dictation.
+let rerouteWindowSeconds: Double = 10
+
+private func incrementUsageCount(_ stats: inout UsageStats, for mode: TranscriptionIndicatorView.Mode) {
+  switch mode {
+  case .edit:   stats.editCount += 1
+  case .action: stats.actionCount += 1
+  // Auto never reaches a branch as itself; it resolves to one of the three.
+  case .dictate, .auto: stats.dictationCount += 1
+  }
+}
+
+/// Undoes an `incrementUsageCount` when a run is re-routed. Clamped at zero so
+/// a counter can't go negative if the two calls ever fall out of step.
+private func decrementUsageCount(_ stats: inout UsageStats, for mode: TranscriptionIndicatorView.Mode) {
+  switch mode {
+  case .edit:   stats.editCount = max(0, stats.editCount - 1)
+  case .action: stats.actionCount = max(0, stats.actionCount - 1)
+  case .dictate, .auto: stats.dictationCount = max(0, stats.dictationCount - 1)
+  }
+}
+
 private extension TranscriptionFeature {
   func handleTranscriptionResult(
     _ state: inout State,
@@ -1267,6 +1459,48 @@ private extension TranscriptionFeature {
       effectiveMode = state.selectedMode
     }
 
+    return dispatchTranscript(&state, TranscriptDispatch(
+      mode: effectiveMode,
+      transcript: modifiedResult,
+      audioURL: audioURL,
+      duration: duration,
+      selection: state.inlineEditSelection,
+      sourceAppBundleID: state.sourceAppBundleID,
+      sourceAppName: state.sourceAppName,
+      isReroute: false
+    ))
+  }
+
+  /// One trip through the transcript pipeline: everything a branch needs, with
+  /// no dependency on how the mode was arrived at.
+  ///
+  /// Split out of `handleTranscriptionResult` so a re-route can re-enter the
+  /// branches with a mode the user picked instead of one the classifier
+  /// guessed — same transcript, no second recording.
+  struct TranscriptDispatch {
+    let mode: TranscriptionIndicatorView.Mode
+    let transcript: String
+    /// Nil on a re-route: the first dispatch already consumed the file
+    /// (filed into history or deleted). Branches skip storage and cleanup
+    /// when it's absent rather than writing a duplicate entry.
+    let audioURL: URL?
+    let duration: TimeInterval
+    let selection: String?
+    let sourceAppBundleID: String?
+    let sourceAppName: String?
+    let isReroute: Bool
+  }
+
+  func dispatchTranscript(
+    _ state: inout State,
+    _ dispatch: TranscriptDispatch
+  ) -> Effect<Action> {
+    let effectiveMode = dispatch.mode
+    let modifiedResult = dispatch.transcript
+    let audioURL = dispatch.audioURL
+    let duration = dispatch.duration
+    let isReroute = dispatch.isReroute
+
     // Resolve AI processing mode (context-aware or manual)
     let resolvedMode = resolveAIMode(state: state)
     let aiEnabled = state.hexSettings.aiProcessingEnabled && resolvedMode != .off
@@ -1277,13 +1511,34 @@ private extension TranscriptionFeature {
       transcriptionFeatureLogger.info("AI processing enabled: \(resolvedMode.displayName) mode via \(aiProvider.displayName)")
     }
 
-    let sourceAppBundleID = state.sourceAppBundleID
-    let sourceAppName = state.sourceAppName
+    let sourceAppBundleID = dispatch.sourceAppBundleID
+    let sourceAppName = dispatch.sourceAppName
     let capturedContext = state.capturedContext
     let transcriptionHistory = state.$transcriptionHistory
-    let inlineEditSelection = state.inlineEditSelection
+    let inlineEditSelection = dispatch.selection
     let sessionID = state.recordingSessionID
     let selectedMode = state.selectedMode
+
+    // A re-route is the user overruling the classifier, so only an Auto run
+    // that landed on its own gets to offer one. `offerReroute` is captured by
+    // each branch and sent once the branch has actually applied its result.
+    let offerReroute = selectedMode == .auto
+
+    /// Built by a branch once its result is actually applied — never before,
+    /// so the re-route can't fire an undo at work that hasn't landed.
+    /// `wroteText` says whether there's a paste in the source app to retract.
+    let makeRerouteOffer: @Sendable (Bool) -> RerouteOffer? = { wroteText in
+      guard offerReroute else { return nil }
+      return RerouteOffer(
+        transcript: modifiedResult,
+        appliedMode: effectiveMode,
+        selection: inlineEditSelection,
+        sourceAppBundleID: sourceAppBundleID,
+        sourceAppName: sourceAppName,
+        duration: duration,
+        didWriteText: wroteText
+      )
+    }
 
     // Decision-tree log — emitted before every finalize so we can
     // see at a glance which branch is taken and why.
@@ -1310,9 +1565,11 @@ private extension TranscriptionFeature {
       (selectedMode != .auto && selectedMode != .action && _inlineEditEnabled)
     )
     if shouldInlineEdit, let selection = inlineEditSelection, !modifiedResult.isEmpty {
-      state.$usageStats.withLock { stats in
-        stats.editCount += 1
-        stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
+      if !isReroute {
+        state.$usageStats.withLock { stats in
+          stats.editCount += 1
+          stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
+        }
       }
       state.isAIProcessing = true
       let isPro = state.hexSettings.selectedPlan == "pro"
@@ -1323,7 +1580,7 @@ private extension TranscriptionFeature {
             transcriptionFeatureLogger.warning("Inline edit: no \(aiProvider.displayName) API key — cannot process")
             await send(.aiProcessingFinished)
             await send(.editModeNeedsAPIKey)
-            try? FileManager.default.removeItem(at: audioURL)
+            removeRecordingFile(audioURL)
             return
           }
         }
@@ -1354,6 +1611,7 @@ private extension TranscriptionFeature {
             sourceAppBundleID: sourceAppBundleID
           )))
           soundEffect.play(.pasteTranscript)
+          if let offer = makeRerouteOffer(true) { await send(.rerouteOffered(offer)) }
           try? await storeTranscriptInHistory(
             text: modifiedResult, audioURL: audioURL, duration: duration,
             sourceAppBundleID: sourceAppBundleID, sourceAppName: sourceAppName,
@@ -1364,7 +1622,7 @@ private extension TranscriptionFeature {
           transcriptionFeatureLogger.error("Inline edit AI failed: \(error.localizedDescription)")
           await send(.aiProcessingFinished)
           await send(.editModeAIFailed(modifiedResult))
-          try? FileManager.default.removeItem(at: audioURL)
+          removeRecordingFile(audioURL)
         }
       }
       .cancellable(id: CancelID.transcription)
@@ -1374,9 +1632,11 @@ private extension TranscriptionFeature {
     // User is in explicit Edit mode (not Auto) but no text was selected.
     // Treat the dictation as a standalone AI instruction.
     if effectiveMode == .edit && inlineEditSelection == nil && !modifiedResult.isEmpty {
-      state.$usageStats.withLock { stats in
-        stats.editCount += 1
-        stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
+      if !isReroute {
+        state.$usageStats.withLock { stats in
+          stats.editCount += 1
+          stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
+        }
       }
       state.isAIProcessing = true
       let isPro2 = state.hexSettings.selectedPlan == "pro"
@@ -1387,7 +1647,7 @@ private extension TranscriptionFeature {
             transcriptionFeatureLogger.warning("Edit mode (no selection): no \(aiProvider.displayName) API key")
             await send(.aiProcessingFinished)
             await send(.editModeNeedsAPIKey)
-            try? FileManager.default.removeItem(at: audioURL)
+            removeRecordingFile(audioURL)
             return
           }
         }
@@ -1405,6 +1665,7 @@ private extension TranscriptionFeature {
           await send(.aiProcessingFinished)
           await pasteboard.paste(generated, sourceAppBundleID)
           soundEffect.play(.pasteTranscript)
+          if let offer = makeRerouteOffer(true) { await send(.rerouteOffered(offer)) }
           try? await storeTranscriptInHistory(
             text: modifiedResult, audioURL: audioURL, duration: duration,
             sourceAppBundleID: sourceAppBundleID, sourceAppName: sourceAppName,
@@ -1414,7 +1675,7 @@ private extension TranscriptionFeature {
           transcriptionFeatureLogger.error("Edit mode (no selection) AI failed: \(error.localizedDescription)")
           await send(.aiProcessingFinished)
           await send(.editModeAIFailed(modifiedResult))
-          try? FileManager.default.removeItem(at: audioURL)
+          removeRecordingFile(audioURL)
         }
       }
       .cancellable(id: CancelID.transcription)
@@ -1430,22 +1691,24 @@ private extension TranscriptionFeature {
       // can't tell one piece of prose from another — then presents that
       // explanation to the user as their draft. Refusing here also means the
       // command doesn't paste anything into the document it failed on.
-      if state.inlineEditSelection == nil, ComposeSalvage.isComposeAboutSelection(modifiedResult) {
+      if inlineEditSelection == nil, ComposeSalvage.isComposeAboutSelection(modifiedResult) {
         transcriptionFeatureLogger.notice(
           "Compose request with no selection captured — asking the user to highlight first"
         )
         state.isAIProcessing = false
         state.editNeedsSelectionMessage = "Highlight the text you want a reply to"
-        try? FileManager.default.removeItem(at: audioURL)
+        removeRecordingFile(audioURL)
         return .run { send in
           try? await Task.sleep(for: .seconds(3))
           await send(.editNeedsSelectionDismiss)
         }
         .cancellable(id: CancelID.editNeedsSelectionTimer, cancelInFlight: true)
       }
-      state.$usageStats.withLock { stats in
-        stats.actionCount += 1
-        stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
+      if !isReroute {
+        state.$usageStats.withLock { stats in
+          stats.actionCount += 1
+          stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
+        }
       }
       state.isAIProcessing = true
       state.lastActionTranscript = modifiedResult
@@ -1454,7 +1717,7 @@ private extension TranscriptionFeature {
       let memoryEnabled = state.hexSettings.agentMemoryEnabled
       // Selected-text context captured at stop time (AX-only in Action
       // mode) — lets "add this to my Kearney list" resolve "this".
-      let selectionContext = state.inlineEditSelection
+      let selectionContext = inlineEditSelection
       return .run { [actionParsing] send in
         // Routine authoring: "new routine: when I say ship it, …" parses the
         // description into a trigger + steps and persists it.
@@ -1480,7 +1743,7 @@ private extension TranscriptionFeature {
             } else {
               await send(.actionParsingFailed(modifiedResult))
             }
-            try? FileManager.default.removeItem(at: audioURL)
+            removeRecordingFile(audioURL)
           }
           return
         }
@@ -1493,6 +1756,9 @@ private extension TranscriptionFeature {
           await RoutineStore.shared.recordRun(id: routine.id)
           await send(.aiProcessingFinished)
           await send(.routineTriggered(routine))
+          // Nothing has run yet — the panel is only asking. `didWriteText`
+          // is false, so a re-route closes the panel instead of undoing.
+          if let offer = makeRerouteOffer(false) { await send(.rerouteOffered(offer)) }
           try? await storeTranscriptInHistory(
             text: modifiedResult, audioURL: audioURL, duration: duration,
             sourceAppBundleID: sourceAppBundleID, sourceAppName: sourceAppName,
@@ -1517,6 +1783,7 @@ private extension TranscriptionFeature {
           } else {
             await send(.multiActionIntentsParsed(response.actions))
           }
+          if let offer = makeRerouteOffer(false) { await send(.rerouteOffered(offer)) }
           // Background memory pass: fire-and-forget so it never delays the
           // confirmation panel and survives the next recording cancelling
           // this effect.
@@ -1551,16 +1818,18 @@ private extension TranscriptionFeature {
           } else {
             await send(.actionParsingFailed(modifiedResult))
           }
-          try? FileManager.default.removeItem(at: audioURL)
+          removeRecordingFile(audioURL)
         }
       }
       .cancellable(id: CancelID.transcription)
     }
 
     // ── Branch 4: Dictate mode (default) ──
-    state.$usageStats.withLock { stats in
-      stats.dictationCount += 1
-      stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
+    if !isReroute {
+      state.$usageStats.withLock { stats in
+        stats.dictationCount += 1
+        stats.totalWordsTranscribed += transcriptionWordCount(of: modifiedResult)
+      }
     }
     return .run { [aiProcessing] send in
       do {
@@ -1584,6 +1853,7 @@ private extension TranscriptionFeature {
           mode: .dictate,
           transcriptionHistory: transcriptionHistory
         )
+        if let offer = makeRerouteOffer(true) { await send(.rerouteOffered(offer)) }
       } catch {
         await send(.transcriptionError(error, audioURL, sessionID: sessionID))
       }
@@ -1661,15 +1931,19 @@ private extension TranscriptionFeature {
 
   /// Save transcript to history, handling max-entries pruning and cloud sync.
   /// Used by all branches — edit, action, and dictate.
+  /// `audioURL` is nil on a re-routed run: the first dispatch already stored
+  /// (or discarded) the recording, and `.reroute` patches that entry's mode in
+  /// place. Writing again would give one utterance two rows.
   func storeTranscriptInHistory(
     text: String,
-    audioURL: URL,
+    audioURL: URL?,
     duration: TimeInterval,
     sourceAppBundleID: String?,
     sourceAppName: String?,
     mode: TranscriptionMode?,
     transcriptionHistory: Shared<TranscriptionHistory>
   ) async throws {
+    guard let audioURL else { return }
     @Shared(.hexSettings) var hexSettings: HexSettings
 
     if hexSettings.saveTranscriptionHistory {
@@ -1725,7 +1999,7 @@ private extension TranscriptionFeature {
     duration: TimeInterval,
     sourceAppBundleID: String?,
     sourceAppName: String?,
-    audioURL: URL,
+    audioURL: URL?,
     mode: TranscriptionMode?,
     transcriptionHistory: Shared<TranscriptionHistory>
   ) async throws {
@@ -1831,6 +2105,30 @@ struct TranscriptionView: View {
     return "Hold \(keys) \(verb)"
   }
 
+  /// The cycle-mode shortcut as a compact glyph string ("⌥⇧M"), for the
+  /// re-route card's first chip. Nil when the user hasn't assigned one —
+  /// `cycleModeHotkey` ships unset, and promising a keystroke that does
+  /// nothing is worse than showing no badge at all.
+  private var cycleHotkeyHint: String? {
+    guard let hotkey = store.hexSettings.cycleModeHotkey else { return nil }
+    var parts: [String] = []
+    if hotkey.modifiers.isHyperkey {
+      parts.append("Hyper")
+    } else {
+      for mod in hotkey.modifiers.sorted {
+        parts.append(mod.kind.symbol)
+      }
+    }
+    if let key = hotkey.key {
+      switch key {
+      case .space: parts.append("Space")
+      case .escape: parts.append("Esc")
+      default: parts.append(key.toString.uppercased())
+      }
+    }
+    return parts.isEmpty ? nil : parts.joined()
+  }
+
   var body: some View {
     Group {
       if store.hexSettings.displayMode == .chip {
@@ -1848,9 +2146,12 @@ struct TranscriptionView: View {
           pendingEditResult: store.pendingEditResult,
           partialTranscript: store.partialTranscript,
           autoDetectedMode: store.autoDetectedMode,
+          rerouteOffer: store.rerouteOffer,
+          cycleHotkeyHint: cycleHotkeyHint,
           onCycleMode: { store.send(.cycleMode) },
           onEditAccept: { store.send(.inlineEditAccept) },
-          onEditUndo: { store.send(.inlineEditUndo) }
+          onEditUndo: { store.send(.inlineEditUndo) },
+          onReroute: { store.send(.reroute($0)) }
         )
       } else if store.hexSettings.displayMode == .orb {
         OrbView(
@@ -1866,11 +2167,14 @@ struct TranscriptionView: View {
           mcpServerNames: store.hexSettings.mcpServers.filter(\.isEnabled).map(\.name),
           lockedActionIntegration: store.lockedActionIntegration,
           autoDetectedMode: store.autoDetectedMode,
+          rerouteOffer: store.rerouteOffer,
+          cycleHotkeyHint: cycleHotkeyHint,
           isPinnedToTop: store.hexSettings.hudPinnedToTop,
           onCycleMode: { store.send(.cycleMode) },
           onEditAccept: { store.send(.inlineEditAccept) },
           onEditUndo: { store.send(.inlineEditUndo) },
-          onToggleActionIntegration: { id in store.send(.toggleActionIntegrationLock(id)) }
+          onToggleActionIntegration: { id in store.send(.toggleActionIntegrationLock(id)) },
+          onReroute: { store.send(.reroute($0)) }
         )
       } else {
         TranscriptionIndicatorView(
@@ -1885,11 +2189,14 @@ struct TranscriptionView: View {
           actionIntegrations: store.availableActionIntegrations,
           lockedActionIntegration: store.lockedActionIntegration,
           autoDetectedMode: store.autoDetectedMode,
+          rerouteOffer: store.rerouteOffer,
+          cycleHotkeyHint: cycleHotkeyHint,
           isPinnedToTop: store.hexSettings.hudPinnedToTop,
           onCycleMode: { store.send(.cycleMode) },
           onEditAccept: { store.send(.inlineEditAccept) },
           onEditUndo: { store.send(.inlineEditUndo) },
-          onToggleActionIntegration: { id in store.send(.toggleActionIntegrationLock(id)) }
+          onToggleActionIntegration: { id in store.send(.toggleActionIntegrationLock(id)) },
+          onReroute: { store.send(.reroute($0)) }
         )
       }
     }
@@ -1926,6 +2233,19 @@ extension TranscriptionMode {
   var indicatorMode: TranscriptionIndicatorView.Mode {
     switch self {
     case .dictate: .dictate
+    case .edit: .edit
+    case .action: .action
+    }
+  }
+}
+
+extension TranscriptionIndicatorView.Mode {
+  /// The portable mode this HUD mode records as. `.auto` has no history
+  /// representation of its own — it always resolves to a concrete branch
+  /// before anything is stored — so it maps to `.dictate`.
+  var transcriptionMode: TranscriptionMode {
+    switch self {
+    case .dictate, .auto: .dictate
     case .edit: .edit
     case .action: .action
     }

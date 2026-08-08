@@ -85,11 +85,17 @@ struct TranscriptionIndicatorView: View {
   var lockedActionIntegration: Integration.Identifier?
   /// When mode is .auto, the detected sub-mode (dictate/edit/action).
   var autoDetectedMode: Mode = .dictate
+  /// Non-nil for a few seconds after an Auto run lands — drives the
+  /// "wrong mode?" strip that re-runs the same transcript elsewhere.
+  var rerouteOffer: TranscriptionFeature.RerouteOffer?
+  /// Formatted cycle-mode hotkey, shown on the first re-route chip.
+  var cycleHotkeyHint: String?
   var isPinnedToTop: Bool = false
   var onCycleMode: () -> Void
   var onEditAccept: () -> Void
   var onEditUndo: () -> Void
   var onToggleActionIntegration: (Integration.Identifier) -> Void = { _ in }
+  var onReroute: (Mode) -> Void = { _ in }
 
   // MARK: Body
 
@@ -133,6 +139,17 @@ struct TranscriptionIndicatorView: View {
         editAcceptancePill
           .transition(.move(edge: .top).combined(with: .opacity))
       }
+
+      // "Wrong mode?" strip after an Auto run
+      if let rerouteOffer {
+        RerouteOfferCard(
+          appliedMode: rerouteOffer.appliedMode,
+          alternatives: rerouteOffer.alternatives,
+          shortcutHint: cycleHotkeyHint,
+          onReroute: onReroute
+        )
+        .transition(.move(edge: .top).combined(with: .opacity))
+      }
     }
     .animation(.snappy(duration: 0.3), value: status)
     .animation(.snappy(duration: 0.25), value: mode)
@@ -140,6 +157,7 @@ struct TranscriptionIndicatorView: View {
     .animation(.snappy(duration: 0.25), value: pendingEditResult != nil)
     .animation(.snappy(duration: 0.25), value: partialTranscript.isEmpty)
     .animation(.snappy(duration: 0.25), value: lockedActionIntegration)
+    .animation(.snappy(duration: 0.25), value: rerouteOffer)
     .enableInjection()
   }
 
@@ -521,6 +539,96 @@ struct LiveTranscriptCard: View {
       .compositingGroup()
       .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
       .animation(.easeOut(duration: 0.18), value: text)
+  }
+}
+
+// MARK: - Auto-mode re-route card
+
+/// Shown for a few seconds after an Auto-mode run lands, offering to re-run
+/// the same transcript through a different branch.
+///
+/// The point is that the transcript still exists — a misclassification should
+/// cost one keystroke, not another take. Deliberately a quiet strip rather
+/// than a modal: it appears after the fact, so being ignorable is the feature.
+/// Shared by every HUD display mode.
+struct RerouteOfferCard: View {
+  let appliedMode: TranscriptionIndicatorView.Mode
+  let alternatives: [TranscriptionIndicatorView.Mode]
+  /// Formatted cycle-mode hotkey (e.g. "⌥⇧M"), shown on the first
+  /// alternative so the keystroke is learnable. Nil when unassigned.
+  var shortcutHint: String?
+  let onReroute: (TranscriptionIndicatorView.Mode) -> Void
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Text(appliedMode.pastTenseLabel)
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(.white.opacity(0.55))
+
+      Text("Wrong?")
+        .font(.system(size: 11, weight: .regular))
+        .foregroundStyle(.white.opacity(0.45))
+
+      ForEach(Array(alternatives.enumerated()), id: \.element) { index, mode in
+        Button { onReroute(mode) } label: {
+          HStack(spacing: 4) {
+            Image(systemName: mode.icon)
+              .font(.system(size: 9, weight: .bold))
+            Text(mode.rawValue)
+              .font(.system(size: 11, weight: .semibold))
+            // Only the first chip carries the hotkey: it's where a tap of
+            // the cycle key lands, and repeating it on every chip would
+            // read as "any of these".
+            if index == 0, let shortcutHint {
+              Text(shortcutHint)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.6))
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(
+                  RoundedRectangle(cornerRadius: QuillDesign.Radius.badge, style: .continuous)
+                    .fill(.white.opacity(0.15))
+                )
+            }
+          }
+          .foregroundStyle(.white)
+          .padding(.horizontal, 8)
+          .padding(.vertical, 4)
+          .background(
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
+              .fill(mode.orbPalette.color().opacity(0.28))
+          )
+          .overlay(
+            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
+              .strokeBorder(mode.orbPalette.color().opacity(0.5), lineWidth: 1)
+          )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Re-run as \(mode.rawValue)")
+      }
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 6)
+    .background(
+      Capsule()
+        .fill(.ultraThinMaterial)
+        .overlay(Capsule().fill(.black.opacity(0.35)))
+    )
+    .overlay(Capsule().strokeBorder(.white.opacity(0.15), lineWidth: 1))
+    .compositingGroup()
+    .shadow(color: .black.opacity(0.3), radius: 8, y: 3)
+  }
+}
+
+extension TranscriptionIndicatorView.Mode {
+  /// What just happened, for the re-route card's lead-in.
+  var pastTenseLabel: String {
+    switch self {
+    case .dictate: "Dictated"
+    case .edit:    "Edited"
+    case .action:  "Sent to agent"
+    case .auto:    "Done"
+    }
   }
 }
 

@@ -149,12 +149,12 @@ struct QuillCaptureSheet: View {
   }
 
   private var orb: some View {
-    QuillOrb(
+    QuillCaptureAvatar(
       palette: mode.palette,
       // A paused capture reads as calm: drop the listening motion back to
       // the idle sphere so "paused" is legible at a glance.
       phase: isPaused ? .idle : phase,
-      size: QuillDesign.OrbSize.focal,
+      slot: .focal,
       level: isPaused ? 0 : level,
       glow: 1.1
     )

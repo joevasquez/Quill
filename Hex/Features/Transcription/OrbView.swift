@@ -87,11 +87,17 @@ struct OrbView: View {
   var lockedActionIntegration: Integration.Identifier?
   /// When mode is .auto, the detected sub-mode (dictate/edit/action).
   var autoDetectedMode: Mode = .dictate
+  /// Non-nil for a few seconds after an Auto run lands — drives the
+  /// "wrong mode?" strip that re-runs the same transcript elsewhere.
+  var rerouteOffer: TranscriptionFeature.RerouteOffer?
+  /// Formatted cycle-mode hotkey, shown on the first re-route chip.
+  var cycleHotkeyHint: String?
   var isPinnedToTop: Bool = false
   var onCycleMode: () -> Void
   var onEditAccept: () -> Void
   var onEditUndo: () -> Void
   var onToggleActionIntegration: (Integration.Identifier) -> Void = { _ in }
+  var onReroute: (Mode) -> Void = { _ in }
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   /// The orb is quiet at rest and saturates as it comes alive. These scale
@@ -167,6 +173,16 @@ struct OrbView: View {
         editAcceptancePill
           .transition(.move(edge: .top).combined(with: .opacity))
       }
+
+      if let rerouteOffer {
+        RerouteOfferCard(
+          appliedMode: rerouteOffer.appliedMode,
+          alternatives: rerouteOffer.alternatives,
+          shortcutHint: cycleHotkeyHint,
+          onReroute: onReroute
+        )
+        .transition(.move(edge: .top).combined(with: .opacity))
+      }
     }
     .animation(.snappy(duration: 0.3), value: status)
     .animation(.snappy(duration: 0.25), value: mode)
@@ -174,6 +190,7 @@ struct OrbView: View {
     .animation(.snappy(duration: 0.25), value: pendingEditResult != nil)
     .animation(.snappy(duration: 0.25), value: partialTranscript.isEmpty)
     .animation(.snappy(duration: 0.25), value: lockedActionIntegration)
+    .animation(.snappy(duration: 0.25), value: rerouteOffer)
     .animation(.snappy(duration: 0.25), value: intuitedTarget)
     .animation(.snappy(duration: 0.3), value: autoDetectedMode)
     .onAppear {
