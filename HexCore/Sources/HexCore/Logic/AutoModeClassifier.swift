@@ -38,7 +38,9 @@ public enum AutoModeClassifier {
     let normalized = normalize(transcript)
     if ComposeSalvage.isComposeAboutSelection(transcript) { return .action }
     if matchesActionKeywords(normalized) { return .action }
-    if matchesEditKeywords(normalized) { return .edit }
+    if matchesEditKeywords(normalized) || SelectionInstruction.isEditInstruction(transcript) {
+      return .edit
+    }
     return .dictate
   }
 
@@ -73,7 +75,15 @@ public enum AutoModeClassifier {
     if hasIntegrations, matchesActionKeywords(normalized) { return .action }
     // Edit requires a selection — without one the user clearly
     // isn't trying to transform existing text.
-    if hasSelection, matchesEditKeywords(normalized) { return .edit }
+    //
+    // Two ways to qualify: a known edit keyword, or the shape of an
+    // instruction aimed at the selection (imperative + "this"). The second
+    // exists because the first kept missing one phrasing at a time — see
+    // SelectionInstruction.
+    if hasSelection,
+       matchesEditKeywords(normalized) || SelectionInstruction.isEditInstruction(transcript) {
+      return .edit
+    }
     return .dictate
   }
 
