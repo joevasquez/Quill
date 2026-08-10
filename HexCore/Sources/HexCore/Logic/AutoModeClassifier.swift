@@ -11,6 +11,23 @@
 
 import Foundation
 
+/// Whether the thing the user is focused on can actually receive dictated text.
+///
+/// Three-valued on purpose. Accessibility frequently declines to answer —
+/// Chrome, Electron apps, and VDI sessions expose no usable focused element,
+/// and a locally-signed build has no Accessibility grant at all. Collapsing
+/// "no answer" into "not editable" would flip every Chrome dictation into
+/// Action, which is a far worse bug than the one this signal fixes. Unknown
+/// means *no evidence*, and the classifier ignores it.
+public enum EditableTarget: String, Codable, Equatable, Sendable {
+  /// The focused element accepts text — a field, an editor, a terminal.
+  case editable
+  /// AX answered, and the focused element cannot take text.
+  case notEditable
+  /// AX declined to answer, or wasn't asked.
+  case unknown
+}
+
 public enum AutoModeClassifier {
 
   // MARK: - Live classification (partial transcript, during recording)
@@ -30,6 +47,14 @@ public enum AutoModeClassifier {
   /// Decides the effective mode with all signals available:
   /// the full transcript, whether a text selection was captured,
   /// and whether any action integrations are connected.
+  ///
+  /// Note what is deliberately NOT here: `EditableTarget`. It's captured and
+  /// logged on every Auto sample, but it does not yet influence routing.
+  /// Letting "nothing editable is focused" force Action is a plausible rule
+  /// and might well be right — but nobody has measured how often AX returns a
+  /// confident `.notEditable`, and shipping an unmeasured behaviour change
+  /// alongside the instrumentation meant to evaluate it defeats the point of
+  /// the instrumentation. The samples answer that question first.
   public static func resolve(
     transcript: String,
     hasSelection: Bool,
@@ -92,8 +117,13 @@ public enum AutoModeClassifier {
     "fix grammar", "fix the grammar",
     "fix spelling", "fix the spelling",
     "change the tone", "change tone",
-    "convert to", "format as",
-    "add bullet", "bullet points",
+    // Bare "convert" on purpose. "convert to" missed the phrasing people
+    // actually use — "convert THIS INTO bullets" has a word in between, and
+    // enumerating "convert into" / "convert this into" / "convert it to"
+    // never converges (Lesson #24). As a noun it's rare enough to ignore.
+    "convert", "format as",
+    // "bullets" is what gets said; "bullet points" is what got written down.
+    "add bullet", "bullet", "bullets",
   ]
 
   private static let actionKeywords: [String] = [

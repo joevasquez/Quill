@@ -84,6 +84,12 @@ struct TranscriptionFeature {
     /// gap between one offer being consumed and the replacement arriving;
     /// cleared when the next recording starts.
     var rerouteTried: Set<TranscriptionIndicatorView.Mode> = []
+    /// Whether the focused element can receive text. Read at stop time in
+    /// Auto mode only; `.unknown` everywhere else.
+    var editableTarget: EditableTarget = .unknown
+    /// The logged sample for the in-flight Auto capture, so a re-route can
+    /// label it with what the user actually wanted.
+    var autoSampleID: UUID?
     var recordingSessionID = UUID()
     @Shared(.hexSettings) var hexSettings: HexSettings
     @Shared(.isRemappingScratchpadFocused) var isRemappingScratchpadFocused: Bool = false
@@ -507,6 +513,13 @@ struct TranscriptionFeature {
           if let idx = history.history.firstIndex(where: { $0.text == offer.transcript }) {
             history.history[idx].mode = newMode.transcriptionMode
           }
+        }
+
+        // Label the logged prediction with what the user actually wanted.
+        // This is the only place a ground-truth correction exists.
+        if let sampleID = state.autoSampleID {
+          let corrected = newMode.transcriptionMode
+          Task { await AutoModeSampleStore.shared.recordCorrection(id: sampleID, corrected: corrected) }
         }
 
         // The inline-edit Accept/Undo pill belongs to the branch we're
@@ -1063,6 +1076,8 @@ private extension TranscriptionFeature {
     // cycle hotkey would still be aimed at the transcript before this one.
     state.rerouteOffer = nil
     state.rerouteTried = []
+    state.editableTarget = .unknown
+    state.autoSampleID = nil
     state.isTranscribing = false
     state.isAIProcessing = false
     state.autoDetectedMode = .dictate
@@ -1185,7 +1200,19 @@ private extension TranscriptionFeature {
     // commands like "add this to my Kearney list" can resolve "this"
     // to the highlighted text in the source app.
     if isEditMode || isAutoMode || isActionMode || state.hexSettings.inlineEditEnabled {
-      if let selection = inlineEdit.captureSelectionSync() {
+      // ONE walk of the AX tree yields both the selection and whether the
+      // focused element can take text. Two separate calls doubled the stall
+      // at stop time in apps that don't answer AX at all (Electron, Chrome),
+      // which is the worst possible place to pay it twice.
+      let focus = inlineEdit.captureFocusContextSync()
+      // Bound to locals before logging: os.Logger interpolation is an
+      // escaping autoclosure and can't capture the inout `state`.
+      let target = focus.editableTarget
+      if isAutoMode {
+        state.editableTarget = target
+        transcriptionFeatureLogger.info("Auto: editable target = \(target.rawValue)")
+      }
+      if let selection = focus.selection {
         state.inlineEditSelection = selection
         transcriptionFeatureLogger.info(
           "Edit capture: AX got \(selection.count) chars at stop time (isAutoMode=\(isAutoMode))"
@@ -1446,20 +1473,40 @@ private extension TranscriptionFeature {
     // Uses the full transcript + selection state to decide which branch
     // (Edit / Action / Dictate) to route through.
     let effectiveMode: TranscriptionIndicatorView.Mode
+    var sampleEffect: Effect<Action> = .none
     if state.selectedMode == .auto {
+      let hasSelection = state.inlineEditSelection != nil
+      let hasIntegrations = !state.availableActionIntegrations.isEmpty
+      let editableTarget = state.editableTarget
       effectiveMode = AutoModeClassifier.resolve(
         transcript: modifiedResult,
-        hasSelection: state.inlineEditSelection != nil,
-        hasIntegrations: !state.availableActionIntegrations.isEmpty
+        hasSelection: hasSelection,
+        hasIntegrations: hasIntegrations
       ).indicatorMode
       state.autoDetectedMode = effectiveMode
-      let _hasSelection = state.inlineEditSelection != nil
-      transcriptionFeatureLogger.info("Auto mode resolved to \(effectiveMode.rawValue) (hasSelection=\(_hasSelection))")
+      transcriptionFeatureLogger.info(
+        "Auto mode resolved to \(effectiveMode.rawValue) (hasSelection=\(hasSelection), target=\(editableTarget.rawValue))"
+      )
+
+      // Log the decision with its features. A re-route patches this row with
+      // what the user actually wanted, which is what turns the log into
+      // labelled data rather than a stream of guesses.
+      let sample = AutoModeSample(
+        transcript: modifiedResult,
+        predicted: effectiveMode.transcriptionMode,
+        hasSelection: hasSelection,
+        editableTarget: editableTarget,
+        hasIntegrations: hasIntegrations,
+        sourceAppBundleID: state.sourceAppBundleID
+      )
+      state.autoSampleID = sample.id
+      sampleEffect = .run { _ in await AutoModeSampleStore.shared.record(sample) }
     } else {
       effectiveMode = state.selectedMode
+      state.autoSampleID = nil
     }
 
-    return dispatchTranscript(&state, TranscriptDispatch(
+    return .merge(sampleEffect, dispatchTranscript(&state, TranscriptDispatch(
       mode: effectiveMode,
       transcript: modifiedResult,
       audioURL: audioURL,
@@ -1468,7 +1515,7 @@ private extension TranscriptionFeature {
       sourceAppBundleID: state.sourceAppBundleID,
       sourceAppName: state.sourceAppName,
       isReroute: false
-    ))
+    )))
   }
 
   /// One trip through the transcript pipeline: everything a branch needs, with

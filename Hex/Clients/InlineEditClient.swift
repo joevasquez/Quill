@@ -21,6 +21,14 @@ import Sauce
 
 private let inlineEditLogger = HexLog.pasteboard
 
+/// What one look at the focused element told us.
+struct FocusContext: Equatable, Sendable {
+  var selection: String?
+  var editableTarget: EditableTarget
+
+  static let empty = FocusContext(selection: nil, editableTarget: .unknown)
+}
+
 @DependencyClient
 struct InlineEditClient {
   /// Read the selected text from the frontmost app's focused
@@ -53,6 +61,17 @@ struct InlineEditClient {
   /// in all the same apps (browsers, native AppKit, most Electron).
   var replaceSelection: @Sendable (String) async -> Bool = { _ in false }
 
+  /// The selection AND whether the focused element can take text, from a
+  /// SINGLE resolution of the focused element.
+  ///
+  /// Deliberately one call rather than two. Resolving the focused element is
+  /// the expensive part — it's an inter-process AX round trip with a 0.5 s
+  /// timeout, tried twice (app element, then system-wide). In apps that don't
+  /// answer AX at all (Electron, Chrome) both attempts run to failure, so
+  /// asking twice doubles the stall at stop time in exactly the apps that are
+  /// already slowest. Never call at recording START (Lesson #1).
+  var captureFocusContextSync: @Sendable () -> FocusContext = { .empty }
+
   /// Sends Cmd+Z to the source app to undo the last inline edit.
   /// After an inline edit, the cursor is collapsed at the end of
   /// the inserted text — there's no active selection to "replace"
@@ -67,19 +86,22 @@ extension InlineEditClient: DependencyKey {
   static var liveValue: Self {
     return .init(
       captureSelection: {
-        await MainActor.run { _captureSelectionFromAX() }
+        await MainActor.run { _captureFocusContextFromAX().selection }
       },
       captureSelectionSync: {
         // Reducers run on the main actor, so we don't need to hop
         // through MainActor.run here — just call straight through
         // to the AX-talking helper.
-        MainActor.assumeIsolated { _captureSelectionFromAX() }
+        MainActor.assumeIsolated { _captureFocusContextFromAX().selection }
       },
       captureSelectionViaClipboard: { timeout in
         await clipboardFallbackCapture(timeout: timeout)
       },
       replaceSelection: { text in
         await MainActor.run { replaceSelectionSync(with: text) }
+      },
+      captureFocusContextSync: {
+        MainActor.assumeIsolated { _captureFocusContextFromAX() }
       },
       undoLastEdit: { bundleID in
         await sendUndoToSourceApp(bundleID: bundleID)
@@ -108,7 +130,7 @@ private let inlineEditAXTimeout: Float = 0.5
 private var _axPermissionWarned = false
 
 @MainActor
-private func _captureSelectionFromAX() -> String? {
+private func _captureFocusContextFromAX() -> FocusContext {
   guard AXIsProcessTrusted() else {
     if !_axPermissionWarned {
       _axPermissionWarned = true
@@ -116,7 +138,7 @@ private func _captureSelectionFromAX() -> String? {
         "Inline edit: Accessibility permission NOT granted. Edit mode cannot read text selections. Grant permission in System Settings → Privacy & Security → Accessibility."
       )
     }
-    return nil
+    return .empty
   }
 
   // ── Strategy: query the frontmost app's AX element directly ──
@@ -124,14 +146,14 @@ private func _captureSelectionFromAX() -> String? {
   // is more reliable for apps like Chrome that have a deep AX tree.
   guard let frontApp = NSWorkspace.shared.frontmostApplication else {
     inlineEditLogger.info("Inline edit: no frontmost application — skipping")
-    return nil
+    return .empty
   }
 
   // Don't try to read a selection from ourselves.
   let quillBundles: Set<String> = ["com.joevasquez.Quill", "com.joevasquez.Quill.debug"]
   if let bid = frontApp.bundleIdentifier, quillBundles.contains(bid) {
     inlineEditLogger.info("Inline edit: Quill is frontmost — no useful selection to capture")
-    return nil
+    return .empty
   }
 
   let appElement = AXUIElementCreateApplication(frontApp.processIdentifier)
@@ -155,12 +177,16 @@ private func _captureSelectionFromAX() -> String? {
       inlineEditLogger.notice(
         "Inline edit: could not find focused element in \(appName, privacy: .public) (app status=\(focusStatus.rawValue), system status=\(swStatus.rawValue))"
       )
-      return nil
+      return .empty
     }
   }
 
   let focused = focusedRef as! AXUIElement
   AXUIElementSetMessagingTimeout(focused, inlineEditAXTimeout)
+
+  // Can text land here? Asked on the element we already resolved, so this
+  // costs one attribute query rather than a second focused-element walk.
+  let target = editableTarget(of: focused)
 
   // Read the selected text attribute.
   var selRef: CFTypeRef?
@@ -172,19 +198,40 @@ private func _captureSelectionFromAX() -> String? {
     inlineEditLogger.notice(
       "Inline edit: \(appName, privacy: .public) doesn't expose kAXSelectedTextAttribute (status=\(selStatus.rawValue)). Text selection may not be supported."
     )
-    return nil
+    return FocusContext(selection: nil, editableTarget: target)
   }
 
   let trimmed = selection.trimmingCharacters(in: .whitespacesAndNewlines)
   if trimmed.isEmpty {
     inlineEditLogger.info("Inline edit: selection is empty / whitespace-only — skipping")
-    return nil
+    return FocusContext(selection: nil, editableTarget: target)
   }
   let appName = frontApp.localizedName ?? "unknown"
   inlineEditLogger.info(
     "Inline edit: captured \(selection.count) chars from \(appName, privacy: .public)"
   )
-  return selection
+  return FocusContext(selection: selection, editableTarget: target)
+}
+
+/// Whether `element` will accept text.
+///
+/// Uses `AXUIElementIsAttributeSettable` rather than matching `AXRole`
+/// against a list of text-ish roles. Settability is the actual question —
+/// "can I write here?" — and role matching fails in exactly the apps where
+/// AX is already shaky, while a native app with a custom-but-editable role
+/// would be misread as not.
+///
+/// A hard AX failure returns `.unknown`, never `.notEditable`: an app that
+/// isn't answering must not masquerade as a confident "no".
+@MainActor
+private func editableTarget(of element: AXUIElement) -> EditableTarget {
+  var settable: DarwinBoolean = false
+  for attribute in [kAXSelectedTextAttribute, kAXValueAttribute] {
+    let status = AXUIElementIsAttributeSettable(element, attribute as CFString, &settable)
+    if status == .success, settable.boolValue { return .editable }
+    if status != .success && status != .attributeUnsupported { return .unknown }
+  }
+  return .notEditable
 }
 
 // MARK: - Clipboard fallback implementation

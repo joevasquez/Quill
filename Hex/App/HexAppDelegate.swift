@@ -86,6 +86,7 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 		// Warm the MCP tool catalog so Action-mode parsing can offer the
 		// user's connected servers' tools without a blocking fetch.
 		refreshMCPCatalog()
+		logAutoModeAccuracy()
 
 		// Start long-running app effects (global hotkeys, permissions, etc.)
 		startLifecycleTasksIfNeeded()
@@ -357,6 +358,27 @@ class HexAppDelegate: NSObject, NSApplicationDelegate {
 
 	/// Best-effort tools/list against every enabled MCP server. Failures
 	/// are logged and skipped — a dead server just contributes no tools.
+	/// Prints how Auto mode has been doing, once per launch.
+	///
+	/// The samples are useless if nobody reads them, and a Settings pane is
+	/// more than this needs while the question is still "is the error rate
+	/// even worth chasing?". One Console line answers that; build UI later if
+	/// the numbers say the classifier needs work.
+	private func logAutoModeAccuracy() {
+		Task {
+			let stats = await AutoModeSampleStore.shared.accuracy()
+			guard stats.total > 0 else { return }
+			let pct = Int((stats.accuracy * 100).rounded())
+			let confusions = stats.confusions
+				.sorted { $0.value > $1.value }
+				.map { "\($0.key)×\($0.value)" }
+				.joined(separator: " ")
+			HexLog.transcription.info(
+				"Auto mode: \(pct, privacy: .public)% accepted over \(stats.total, privacy: .public) captures, \(stats.corrected, privacy: .public) re-routed. \(confusions.isEmpty ? "no corrections" : confusions, privacy: .public)"
+			)
+		}
+	}
+
 	private func refreshMCPCatalog() {
 		let servers = hexSettings.mcpServers.filter(\.isEnabled)
 		guard !servers.isEmpty else { return }

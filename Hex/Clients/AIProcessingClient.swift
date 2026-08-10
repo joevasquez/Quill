@@ -120,7 +120,23 @@ extension AIProcessingClient: DependencyKey {
         // conversation (e.g. answered a question instead of
         // punctuating it), fall back to the raw transcript so the
         // user's dictation is never replaced by a refusal.
-        if TranscriptRefusalDetector.isRefusal(response) {
+        //
+        // Only for wrapped transcripts. `skipTranscriptWrapping` callers
+        // (inline edit, note edit, compose) hand us a formatted PROMPT and
+        // expect arbitrary prose back, and both halves of this net misfire
+        // there:
+        //
+        //   1. The heuristic false-positives constantly. Any edit whose
+        //      result legitimately opens "I can't…", "I'm sorry…", "I notice…"
+        //      — i.e. ordinary English — reads as a refusal.
+        //   2. `return text` is actively destructive, for the same reason as
+        //      Lesson #14: `text` here is `InlineEditPrompt.userMessage(...)`,
+        //      the whole prompt including the instruction AND the user's
+        //      selection. Returning it pastes that over their document.
+        //
+        // Observed: editing a passage that began "I can't tell you how often…"
+        // pasted a 400-character prompt into the user's notes.
+        if !skipTranscriptWrapping, TranscriptRefusalDetector.isRefusal(response) {
           aiLogger.warning(
             "AI response looks like a refusal; falling back to raw transcript. Response: \(response, privacy: .private)"
           )

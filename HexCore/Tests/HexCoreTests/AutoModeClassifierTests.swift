@@ -150,6 +150,24 @@ final class AutoModeClassifierTests: XCTestCase {
     )
   }
 
+  /// Phrasings that reached Dictate in real use and pasted the command into
+  /// the user's document instead of transforming their selection.
+  func testConversionPhrasingsRouteToEdit() {
+    let commands = [
+      "Convert this into bullets, please.",
+      "Convert this into poetry",
+      "Convert it to a table",
+      "Make this bullets",
+    ]
+    for command in commands {
+      XCTAssertEqual(
+        AutoModeClassifier.resolve(transcript: command, hasSelection: true, hasIntegrations: true),
+        .edit,
+        "expected Edit for \"\(command)\""
+      )
+    }
+  }
+
   // MARK: - classifyPartial
 
   func testClassifyPartialDetectsActionMidStream() {
