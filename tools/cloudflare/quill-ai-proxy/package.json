@@ -1,0 +1,8 @@
+{
+  "name": "quill-ai-proxy-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -3,8 +3,9 @@
 //  Quill (iOS)
 //
 //  The capture surface — iOS's answer to the Mac's Corner Bloom. Slides up
-//  over a scrim carrying the focal orb, the live transcript, and whatever
-//  the active mode needs.
+//  over a scrim carrying the focal orb and whatever the active mode needs.
+//  Note-producing modes render their live transcript directly in the note;
+//  Edit and Act keep it here because they do not write a note while listening.
 //
 //  It's the recording UI in full: since home became a launcher, there's no
 //  canvas behind it to show progress. Tapping the orb stops and processes;
@@ -227,7 +228,7 @@ struct QuillCaptureSheet: View {
       }
       .frame(minHeight: 26)
       .transition(.opacity)
-    } else {
+    } else if mode == .edit || mode == .act {
       transcriptView
     }
   }
@@ -343,11 +344,12 @@ struct QuillCaptureSheet: View {
 // MARK: - Presentation
 
 extension View {
-  /// Presents the capture sheet over a tap-to-dismiss scrim.
+  /// Presents the capture sheet over a modal scrim. The scrim deliberately
+  /// consumes taps without dismissing: ending or discarding an active audio
+  /// capture must always be an explicit choice.
   func quillCaptureSheet(
     isPresented: Bool,
     reduceMotion: Bool,
-    onScrimTap: @escaping () -> Void,
     @ViewBuilder sheet: () -> QuillCaptureSheet
   ) -> some View {
     ZStack(alignment: .bottom) {
@@ -357,7 +359,8 @@ extension View {
         Color.black.opacity(0.4)
           .ignoresSafeArea()
           .transition(.opacity)
-          .onTapGesture(perform: onScrimTap)
+          .contentShape(Rectangle())
+          .onTapGesture {}
 
         sheet()
           .transition(

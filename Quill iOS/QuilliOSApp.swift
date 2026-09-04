@@ -127,6 +127,11 @@ struct QuilliOSApp: App {
         // Pro + toggle + connected sources + TTL all line up, run a
         // generation pass. Self-gating, like syncNow().
         Task { await SuggestionsController.shared.refreshOnForeground() }
+      } else {
+        // Live recognition revisions are normally saved on a short debounce.
+        // Flush immediately before iOS can suspend us so an interrupted
+        // recording is recoverable on the next launch.
+        NotesStore.shared.flushPendingTranscriptionDrafts()
       }
     }
   }

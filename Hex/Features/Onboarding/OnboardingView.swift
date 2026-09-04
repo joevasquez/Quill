@@ -776,7 +776,7 @@ private struct PlanChoiceStep: View {
 
       VStack(alignment: .leading, spacing: 6) {
         proConRow("+", "Pay AI providers directly, often pennies/month", isPositive: true)
-        proConRow("+", "Pick any model: Claude or GPT-4o", isPositive: true)
+        proConRow("+", "AI included — no API key needed", isPositive: true)
         proConRow("+", "Data goes straight to the provider", isPositive: true)
         proConRow("\u{2212}", "2 minutes of setup \u{2014} we'll guide you", isPositive: false)
         proConRow("\u{2212}", "No cross-device sync (Mac & iPhone stay separate)", isPositive: false)

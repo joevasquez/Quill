@@ -10,7 +10,13 @@ updates/
 buildServer.json
 bin
 scripts
-tools
+tools/*
+!tools/cloudflare/
+tools/cloudflare/*
+!tools/cloudflare/quill-ai-proxy/
+tools/cloudflare/quill-ai-proxy/*
+!tools/cloudflare/quill-ai-proxy/package.json
+!tools/cloudflare/quill-ai-proxy/index.test.js
 ExportOptions.plist
 HexCore/.build
 HexCore/.swiftpm/xcode/xcuserdata/kit.xcuserdatad/xcschemes

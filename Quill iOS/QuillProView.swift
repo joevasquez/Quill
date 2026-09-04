@@ -12,6 +12,19 @@ import HexCore
 import SwiftUI
 
 struct QuillProView: View {
+  var body: some View {
+    List {
+      QuillPlanSections()
+    }
+    .navigationTitle("Quill Pro")
+    .navigationBarTitleDisplayMode(.inline)
+  }
+}
+
+/// Reusable plan controls. Settings embeds these beside the Google account
+/// and sync controls so plan choice and the account that powers Pro live in
+/// one place; `QuillProView` still uses them for contextual upgrade links.
+struct QuillPlanSections: View {
   @AppStorage(QuillIOSSettingsKey.selectedPlan) private var selectedPlanRaw: String = ""
   @Environment(\.colorScheme) private var colorScheme
 
@@ -19,7 +32,7 @@ struct QuillProView: View {
   private var googleConnected: Bool { IOSGoogleOAuthClient.isAuthorized() }
 
   var body: some View {
-    List {
+    Group {
       Section {
         header
           .listRowBackground(Color.clear)
@@ -64,8 +77,6 @@ struct QuillProView: View {
         )
       }
     }
-    .navigationTitle("Quill Pro")
-    .navigationBarTitleDisplayMode(.inline)
   }
 
   private var header: some View {

@@ -8,6 +8,7 @@
 import AVFoundation
 import Combine
 import HexCore
+import os
 import SwiftUI
 import UIKit
 import WhisperKit
@@ -22,6 +23,16 @@ struct NoteRerouteOffer: Equatable {
   let noteID: UUID
   let appendedText: String
   let createdNote: Bool
+}
+
+/// Connects one note-producing audio capture to its provisional paragraph.
+/// The ID is independent from RecordingViewModel's private session token and
+/// prevents delayed recognizer callbacks from touching a later recording.
+private struct ActiveNoteCapture: Equatable {
+  let sessionID: UUID
+  let noteID: UUID
+  let createdNote: Bool
+  let navigateOnFinalize: Bool
 }
 
 /// How long a note capture stays re-routable. Matches the macOS HUD window.
@@ -262,6 +273,7 @@ final class RecordingViewModel: ObservableObject {
     rawTranscript = ""
     processedTranscript = ""
     livePartial = ""
+    elapsedSeconds = 0
     isPaused = false
     aiErrorMessage = nil
 
@@ -404,7 +416,7 @@ final class RecordingViewModel: ObservableObject {
             guard sessionID == recordingSessionID else { return }
             processedTranscript = ""
             aiErrorMessage = "AI \(mode.displayName) failed — \(error.localizedDescription)"
-            print("TextAIClient failed: \(error.localizedDescription)")
+            HexLog.aiProcessing.error("TextAIClient failed: \(error.localizedDescription, privacy: .public)")
           }
         } else {
           aiErrorMessage = nil
@@ -698,6 +710,9 @@ struct ContentView: View {
   @State private var showingTypedAction = false
   @State private var showingConnections = false
   @State private var showingCustomModes = false
+  @State private var activeNoteCapture: ActiveNoteCapture?
+  @State private var activeCaptureMode: QuillMode?
+  @State private var showingDiscardRecordingConfirmation = false
   @AppStorage(QuillIOSSettingsKey.editCommandUsage) private var editCommandUsageData: Data = Data()
   @StateObject private var multiActionVM = MultiActionConfirmationViewModel()
   /// Transient banner state — set true when an action mode item is queued
@@ -801,8 +816,8 @@ struct ContentView: View {
           // feel surprising to a user who just tapped a home-screen
           // widget — they expect a dedicated new capture.
           Task {
-            let loc = await LocationClient.shared.currentPlace()
-            _ = notes.startNewNote(location: loc)
+            notes.setActiveNote(id: nil)
+            activeCaptureMode = .auto
             // Delay briefly to let the app finish becoming active so
             // the mic permission prompt (if any) and recording
             // startup don't race UIKit window transitions.
@@ -813,6 +828,11 @@ struct ContentView: View {
               provider: aiProvider,
               voiceCommandsEnabled: voiceCommandsEnabled
             )
+            if vm.phase == .recording {
+              beginActiveNoteCapture(noteID: nil, navigate: true)
+            } else {
+              activeCaptureMode = nil
+            }
             deepLinks.consume()
           }
         case .notes:
@@ -824,6 +844,9 @@ struct ContentView: View {
         if case .done = newPhase, !vm.isActionRecording {
           // Finishing a capture from home opens the note it just made.
           appendTranscriptToActiveNote(navigate: path.isEmpty)
+        }
+        if case .error = newPhase {
+          preserveDraftAfterTranscriptionFailure()
         }
         // Open the confirmation sheet the moment we start parsing —
         // the user sees their captured transcript in HEARD with a
@@ -852,6 +875,14 @@ struct ContentView: View {
            multiActionVM.isParsing {
           showingMultiActionConfirmation = false
         }
+      }
+      .onChange(of: vm.livePartial) { _, text in
+        guard vm.phase == .recording, let capture = activeNoteCapture else { return }
+        notes.updateTranscriptionDraft(
+          noteID: capture.noteID,
+          sessionID: capture.sessionID,
+          text: text
+        )
       }
       .onChange(of: vm.parsedMultiIntents) { _, intents in
         guard let intents, !intents.isEmpty else { return }
@@ -893,10 +924,26 @@ struct ContentView: View {
       // against a screen that was no longer visible.
       .quillCaptureSheet(
         isPresented: isCapturing,
-        reduceMotion: reduceMotion,
-        onScrimTap: cancelCapture
+        reduceMotion: reduceMotion
       ) {
         captureSheet
+      }
+      .confirmationDialog(
+        "Discard this recording?",
+        isPresented: $showingDiscardRecordingConfirmation,
+        titleVisibility: .visible
+      ) {
+        if activeNoteCapture != nil, hasRecoverablePartial {
+          Button("Keep Partial Transcription") { keepPartialAndStop() }
+        }
+        Button("Discard Recording", role: .destructive) { cancelCapture() }
+        Button("Continue Recording", role: .cancel) {}
+      } message: {
+        Text(
+          hasRecoverablePartial
+            ? "The words recognized so far can be kept in the note, or the recording can be discarded."
+            : "The recording has not produced a recoverable transcript yet."
+        )
       }
       .sheet(isPresented: $showingSettings) {
         SettingsView()
@@ -976,7 +1023,13 @@ struct ContentView: View {
       .sheet(item: $shareRequest) { req in
         ShareSheet(items: req.items)
       }
-      .sheet(isPresented: $showingMultiActionConfirmation) {
+      .sheet(isPresented: $showingMultiActionConfirmation, onDismiss: {
+        // If Auto routed this capture to an action and the user ran or
+        // dismissed it, its provisional note paragraph no longer belongs in
+        // the note. "Save to note instead" finalizes it before dismissal.
+        if vm.isActionRecording { discardActiveNoteCapture() }
+        activeCaptureMode = nil
+      }) {
         MultiActionConfirmationSheet(vm: multiActionVM)
       }
       .sheet(isPresented: $showingRoutineSave) {
@@ -1164,7 +1217,8 @@ struct ContentView: View {
       let loc = await LocationClient.shared.currentPlace()
       let note = notes.startNewNote(location: loc)
       notes.renameNote(id: note.id, to: meeting.title)
-      await beginCapture()
+      path = [.note(note.id)]
+      await beginNoteCapture(noteID: note.id)
     }
   }
 
@@ -1200,20 +1254,21 @@ struct ContentView: View {
   }
 
   private var captureSheet: QuillCaptureSheet {
-    QuillCaptureSheet(
-      mode: captureMode,
+    let mode = activeCaptureMode ?? captureMode
+    return QuillCaptureSheet(
+      mode: mode,
       format: aiMode,
       phase: capturePhase,
       transcript: vm.livePartial,
       level: Double(vm.meterLevel),
       statusText: captureStatusText,
       resultText: vm.noteTargetBanner,
-      routing: captureMode == .act ? routingPreview : nil,
+      routing: mode == .act ? routingPreview : nil,
       isRecording: vm.phase == .recording,
       isPaused: vm.isPaused,
       onStop: { Task { await endCapture() } },
       onTogglePause: { vm.togglePause() },
-      onCancel: cancelCapture,
+      onCancel: requestCancelCapture,
       onPickDestination: { d in
         lockedDestinationID = d.id
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -1225,7 +1280,7 @@ struct ContentView: View {
     switch vm.phase {
     case .recording:
       if vm.isPaused { return "paused" }
-      if captureMode == .act, let target = intuitedDestination {
+      if (activeCaptureMode ?? captureMode) == .act, let target = intuitedDestination {
         return "routing → \(target.name)"
       }
       return "listening…"
@@ -1261,6 +1316,7 @@ struct ContentView: View {
     guard vm.phase != .recording else { return }
     lockedDestinationID = nil
     if path.isEmpty { notes.setActiveNote(id: nil) }
+    activeCaptureMode = captureMode
 
     switch captureMode {
     case .act:
@@ -1274,12 +1330,17 @@ struct ContentView: View {
         customSystemPrompt: micCustomSystemPrompt,
         captureMode: captureMode
       )
+      if vm.phase == .recording, captureMode == .auto || captureMode == .dictate {
+        beginActiveNoteCapture(noteID: nil, navigate: true)
+      }
     }
+    if vm.phase != .recording { activeCaptureMode = nil }
   }
 
   private func endCapture() async {
     guard vm.phase == .recording else { return }
-    switch captureMode {
+    let mode = activeCaptureMode ?? captureMode
+    switch mode {
     case .act:
       await vm.toggleActionRecording(model: selectedModel, provider: aiProvider)
     case .auto, .dictate, .edit:
@@ -1289,14 +1350,134 @@ struct ContentView: View {
         provider: aiProvider,
         voiceCommandsEnabled: voiceCommandsEnabled,
         customSystemPrompt: micCustomSystemPrompt,
-        captureMode: captureMode
+        captureMode: mode
       )
     }
   }
 
   private func cancelCapture() {
     vm.discardRecording()
+    discardActiveNoteCapture()
+    activeCaptureMode = nil
     lockedDestinationID = nil
+  }
+
+  /// Creates the provisional paragraph only after the recorder has actually
+  /// started, avoiding empty notes when microphone permission is denied.
+  private func beginActiveNoteCapture(noteID: UUID?, navigate: Bool) {
+    guard activeNoteCapture == nil else { return }
+    let sessionID = UUID()
+    let result = notes.beginTranscriptionDraft(
+      noteID: noteID,
+      sessionID: sessionID
+    )
+    activeNoteCapture = ActiveNoteCapture(
+      sessionID: sessionID,
+      noteID: result.note.id,
+      createdNote: result.created,
+      navigateOnFinalize: navigate
+    )
+
+    // Recognition may produce its first hypothesis in the short interval
+    // between the recorder starting and the note draft being established.
+    notes.updateTranscriptionDraft(
+      noteID: result.note.id,
+      sessionID: sessionID,
+      text: vm.livePartial
+    )
+    if navigate { path = [.note(result.note.id)] }
+  }
+
+  private func requestCancelCapture() {
+    guard vm.phase == .recording else { return }
+    if vm.elapsedSeconds >= 0.5 || hasRecoverablePartial {
+      showingDiscardRecordingConfirmation = true
+    } else {
+      cancelCapture()
+    }
+  }
+
+  private var hasRecoverablePartial: Bool {
+    guard let capture = activeNoteCapture else { return false }
+    return !(notes.notes
+      .first(where: { $0.id == capture.noteID })?
+      .pendingTranscription?.text
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+  }
+
+  /// Stops without waiting for Whisper and promotes the latest durable live
+  /// hypothesis into the note. This is the non-destructive escape hatch in
+  /// the explicit discard confirmation.
+  private func keepPartialAndStop() {
+    guard vm.phase == .recording else { return }
+    _ = finalizeActiveNoteCapture(finalText: "", offerReroute: false)
+    vm.discardRecording()
+    lockedDestinationID = nil
+  }
+
+  /// A Whisper failure should not strand a draft in transient state. Keep the
+  /// last live hypothesis when one exists; otherwise remove the empty shell.
+  private func preserveDraftAfterTranscriptionFailure() {
+    guard let capture = activeNoteCapture else { return }
+    let partial = notes.notes
+      .first(where: { $0.id == capture.noteID })?
+      .pendingTranscription?.text
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if partial.isEmpty {
+      discardActiveNoteCapture()
+    } else {
+      _ = finalizeActiveNoteCapture(finalText: "", offerReroute: false)
+    }
+  }
+
+  @discardableResult
+  private func finalizeActiveNoteCapture(
+    finalText: String,
+    offerReroute shouldOfferReroute: Bool
+  ) -> Bool {
+    guard let capture = activeNoteCapture,
+          let result = notes.finalizeTranscriptionDraft(
+            noteID: capture.noteID,
+            sessionID: capture.sessionID,
+            finalText: finalText
+          )
+    else { return false }
+
+    activeNoteCapture = nil
+    activeCaptureMode = nil
+    let appended = result.appendedText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !appended.isEmpty else { return true }
+    lastAppendedTranscript = appended
+    notes.generateTitleIfNeeded(noteID: result.note.id, provider: aiProvider)
+    if capture.navigateOnFinalize { path = [.note(result.note.id)] }
+    if shouldOfferReroute {
+      offerNoteReroute(
+        noteID: result.note.id,
+        appended: appended,
+        createdNote: capture.createdNote
+      )
+    }
+    if capture.createdNote {
+      Task {
+        notes.setLocation(
+          id: result.note.id,
+          location: await LocationClient.shared.currentPlace()
+        )
+      }
+    }
+    return true
+  }
+
+  private func discardActiveNoteCapture() {
+    guard let capture = activeNoteCapture else { return }
+    let removed = notes.discardTranscriptionDraft(
+      noteID: capture.noteID,
+      sessionID: capture.sessionID,
+      deleteEmptyNote: capture.createdNote
+    )
+    activeNoteCapture = nil
+    activeCaptureMode = nil
+    if removed, path == [.note(capture.noteID)] { path = [] }
   }
 
   // MARK: - Note detail
@@ -1419,6 +1600,7 @@ struct ContentView: View {
     guard vm.phase != .recording else { return }
     notes.setActiveNote(id: noteID)
     lockedDestinationID = nil
+    activeCaptureMode = noteMode
     switch noteMode {
     case .act:
       await vm.toggleActionRecording(model: selectedModel, provider: aiProvider)
@@ -1431,12 +1613,17 @@ struct ContentView: View {
         customSystemPrompt: micCustomSystemPrompt,
         captureMode: noteMode
       )
+      if vm.phase == .recording, noteMode == .auto || noteMode == .dictate {
+        beginActiveNoteCapture(noteID: noteID, navigate: false)
+      }
     }
+    if vm.phase != .recording { activeCaptureMode = nil }
   }
 
   private func endNoteCapture() async {
     guard vm.phase == .recording else { return }
-    switch noteMode {
+    let mode = activeCaptureMode ?? noteMode
+    switch mode {
     case .act:
       await vm.toggleActionRecording(model: selectedModel, provider: aiProvider)
     case .auto, .dictate, .edit:
@@ -1446,7 +1633,7 @@ struct ContentView: View {
         provider: aiProvider,
         voiceCommandsEnabled: voiceCommandsEnabled,
         customSystemPrompt: micCustomSystemPrompt,
-        captureMode: noteMode
+        captureMode: mode
       )
     }
   }
@@ -1481,7 +1668,17 @@ struct ContentView: View {
   ///   when appending from a note's own composer (we're already there).
   private func appendTranscriptToActiveNote(navigate: Bool = false) {
     let text = vm.displayedText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !text.isEmpty, text != lastAppendedTranscript else { return }
+    guard !text.isEmpty else { return }
+
+    // Note-producing audio captures already have a provisional paragraph in
+    // a specific note. Replace it in place instead of performing a second
+    // generic append (which could duplicate text or target a different note).
+    if activeNoteCapture != nil,
+       finalizeActiveNoteCapture(finalText: text, offerReroute: true) {
+      return
+    }
+
+    guard text != lastAppendedTranscript else { return }
     lastAppendedTranscript = text
 
     // The note is created and opened synchronously, always.

@@ -73,10 +73,15 @@ struct ConnectionsView: View {
   }
 
   private var visibleBrands: [ConnectionBrand] {
-    ConnectionDirectory.featured.filter { brand in
-      let tools = server(for: brand).flatMap { toolLists[$0.id] } ?? []
-      return matchesSearch(brand.name, extras: tools.map(\.name))
-    }
+    ConnectionDirectory.featured
+      // Gmail compose and inbox reading use two implementations, but they
+      // are one service to the user. Inbox reading is managed inside the
+      // native Gmail row below instead of rendering a duplicate row.
+      .filter { $0.name != "gmail" }
+      .filter { brand in
+        let tools = server(for: brand).flatMap { toolLists[$0.id] } ?? []
+        return matchesSearch(brand.name, extras: tools.map(\.name))
+      }
   }
 
   private var visibleCustomServers: [MCPServerConfig] {
@@ -287,6 +292,59 @@ struct ConnectionsView: View {
       ForEach(Self.nativeActions(integration.identifier), id: \.label) { action in
         expansionLine(symbol: action.symbol, title: action.label, detail: nil)
       }
+      if integration.identifier == .gmail, isConnected(integration) {
+        gmailReadingLine
+          .padding(.top, 4)
+      }
+    }
+  }
+
+  /// Gmail composing uses the native adapter while inbox reading uses
+  /// Google's MCP server. Present both capabilities under one Gmail row.
+  @ViewBuilder
+  private var gmailReadingLine: some View {
+    if let brand = ConnectionDirectory.featured.first(where: { $0.name == "gmail" }) {
+      let existing = server(for: brand)
+      HStack(spacing: 8) {
+        Image(systemName: "envelope.open")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .frame(width: 16)
+
+        VStack(alignment: .leading, spacing: 1) {
+          Text("Inbox reading")
+            .font(.caption.weight(.medium))
+          if let existing, let error = serverErrors[existing.id] {
+            Text(error)
+              .font(.caption2)
+              .foregroundStyle(.orange)
+              .lineLimit(2)
+          } else {
+            Text(existing == nil ? "Off · used by Suggestions" : "On · used by Suggestions")
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+          }
+        }
+
+        Spacer()
+
+        if let existing, busyServers.contains(existing.id) {
+          ProgressView().controlSize(.mini)
+        } else if let existing {
+          Button("Disable") {
+            Task { await deleteServer(existing) }
+          }
+          .buttonStyle(.bordered)
+          .controlSize(.mini)
+        } else {
+          Button("Enable") {
+            Task { await connectFeatured(brand) }
+          }
+          .buttonStyle(.bordered)
+          .controlSize(.mini)
+        }
+      }
+      .padding(.vertical, 2)
     }
   }
 

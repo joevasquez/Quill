@@ -246,11 +246,12 @@ struct NoteDetailView: View {
   // MARK: - Body
 
   private var bodyScroll: some View {
-    ScrollView {
+    let liveText = note.pendingTranscription?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return ScrollView {
       VStack(alignment: .leading, spacing: 12) {
         if let pending = note.pendingEdit {
           diffView(from: pending.previousBody, to: note.body)
-        } else if note.body.isEmpty {
+        } else if note.body.isEmpty, liveText.isEmpty {
           Text("Empty — hold the orb below to start dictating.")
             .quillFont(16.5)
             .italic()
@@ -261,11 +262,42 @@ struct NoteDetailView: View {
             segmentView(seg)
           }
         }
+
+        if !liveText.isEmpty {
+          liveTranscriptionView(liveText)
+        }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, 20)
       .padding(.bottom, 16)
     }
+  }
+
+  /// A provisional paragraph is visually part of the note while remaining
+  /// distinct from its durable body. The recognizer can revise this text in
+  /// place; Whisper replaces it with the authoritative paragraph on stop.
+  private func liveTranscriptionView(_ text: String) -> some View {
+    VStack(alignment: .leading, spacing: 7) {
+      Label("Recording…", systemImage: "waveform")
+        .quillFont(11.5, weight: .semibold)
+        .foregroundStyle(QuillDesign.ModePalette.dictate.color())
+
+      Text(text)
+        .quillFont(16)
+        .foregroundStyle(theme.text)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .padding(12)
+    .background(
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
+        .fill(QuillDesign.ModePalette.dictate.color(0.1))
+        .overlay(
+          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
+            .strokeBorder(QuillDesign.ModePalette.dictate.color(0.35), lineWidth: 1)
+        )
+    )
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("Live transcription: \(text)")
   }
 
   /// Removed lines struck through in red with a `−` gutter; additions

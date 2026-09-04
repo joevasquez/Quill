@@ -30,6 +30,14 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
   var isAutoTitle: Bool
   /// Pinned notes sort to the top of the notes list.
   var isPinned: Bool
+  /// A best-effort live transcript that has not yet been replaced by the
+  /// authoritative Whisper result. Kept separate from `body` so recognition
+  /// revisions never rewrite existing note text or create duplicate words.
+  ///
+  /// This is persisted locally for interruption/crash recovery, but it is not
+  /// included in `SyncableNote` and therefore never reaches cloud sync before
+  /// the capture is finalized.
+  var pendingTranscription: PendingTranscription?
   /// Set while an Edit-mode revision is awaiting Undo/Keep. Holds the
   /// previous body so Undo is lossless. Cleared when the user accepts or
   /// reverts.
@@ -47,6 +55,7 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
     location: NoteLocation? = nil,
     isAutoTitle: Bool = true,
     isPinned: Bool = false,
+    pendingTranscription: PendingTranscription? = nil,
     pendingEdit: NoteEdit? = nil
   ) {
     self.id = id
@@ -57,6 +66,7 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
     self.location = location
     self.isAutoTitle = isAutoTitle
     self.isPinned = isPinned
+    self.pendingTranscription = pendingTranscription
     self.pendingEdit = pendingEdit
   }
 
@@ -75,7 +85,80 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
     location = try c.decodeIfPresent(NoteLocation.self, forKey: .location)
     isAutoTitle = try c.decodeIfPresent(Bool.self, forKey: .isAutoTitle) ?? false
     isPinned = try c.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+    pendingTranscription = try c.decodeIfPresent(PendingTranscription.self, forKey: .pendingTranscription)
     pendingEdit = try c.decodeIfPresent(NoteEdit.self, forKey: .pendingEdit)
+  }
+
+  /// The note body as rendered while recording. The durable body remains
+  /// unchanged until finalization; the provisional paragraph is only joined
+  /// for display.
+  var bodyIncludingPendingTranscription: String {
+    Self.appendingParagraph(pendingTranscription?.text ?? "", to: body)
+  }
+
+  mutating func beginPendingTranscription(id: UUID, at date: Date = Date()) {
+    pendingTranscription = PendingTranscription(
+      id: id,
+      text: "",
+      startedAt: date,
+      updatedAt: date
+    )
+  }
+
+  /// Replaces the recognizer's previous full best guess. Returns false for a
+  /// stale callback from an older recording session.
+  @discardableResult
+  mutating func updatePendingTranscription(
+    id: UUID,
+    text: String,
+    at date: Date = Date()
+  ) -> Bool {
+    guard pendingTranscription?.id == id else { return false }
+    pendingTranscription?.text = text
+    pendingTranscription?.updatedAt = date
+    return true
+  }
+
+  /// Replaces the provisional paragraph with the authoritative result. If
+  /// final transcription failed, an empty `finalText` falls back to the last
+  /// live partial so the recoverable words are still kept.
+  @discardableResult
+  mutating func finalizePendingTranscription(id: UUID, finalText: String) -> String? {
+    guard let pendingTranscription, pendingTranscription.id == id else { return nil }
+    let final = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
+    let fallback = pendingTranscription.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let resolved = final.isEmpty ? fallback : final
+    self.pendingTranscription = nil
+    guard !resolved.isEmpty else { return "" }
+    body = Self.appendingParagraph(resolved, to: body)
+    updatedAt = Date()
+    return resolved
+  }
+
+  @discardableResult
+  mutating func discardPendingTranscription(id: UUID) -> Bool {
+    guard pendingTranscription?.id == id else { return false }
+    pendingTranscription = nil
+    return true
+  }
+
+  /// Promotes a draft left by a terminated/interrupted recording. Called on
+  /// store load so recovered text becomes ordinary note content and can sync.
+  @discardableResult
+  mutating func recoverPendingTranscription() -> Bool {
+    guard let pendingTranscription else { return false }
+    let recovered = pendingTranscription.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    self.pendingTranscription = nil
+    guard !recovered.isEmpty else { return false }
+    body = Self.appendingParagraph(recovered, to: body)
+    updatedAt = max(updatedAt, pendingTranscription.updatedAt)
+    return true
+  }
+
+  private static func appendingParagraph(_ paragraph: String, to body: String) -> String {
+    let paragraph = paragraph.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !paragraph.isEmpty else { return body }
+    return body.isEmpty ? paragraph : body + "\n\n" + paragraph
   }
 
   /// Derive a title from the first meaningful line of body text.
@@ -106,6 +189,16 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
   var photoCount: Int {
     NoteContent.photoIDs(in: body).count
   }
+}
+
+/// Session-scoped live recognition state. `SFSpeechRecognizer` publishes its
+/// whole best guess on every update, so this value is replaced rather than
+/// appended until Whisper supplies the final transcript.
+struct PendingTranscription: Codable, Equatable, Hashable {
+  var id: UUID
+  var text: String
+  var startedAt: Date
+  var updatedAt: Date
 }
 
 /// A revision awaiting the user's Undo/Keep. Stores the previous body so

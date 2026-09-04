@@ -145,6 +145,13 @@ enum IOSGoogleOAuthClient {
     guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
       let code = (response as? HTTPURLResponse)?.statusCode ?? 0
       oauthLogger.error("Google token refresh failed (iOS): HTTP \(code, privacy: .public)")
+      if requiresReconnect(statusCode: code, data: data) {
+        // `invalid_grant` means Google has revoked or expired the refresh
+        // token. It cannot recover by retrying, so clear the stale local
+        // authorization and let Settings present the normal Connect flow.
+        disconnect()
+        oauthLogger.warning("Google refresh token is no longer valid; reconnect required (iOS)")
+      }
       captureError(
         IOSGoogleOAuthError.refreshFailed(code),
         context: ErrorContext.feature("google_oauth")
@@ -167,6 +174,13 @@ enum IOSGoogleOAuthClient {
     KeychainStore.save(account: KeychainKey.googleTokenExpiry, value: ISO8601DateFormatter().string(from: newExpiry))
 
     return newAccessToken
+  }
+
+  nonisolated static func requiresReconnect(statusCode: Int, data: Data) -> Bool {
+    guard statusCode == 400,
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return false }
+    return json["error"] as? String == "invalid_grant"
   }
 
   static func disconnect() {

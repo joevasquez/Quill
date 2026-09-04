@@ -5,7 +5,7 @@
  * which became undeployable when project quill-495210's Artifact Registry was
  * left in a broken state by the 2026-07-31 delete/undelete.
  *
- * Holds the Anthropic key server-side so Pro users get bundled AI with no key
+ * Holds the OpenRouter key server-side so Pro users get bundled AI with no key
  * of their own. Callers authenticate with the Google OAuth access token the
  * app already holds; Pro entitlement is read directly from the Athena
  * dashboard's D1 (`quill_entitlements`), which is also what the dashboard's
@@ -22,8 +22,8 @@
  *   200   { content, usage: { inputTokens, outputTokens } }
  */
 
-const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
-const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const DEFAULT_MODEL = "openai/gpt-5-mini";
 const DEFAULT_DAILY_LIMIT = 500;
 const MAX_INPUT_CHARS = 100_000;
 
@@ -52,13 +52,43 @@ function emailKey(email) {
   return email.trim().toLowerCase().replace(/\./g, "_").replace(/@/g, "_at_");
 }
 
+export function buildOpenRouterRequest(body, env) {
+  const requested = Number(body.maxTokens);
+  const maxTokens = Number.isFinite(requested)
+    ? Math.min(Math.max(Math.trunc(requested), 1), 8192)
+    : 2048;
+
+  const payload = {
+    model: env.OPENROUTER_MODEL || DEFAULT_MODEL,
+    messages: [
+      { role: "system", content: body.systemPrompt },
+      { role: "user", content: body.userMessage },
+    ],
+    max_tokens: maxTokens,
+  };
+  if (body.jsonResponse === true) {
+    payload.response_format = { type: "json_object" };
+  }
+
+  return new Request(OPENROUTER_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+      "HTTP-Referer": "https://quill.joevasquez.com",
+      "X-OpenRouter-Title": "Quill",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
-    if (!env.ANTHROPIC_API_KEY) {
-      console.error("ANTHROPIC_API_KEY not configured");
+    if (!env.OPENROUTER_API_KEY) {
+      console.error("OPENROUTER_API_KEY not configured");
       return json({ error: "Server misconfigured" }, 500);
     }
     if (!env.ATHENA_DB) {
@@ -150,7 +180,7 @@ export default {
       console.error("Usage counter failed (allowing request):", err);
     }
 
-    // ── Forward to Anthropic ──
+    // ── Forward to OpenRouter ──
     let body;
     try { body = await request.json(); }
     catch { return json({ error: "Invalid JSON" }, 400); }
@@ -164,42 +194,20 @@ export default {
       return json({ error: "Input too large" }, 413);
     }
 
-    // Client-requested output budget, clamped. Long structured outputs (the
-    // suggestion engine's multi-draft JSON) need more than a flat 2048.
-    const requested = Number(body.maxTokens);
-    const maxTokens = Number.isFinite(requested)
-      ? Math.min(Math.max(Math.trunc(requested), 1), 8192)
-      : 2048;
-
-    const model = env.ANTHROPIC_MODEL || DEFAULT_MODEL;
-
     try {
-      const res = await fetch(ANTHROPIC_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": env.ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model,
-          system: systemPrompt,
-          messages: [{ role: "user", content: userMessage }],
-          max_tokens: maxTokens,
-        }),
-      });
+      const res = await fetch(buildOpenRouterRequest(body, env));
 
       if (!res.ok) {
-        console.error(`Anthropic error ${res.status}: ${await res.text()}`);
+        console.error(`OpenRouter error ${res.status}: ${await res.text()}`);
         return json({ error: "AI provider error", status: res.status }, 502);
       }
 
       const data = await res.json();
-      const content = data.content?.[0]?.text;
+      const content = data.choices?.[0]?.message?.content;
       if (!content) return json({ error: "Empty AI response" }, 502);
 
-      const inputTokens = data.usage?.input_tokens || 0;
-      const outputTokens = data.usage?.output_tokens || 0;
+      const inputTokens = data.usage?.prompt_tokens || 0;
+      const outputTokens = data.usage?.completion_tokens || 0;
 
       // Token spend per user per day, for billing visibility.
       try {
@@ -217,7 +225,7 @@ export default {
 
       return json({ content, usage: { inputTokens, outputTokens } });
     } catch (err) {
-      console.error("Anthropic call failed:", err);
+      console.error("OpenRouter call failed:", err);
       return json({ error: "AI request failed" }, 502);
     }
   },

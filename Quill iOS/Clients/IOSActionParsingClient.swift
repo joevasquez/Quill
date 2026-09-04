@@ -113,13 +113,18 @@ enum IOSActionParsingClient {
 
   // MARK: - Credential resolution
 
-  /// Pro plan + Google signed in → server-side proxy (no local key).
-  /// Otherwise BYOK from the keychain.
+  /// Pro routes exclusively through Quill's server-side AI proxy. BYOK
+  /// remains an explicit Anthropic/OpenAI choice for the free plan.
   static func resolveCredential(for provider: AIProvider) async throws -> LLMCredential {
-    if UserDefaults.standard.string(forKey: QuillIOSSettingsKey.selectedPlan) == "pro",
-       IOSGoogleOAuthClient.isAuthorized(),
-       let accessToken = try? await IOSGoogleOAuthClient.refreshIfNeeded() {
-      return .proProxy(accessToken: accessToken)
+    if UserDefaults.standard.string(forKey: QuillIOSSettingsKey.selectedPlan) == "pro" {
+      guard IOSGoogleOAuthClient.isAuthorized() else {
+        throw TextAIError.proAuthenticationRequired
+      }
+      do {
+        return .proProxy(accessToken: try await IOSGoogleOAuthClient.refreshIfNeeded())
+      } catch {
+        throw TextAIError.proAuthenticationRequired
+      }
     }
 
     let account: String

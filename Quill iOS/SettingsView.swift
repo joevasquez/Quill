@@ -61,6 +61,18 @@ struct SettingsView: View {
     return "Connect"
   }
 
+  private var planAndAccountLabel: String {
+    let plan = isPro ? "Pro" : "Free"
+    guard IOSGoogleOAuthClient.isAuthorized() else { return "\(plan) · Connect" }
+    return "\(plan) · \(googleAccountLabel)"
+  }
+
+  private var appearanceLabel: String {
+    let appearance = QuillAppearance(rawValue: appearanceRaw) ?? .system
+    let avatar = QuillCaptureAvatarStyle(rawValue: captureAvatarRaw) ?? .orb
+    return "\(appearance.label) · \(avatar.label)"
+  }
+
   @State private var apiKeyText: String = ""
   @State private var isAPIKeyVisible: Bool = false
   @State private var apiKeySaved: Bool = false
@@ -161,55 +173,43 @@ struct SettingsView: View {
     NavigationStack {
       Form {
         Section {
-          NavigationLink {
-            QuillProView()
-          } label: {
+          NavigationLink { planAndAccountScreen } label: {
             HStack {
               Label {
-                Text("Quill Pro")
+                Text("Plan & Account")
               } icon: {
-                Image(systemName: "crown.fill")
+                Image(systemName: isPro ? "crown.fill" : "person.crop.circle")
                   .foregroundStyle(QuillDesign.brand.color())
               }
               Spacer()
-              Text(selectedPlanRaw == "pro" ? "Active" : "Free plan")
+              Text(planAndAccountLabel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+          }
+        } footer: {
+          Text("Choose Free or Pro, manage your Google account, and control cloud sync.")
+        }
+
+        Section {
+          NavigationLink { appearanceScreen } label: {
+            HStack {
+              Label("Appearance", systemImage: "circle.lefthalf.filled")
+              Spacer()
+              Text(appearanceLabel)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
           }
-        } footer: {
-          Text("Built-in AI, proactive suggestions, unlimited connections.")
-        }
-
-        Section {
-          Picker("Theme", selection: $appearanceRaw) {
-            ForEach(QuillAppearance.allCases) { appearance in
-              Text(appearance.label).tag(appearance.rawValue)
-            }
-          }
-          .pickerStyle(.segmented)
-
-          Picker("Avatar", selection: $captureAvatarRaw) {
-            ForEach(QuillCaptureAvatarStyle.allCases) { style in
-              Text(style.label).tag(style.rawValue)
-            }
-          }
-          .pickerStyle(.segmented)
-        } header: {
-          Text("Appearance")
-        } footer: {
-          Text("Auto follows your device. Both avatars keep their mode colors in both themes. The note composer's small record button always shows the orb — the owl needs more room to stay legible.")
-        }
-
-        // Grouped into sub-screens: the root was 16 stacked sections,
-        // which meant scrolling past the API key to reach the tutorial.
-        Section {
           NavigationLink { captureScreen } label: {
             Label("Capture & Dictation", systemImage: "mic")
           }
           NavigationLink { aiScreen } label: {
             Label("AI & Modes", systemImage: "wand.and.stars")
           }
+        } header: {
+          Text("App Settings")
         }
 
         Section {
@@ -235,13 +235,6 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
             }
           }
-        } header: {
-          Text("Productivity")
-        } footer: {
-          Text("Send dictations into Todoist, Apple Reminders, Gmail, Notion, Linear, Dex, and anything with an MCP server. Free plan includes \(IntegrationLimits.freeTierMaxConnections) — Pro unlocks all.")
-        }
-
-        Section {
           NavigationLink { suggestionsScreen } label: {
             HStack {
               Label("Suggestions", systemImage: "lightbulb.max")
@@ -251,16 +244,10 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
             }
           }
-          NavigationLink { accountScreen } label: {
-            HStack {
-              Label("Account & Sync", systemImage: "icloud")
-              Spacer()
-              Text(googleAccountLabel)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            }
-          }
+        } header: {
+          Text("Productivity")
+        } footer: {
+          Text("Connect services, customize your agent, and choose which suggestions Quill can offer.")
         }
 
         Section {
@@ -394,6 +381,38 @@ struct SettingsView: View {
 
 
   // MARK: - Grouped sub-screens
+
+  @ViewBuilder private var appearanceScreen: some View {
+    Form {
+      Section {
+        Picker("Theme", selection: $appearanceRaw) {
+          ForEach(QuillAppearance.allCases) { appearance in
+            Text(appearance.label).tag(appearance.rawValue)
+          }
+        }
+        .pickerStyle(.segmented)
+      } header: {
+        Text("Theme")
+      } footer: {
+        Text("Auto follows your device's appearance.")
+      }
+
+      Section {
+        Picker("Capture Avatar", selection: $captureAvatarRaw) {
+          ForEach(QuillCaptureAvatarStyle.allCases) { style in
+            Text(style.label).tag(style.rawValue)
+          }
+        }
+        .pickerStyle(.segmented)
+      } header: {
+        Text("Recording")
+      } footer: {
+        Text("Choose the orb or owl for full-size capture screens. The compact note recorder always uses the orb so it stays legible.")
+      }
+    }
+    .navigationTitle("Appearance")
+    .navigationBarTitleDisplayMode(.inline)
+  }
 
   @ViewBuilder private var captureScreen: some View {
     Form {
@@ -551,8 +570,9 @@ struct SettingsView: View {
     .navigationBarTitleDisplayMode(.inline)
   }
 
-  @ViewBuilder private var accountScreen: some View {
+  @ViewBuilder private var planAndAccountScreen: some View {
     Form {
+        QuillPlanSections()
         Section {
           NavigationLink {
             GoogleAccountView()
@@ -603,7 +623,7 @@ struct SettingsView: View {
           Text("Actions you take while offline are saved here and retried automatically when you're back online.")
         }
     }
-    .navigationTitle("Account & Sync")
+    .navigationTitle("Plan & Account")
     .navigationBarTitleDisplayMode(.inline)
   }
 

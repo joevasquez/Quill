@@ -11,9 +11,9 @@ database_id = "df1a2f32-64f7-4dbf-8bcc-60bb13d3f752"
 
 [vars]
 # Override per-deploy if the OAuth client changes or a cheaper/larger model
-# is wanted. ANTHROPIC_API_KEY and ALLOWED_EMAILS are secrets, not vars.
+# is wanted. OPENROUTER_API_KEY and ALLOWED_EMAILS are secrets, not vars.
 QUILL_OAUTH_CLIENT_IDS = "897102622833-ugs83fdspt94d9g373nh1v19gm4elive.apps.googleusercontent.com"
-ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+OPENROUTER_MODEL = "openai/gpt-5-mini"
 DAILY_REQUEST_LIMIT = "500"
 
 # Served from a stable custom hostname rather than *.workers.dev, so the URL

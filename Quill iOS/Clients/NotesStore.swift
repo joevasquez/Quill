@@ -61,6 +61,9 @@ final class NotesStore: ObservableObject {
 
   private let fileURL: URL
   private let activeNoteKey = "quill.activeNoteID"
+  /// Local-only debounce for live transcript revisions. Cloud uploads, widget
+  /// refreshes, and title generation wait for the authoritative final text.
+  private var pendingDraftSaves: [UUID: Task<Void, Never>] = [:]
 
   private init() {
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -141,6 +144,104 @@ final class NotesStore: ObservableObject {
     setActiveNote(id: note.id)
     save(syncNoteID: note.id)
     return note
+  }
+
+  /// Starts a session-scoped provisional paragraph in an existing note, or
+  /// creates a new local-only note when recording begins from Home.
+  ///
+  /// The note is deliberately not cloud-synced yet: live recognition is
+  /// revisionary and may ultimately be routed to an action instead.
+  @discardableResult
+  func beginTranscriptionDraft(
+    noteID: UUID?,
+    sessionID: UUID,
+    locationIfCreating: NoteLocation? = nil
+  ) -> (note: Note, created: Bool) {
+    if let noteID, let idx = notes.firstIndex(where: { $0.id == noteID }) {
+      var note = notes[idx]
+      note.beginPendingTranscription(id: sessionID)
+      notes[idx] = note
+      setActiveNote(id: noteID)
+      persistNotes()
+      return (note, false)
+    }
+
+    var note = Note(title: "", body: "", location: locationIfCreating)
+    note.beginPendingTranscription(id: sessionID)
+    notes.append(note)
+    setActiveNote(id: note.id)
+    persistNotes()
+    return (note, true)
+  }
+
+  /// Replaces the current full live-recognition hypothesis. Saving is
+  /// debounced to avoid rewriting the JSON file on every individual word.
+  func updateTranscriptionDraft(noteID: UUID, sessionID: UUID, text: String) {
+    guard let idx = notes.firstIndex(where: { $0.id == noteID }) else { return }
+    var note = notes[idx]
+    guard note.updatePendingTranscription(id: sessionID, text: text) else { return }
+    notes[idx] = note
+    scheduleDraftPersistence(noteID: noteID)
+  }
+
+  /// Forces any debounced live drafts to disk before iOS suspends the app.
+  /// This closes the small debounce window during calls, interruptions, or a
+  /// user immediately leaving the app after speaking.
+  func flushPendingTranscriptionDrafts() {
+    guard !pendingDraftSaves.isEmpty else { return }
+    for task in pendingDraftSaves.values { task.cancel() }
+    pendingDraftSaves.removeAll()
+    persistNotes()
+  }
+
+  /// Commits the final Whisper/AI output (or the last partial when final text
+  /// is unavailable) as exactly one paragraph.
+  @discardableResult
+  func finalizeTranscriptionDraft(
+    noteID: UUID,
+    sessionID: UUID,
+    finalText: String
+  ) -> (note: Note, appendedText: String)? {
+    guard let idx = notes.firstIndex(where: { $0.id == noteID }) else { return nil }
+    var note = notes[idx]
+    guard let appended = note.finalizePendingTranscription(id: sessionID, finalText: finalText) else {
+      return nil
+    }
+    pendingDraftSaves[noteID]?.cancel()
+    pendingDraftSaves[noteID] = nil
+    notes[idx] = note
+    save(syncNoteID: appended.isEmpty ? nil : noteID)
+    return (note, appended)
+  }
+
+  /// Drops only this recording's provisional paragraph. A newly-created empty
+  /// shell can be removed without emitting a cloud tombstone because it was
+  /// never uploaded.
+  @discardableResult
+  func discardTranscriptionDraft(
+    noteID: UUID,
+    sessionID: UUID,
+    deleteEmptyNote: Bool
+  ) -> Bool {
+    guard let idx = notes.firstIndex(where: { $0.id == noteID }) else { return false }
+    var note = notes[idx]
+    guard note.discardPendingTranscription(id: sessionID) else { return false }
+    pendingDraftSaves[noteID]?.cancel()
+    pendingDraftSaves[noteID] = nil
+
+    let shouldDelete = deleteEmptyNote
+      && note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && note.photoCount == 0
+    if shouldDelete {
+      notes.remove(at: idx)
+      if activeNoteID == noteID {
+        setActiveNote(id: sortedNotes.first?.id)
+      }
+    } else {
+      notes[idx] = note
+    }
+    save()
+    return shouldDelete
   }
 
   func setActiveNote(id: UUID?) {
@@ -707,8 +808,17 @@ final class NotesStore: ObservableObject {
   private func load() {
     guard let data = try? Data(contentsOf: fileURL) else { return }
     do {
-      let decoded = try JSONDecoder.notes.decode([Note].self, from: data)
+      var decoded = try JSONDecoder.notes.decode([Note].self, from: data)
+      var recoveredDraft = false
+      for index in decoded.indices where decoded[index].pendingTranscription != nil {
+        // Even an empty draft must be cleared. A non-empty one is promoted to
+        // ordinary body text so it is visible and eligible for the next sync.
+        let hadPending = decoded[index].pendingTranscription != nil
+        _ = decoded[index].recoverPendingTranscription()
+        recoveredDraft = recoveredDraft || hadPending
+      }
       self.notes = decoded
+      if recoveredDraft { persistNotes() }
     } catch {
       // Corrupted or schema-mismatched file — log but don't crash.
       print("NotesStore: failed to decode notes.json: \(error)")
@@ -716,16 +826,30 @@ final class NotesStore: ObservableObject {
   }
 
   private func save(syncNoteID: UUID? = nil) {
+    persistNotes()
+    updateWidgetSnapshot()
+
+    if let id = syncNoteID, let note = notes.first(where: { $0.id == id }) {
+      syncNoteToCloud(note)
+    }
+  }
+
+  private func persistNotes() {
     do {
       let data = try JSONEncoder.notes.encode(notes)
       try data.write(to: fileURL, options: [.atomic])
     } catch {
       print("NotesStore: failed to persist notes.json: \(error)")
     }
-    updateWidgetSnapshot()
+  }
 
-    if let id = syncNoteID, let note = notes.first(where: { $0.id == id }) {
-      syncNoteToCloud(note)
+  private func scheduleDraftPersistence(noteID: UUID) {
+    pendingDraftSaves[noteID]?.cancel()
+    pendingDraftSaves[noteID] = Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .milliseconds(300))
+      guard !Task.isCancelled, let self else { return }
+      self.persistNotes()
+      self.pendingDraftSaves[noteID] = nil
     }
   }
 

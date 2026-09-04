@@ -6,7 +6,7 @@
 //  credential themselves (macOS: KeychainClient / GoogleOAuthClient; iOS:
 //  KeychainStore / IOSGoogleOAuthClient) and pass it as a value — HexCore
 //  never touches the keychain. Pro-plan users route through the Quill AI
-//  proxy (server-side Anthropic key); BYOK users hit the provider directly.
+//  proxy (server-side OpenRouter key); BYOK users hit the provider directly.
 //
 
 import Foundation
@@ -19,7 +19,7 @@ public enum LLMCredential: Sendable {
   /// Bring-your-own-key: direct call to the provider's API.
   case byok(apiKey: String, provider: AIProvider)
   /// Pro plan: route through the Quill AI proxy with a Google OAuth
-  /// access token. The proxy holds the Anthropic key server-side.
+  /// access token. The proxy holds the OpenRouter key server-side.
   case proProxy(accessToken: String)
 }
 
@@ -74,7 +74,8 @@ public enum LLMTransport {
         userMessage: userMessage,
         systemPrompt: systemPrompt,
         accessToken: accessToken,
-        maxTokens: maxTokens
+        maxTokens: maxTokens,
+        jsonResponse: jsonResponse
       )
     case .byok(let apiKey, let provider):
       let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -115,23 +116,16 @@ public enum LLMTransport {
     userMessage: String,
     systemPrompt: String,
     accessToken: String,
-    maxTokens: Int = 2048
+    maxTokens: Int = 2048,
+    jsonResponse: Bool = true
   ) async throws -> String {
-    let url = URL(string: proProxyURL)!
-    var request = URLRequest(url: url)
-    request.httpMethod = "POST"
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-    request.timeoutInterval = 30
-
-    let body: [String: Any] = [
-      "systemPrompt": systemPrompt,
-      "userMessage": userMessage,
-      // Honored by the proxy (clamped server-side); older deployments
-      // ignore it and use their built-in default.
-      "maxTokens": maxTokens,
-    ]
-    request.httpBody = try JSONSerialization.data(withJSONObject: body)
+    let request = try makeProProxyRequest(
+      userMessage: userMessage,
+      systemPrompt: systemPrompt,
+      accessToken: accessToken,
+      maxTokens: maxTokens,
+      jsonResponse: jsonResponse
+    )
 
     transportLogger.info("Pro proxy call (\(userMessage.count, privacy: .public) chars)")
 
@@ -151,6 +145,32 @@ public enum LLMTransport {
       throw LLMTransportError.invalidResponse
     }
     return content
+  }
+
+  static func makeProProxyRequest(
+    userMessage: String,
+    systemPrompt: String,
+    accessToken: String,
+    maxTokens: Int,
+    jsonResponse: Bool
+  ) throws -> URLRequest {
+    let url = URL(string: proProxyURL)!
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+    request.timeoutInterval = 30
+
+    let body: [String: Any] = [
+      "systemPrompt": systemPrompt,
+      "userMessage": userMessage,
+      // Honored by the proxy (clamped server-side); older deployments
+      // ignore it and use their built-in default.
+      "maxTokens": maxTokens,
+      "jsonResponse": jsonResponse,
+    ]
+    request.httpBody = try JSONSerialization.data(withJSONObject: body)
+    return request
   }
 
   // MARK: - OpenAI

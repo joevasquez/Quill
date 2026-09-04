@@ -18,6 +18,7 @@ import os.log
 
 enum TextAIError: LocalizedError {
   case missingAPIKey(AIProvider)
+  case proAuthenticationRequired
   case networkFailure(Int, String)
   case invalidResponse
 
@@ -25,6 +26,8 @@ enum TextAIError: LocalizedError {
     switch self {
     case .missingAPIKey(let p):
       "No \(p.displayName) API key — add one in Settings."
+    case .proAuthenticationRequired:
+      "Reconnect Google in Settings to use Quill Pro AI."
     case .networkFailure(let code, _):
       "AI service returned HTTP \(code)"
     case .invalidResponse:
@@ -56,7 +59,10 @@ enum TextAIClient {
     guard !systemPrompt.isEmpty else { return text }
 
     let modeLabel = customSystemPrompt != nil ? "custom" : mode.rawValue
-    HexLog.aiProcessing.info("TextAIClient: processing \(text.count, privacy: .public) chars via \(provider.displayName, privacy: .public) mode=\(modeLabel, privacy: .public)")
+    let routeLabel = UserDefaults.standard.string(forKey: QuillIOSSettingsKey.selectedPlan) == "pro"
+      ? "Quill Pro"
+      : provider.displayName
+    HexLog.aiProcessing.info("TextAIClient: processing \(text.count, privacy: .public) chars via \(routeLabel, privacy: .public) mode=\(modeLabel, privacy: .public)")
 
     let result: String
     do {

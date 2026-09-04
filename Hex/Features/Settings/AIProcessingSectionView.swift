@@ -150,13 +150,13 @@ struct AIProcessingSectionView: View {
     }
   }
 
-  /// Pro users: Anthropic is included, no API key needed.
+  /// Pro users: OpenRouter-backed AI is included, no API key needed.
   @ViewBuilder private var proProviderSection: some View {
     Section {
       Label {
         VStack(alignment: .leading, spacing: 4) {
           HStack {
-            Text("Anthropic Claude")
+            Text("OpenRouter · GPT-5 Mini")
               .fontWeight(.medium)
             Spacer()
             Text("Included with Pro")

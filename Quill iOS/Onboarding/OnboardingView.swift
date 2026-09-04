@@ -624,7 +624,7 @@ private struct PlanChoiceStep: View {
 
           VStack(alignment: .leading, spacing: 3) {
             ProConRow(text: "Pay providers directly (pennies/mo)", isPro: true)
-            ProConRow(text: "Choose Claude or GPT-4o", isPro: true)
+            ProConRow(text: "AI included — no API key needed", isPro: true)
             ProConRow(text: "2 min of setup, no cross-device sync", isPro: false)
             ProConRow(text: "Apple-only actions (no Gmail, Linear...)", isPro: false)
           }
@@ -1061,6 +1061,9 @@ private struct BYOKPhoneStep: View {
 
     let status = KeychainStore.save(account: account, value: apiKey)
     if status == errSecSuccess {
+      UserDefaults.standard.set(selectedProvider.rawValue, forKey: QuillIOSSettingsKey.aiProvider)
+      UserDefaults(suiteName: "group.com.joevasquez.Quill")?
+        .set(selectedProvider.rawValue, forKey: QuillIOSSettingsKey.aiProvider)
       QuillMotion.run { savedFlash = true }
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
         isVerifying = false
