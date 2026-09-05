@@ -174,4 +174,4 @@ echo "     or create a public link under External Testers (needs Beta App Review
 echo "     usually approved within 24 hours)."
 echo ""
 echo "Commit the build bump:"
-echo "  git add 'Quill iOS/Info.plist' && git commit -m 'iOS: TestFlight build $NEW_BUILD'"
+echo "  git add 'Quill iOS/Info.plist' QuillWidget/Info.plist && git commit -m 'iOS: TestFlight build $NEW_BUILD'"
