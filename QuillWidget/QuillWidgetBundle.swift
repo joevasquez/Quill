@@ -14,5 +14,6 @@ import WidgetKit
 struct QuillWidgetBundle: WidgetBundle {
   var body: some Widget {
     QuillWidget()
+    QuillRecordingLiveActivity()
   }
 }

@@ -294,6 +294,47 @@ final class NotesStore: ObservableObject {
     save(syncNoteID: id)
   }
 
+  /// Replaces the provisional text salvaged during launch with the more
+  /// complete transcript recovered from the preserved audio. Existing note
+  /// text is never overwritten; only an exact provisional suffix is removed.
+  @discardableResult
+  func applyRecoveredRecording(
+    noteID: UUID?,
+    liveTranscript: String,
+    finalTranscript: String
+  ) -> Note? {
+    let live = liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+    let recovered = finalTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+    let replacement = recovered.isEmpty ? live : recovered
+    guard !replacement.isEmpty else { return nil }
+
+    if let noteID, let index = notes.firstIndex(where: { $0.id == noteID }) {
+      var body = notes[index].body
+      if !live.isEmpty {
+        if body == live {
+          body = ""
+        } else if body.hasSuffix("\n\n" + live) {
+          body = String(body.dropLast(live.count + 2))
+        }
+      }
+      if body.isEmpty {
+        body = replacement
+      } else if !body.hasSuffix(replacement) {
+        body += "\n\n" + replacement
+      }
+      notes[index].body = body
+      notes[index].updatedAt = Date()
+      save(syncNoteID: noteID)
+      return notes[index]
+    }
+
+    let note = Note(title: "", body: replacement)
+    notes.append(note)
+    setActiveNote(id: note.id)
+    save(syncNoteID: note.id)
+    return note
+  }
+
   /// Attaches a location to a note after the fact.
   ///
   /// New notes are created without waiting for a location fix — the lookup

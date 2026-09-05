@@ -22,6 +22,8 @@ struct QuillTopBar: View {
   var onTapList: () -> Void
   var onTapNewNote: () -> Void
   var onTapSettings: () -> Void
+  var recoveryCount: Int = 0
+  var onTapRecovery: (() -> Void)?
   /// Shown when Pro + suggestions are on — the always-available way into
   /// the Suggestions page (the peek bar only appears when the feed has
   /// something to tease).
@@ -48,6 +50,28 @@ struct QuillTopBar: View {
 
       if let onTapSuggestions {
         button("lightbulb.max", "Suggestions", onTapSuggestions)
+      }
+      if recoveryCount > 0, let onTapRecovery {
+        Button(action: onTapRecovery) {
+          Image(systemName: "waveform.badge.exclamationmark")
+            .quillFont(16, weight: .medium)
+            .foregroundStyle(.orange)
+            .frame(width: 40, height: 40)
+            .background(
+              Circle()
+                .fill(theme.chip)
+                .overlay(Circle().strokeBorder(Color.orange.opacity(0.45), lineWidth: 1))
+            )
+            .overlay(alignment: .topTrailing) {
+              Text("\(min(recoveryCount, 9))")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 16, height: 16)
+                .background(Circle().fill(.orange))
+            }
+        }
+        .buttonStyle(QuillPressStyle())
+        .accessibilityLabel("\(recoveryCount) recording\(recoveryCount == 1 ? "" : "s") to recover")
       }
       button("list.bullet", "Notes", onTapList)
       button("square.and.pencil", "New note", onTapNewNote)

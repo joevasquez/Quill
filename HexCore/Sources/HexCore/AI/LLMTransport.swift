@@ -75,7 +75,8 @@ public enum LLMTransport {
         systemPrompt: systemPrompt,
         accessToken: accessToken,
         maxTokens: maxTokens,
-        jsonResponse: jsonResponse
+        jsonResponse: jsonResponse,
+        timeout: timeout
       )
     case .byok(let apiKey, let provider):
       let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -117,14 +118,16 @@ public enum LLMTransport {
     systemPrompt: String,
     accessToken: String,
     maxTokens: Int = 2048,
-    jsonResponse: Bool = true
+    jsonResponse: Bool = true,
+    timeout: TimeInterval = 30
   ) async throws -> String {
     let request = try makeProProxyRequest(
       userMessage: userMessage,
       systemPrompt: systemPrompt,
       accessToken: accessToken,
       maxTokens: maxTokens,
-      jsonResponse: jsonResponse
+      jsonResponse: jsonResponse,
+      timeout: timeout
     )
 
     transportLogger.info("Pro proxy call (\(userMessage.count, privacy: .public) chars)")
@@ -152,14 +155,15 @@ public enum LLMTransport {
     systemPrompt: String,
     accessToken: String,
     maxTokens: Int,
-    jsonResponse: Bool
+    jsonResponse: Bool,
+    timeout: TimeInterval = 30
   ) throws -> URLRequest {
     let url = URL(string: proProxyURL)!
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-    request.timeoutInterval = 30
+    request.timeoutInterval = timeout
 
     let body: [String: Any] = [
       "systemPrompt": systemPrompt,

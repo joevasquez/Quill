@@ -38,6 +38,7 @@ struct NoteDetailView: View {
   var onEditCommand: (String) -> Void
   var onAddPhoto: () -> Void
   var onEditBody: () -> Void
+  var onAsk: () -> Void
   var onRename: () -> Void
   var onShareText: () -> Void
   var onSharePDF: () -> Void
@@ -117,6 +118,7 @@ struct NoteDetailView: View {
       .accessibilityLabel("Rename note")
       .accessibilityHint("Opens the title editor")
 
+      roundButton("sparkle.magnifyingglass", "Ask Quill", tint: QuillDesign.brand.color(), action: onAsk)
       shareMenu
       roundButton("camera", "Add photo", action: onAddPhoto)
       roundButton("square.and.pencil", "Edit text", tint: QuillDesign.brand.color(), action: onEditBody)

@@ -55,6 +55,8 @@
 	<string>Quill creates reminders from your voice commands in Action mode.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Quill uses live speech recognition to show your words as you speak. The final transcript is produced on-device by Whisper.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

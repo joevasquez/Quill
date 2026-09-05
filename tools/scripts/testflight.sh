@@ -7,8 +7,8 @@
 #
 # The script auto-bumps CFBundleVersion (App Store Connect requires a
 # strictly-higher build number for every upload) and writes the new
-# value back to Quill iOS/Info.plist. If the upload fails, revert with:
-#   git checkout "Quill iOS/Info.plist"
+# value back to the app and widget Info.plists. If the upload fails, revert with:
+#   git checkout "Quill iOS/Info.plist" QuillWidget/Info.plist
 #
 # Prerequisites (one-time):
 #   1. Apple Distribution cert in the login keychain, OR Xcode signed
@@ -45,6 +45,7 @@ BUILD_DIR="$REPO_ROOT/build/testflight"
 TEAM_ID="ND4KZ9EE2W"
 SCHEME="Quill iOS"
 INFO_PLIST="$REPO_ROOT/Quill iOS/Info.plist"
+WIDGET_INFO_PLIST="$REPO_ROOT/QuillWidget/Info.plist"
 BUNDLE_ID="com.joevasquez.Quill.iOS"
 
 API_KEY_ID="${QUILL_ASC_KEY_ID:-3QDATSKTNN}"
@@ -83,6 +84,8 @@ NEW_BUILD=$((CURRENT_BUILD + 1))
 SHORT_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")
 echo "→ Bumping build number: $CURRENT_BUILD → $NEW_BUILD  (version $SHORT_VERSION)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NEW_BUILD" "$INFO_PLIST"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" "$WIDGET_INFO_PLIST"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NEW_BUILD" "$WIDGET_INFO_PLIST"
 
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"

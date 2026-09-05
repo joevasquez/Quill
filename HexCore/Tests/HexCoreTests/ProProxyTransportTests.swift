@@ -35,4 +35,17 @@ final class ProProxyTransportTests: XCTestCase {
     )
     XCTAssertEqual(body["jsonResponse"] as? Bool, false)
   }
+
+  func testProRequestUsesCallersTimeout() throws {
+    let request = try LLMTransport.makeProProxyRequest(
+      userMessage: "Search my notes",
+      systemPrompt: "Answer the question.",
+      accessToken: "google-token",
+      maxTokens: 1500,
+      jsonResponse: true,
+      timeout: 90
+    )
+
+    XCTAssertEqual(request.timeoutInterval, 90)
+  }
 }

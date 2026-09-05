@@ -24,6 +24,7 @@ struct NotesListView: View {
   /// active note and dismissing lands the user on a screen that doesn't
   /// show the note at all.
   var onOpenNote: ((UUID) -> Void)?
+  var onAsk: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var colorScheme
   private var theme: QuillTheme { .of(colorScheme) }
@@ -113,7 +114,18 @@ struct NotesListView: View {
 
         Spacer()
 
-        roundButton("xmark", "Close") { dismiss() }
+        HStack(spacing: 8) {
+          if let onAsk {
+            roundButton("sparkle.magnifyingglass", "Ask Quill") {
+              dismiss()
+              Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(250))
+                onAsk()
+              }
+            }
+          }
+          roundButton("xmark", "Close") { dismiss() }
+        }
       }
 
       searchField

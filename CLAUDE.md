@@ -436,6 +436,15 @@ FluidAudio models reside under `Application Support/FluidAudio/Models`.
     - Drafts are flushed synchronously when the scene leaves active state. On the next launch, `recoverPendingTranscription()` promotes a non-empty interrupted draft into ordinary note content so a force-quit, crash, or suspension does not lose dictated words. Provisional text stays out of cloud sync until finalization.
     - Explicit cancellation offers Keep Partial / Discard. Discard removes only the current session's provisional paragraph and may remove a never-uploaded empty note shell; existing note text is never touched. Edit and Act retain the capture-sheet transcript because they do not write live text into a note.
 
+48. **Long-recording durability + Recovery Center (iOS, 2026-09)**: recordings live in Application Support rather than the temporary directory and are indexed by `RecordingRecoveryStore` before capture begins. A five-second checkpoint records elapsed duration, actual WAV duration, destination note, and Apple's latest live transcript. Entries left in recording/processing state become recoverable on the next launch; audio is deleted only after the final text or action is safely committed.
+    - `IOSRecordingClient` uses `AVAudioEngine`, watches system interruptions and unexpected engine stops, and surfaces conversion/write failures instead of letting a dead microphone look active. Long audio uses WhisperKit VAD chunking; `IOSLongRecordingPolicy.audit` rejects a result when the saved file is materially shorter than the UI timer.
+    - `RecordingRecoveryView` is deliberately neutral about recording type: it can recover a conference, personal dictation, conversation, or anything else. “Keep Partial” preserves the live speech draft when full local decoding is unavailable.
+    - AI formatting is separately chunked by `IOSLongTextChunker`. A model output limit must never turn a complete local transcript into an apparently successful partial note.
+
+49. **Ask Quill + recording Live Activity (iOS, 2026-09)**: `AskQuillView` ranks a bounded set of notes, extracts question-relevant passages from long captures, sends a direct `<question>`/`<notes>` request, and validates returned note IDs before showing source cards. Do not pass Ask requests through `TranscriptWrapper`: its post-processing instruction makes the model answer about the “system-prompt transformation” instead of the question.
+    - The recording Live Activity is defined in `QuillWidget/QuillRecordingLiveActivity.swift` and shares `QuillRecordingActivityAttributes` through HexCore. Pause/Resume and Stop & Save use Darwin notifications (`QuillRecordingControlSignal`) because a Live Activity intent may execute in the widget-extension process; ordinary `NotificationCenter` does not cross that boundary.
+    - The app and embedded widget extension must ship with identical short version and build numbers. `tools/scripts/testflight.sh` updates both Info.plists before archiving so TestFlight uploads cannot drift.
+
 ## UI
 
 - **Settings progressive disclosure (macOS)**: `AdvancedSettings.defaultsKey` (`quill.settings.showAdvanced`) is ONE global preference; `AdvancedSettingsToggle(summary:)` renders the reveal control at the bottom of a tab and each tab gates its expert content on the same `@AppStorage`. Behind it today: Recording's output/paste-mechanics + word corrections, AI's per-app mode overrides, General's export/import/reset. General's read-only **Status** section was deleted (it restated Permissions + two other tabs), but the **Keyboard Shortcuts** summary was kept and given a "Change shortcuts…" row that posts `.openRecordingSettings` (observed in `AppView`) — it looks like a mirror but it's the only signpost to the hotkey editor, and removing it made hotkeys feel gone.
@@ -482,7 +491,7 @@ The iOS app lives in the `Quill iOS/` folder (note: folder name has a space — 
 - `Models/Note.swift` — `id`, `title`, `body` (flat string with inline photo tokens), timestamps, optional `location`, plus local-only `pendingTranscription` / `pendingEdit` recovery state. `wordCount` and `displayTitle` strip photo tokens before computing.
 - `Models/NoteContent.swift` — tokenizer. Photos embed as `![photo](<uuid>)` in `body`. `segments(from:)` splits into `.text` / `.photo` segments for rendering; `stripPhotos(from:)` for share/copy/preview.
 - `Models/PhotoAnalysis.swift` — Codable sidecar (`summary`, `keyDetails[]`, optional `transcribedText`, `analyzedAt`, `model`).
-- `Clients/IOSRecordingClient.swift` — `AVAudioRecorder` wrapper with metering and permission handling.
+- `Clients/IOSRecordingClient.swift` — resilient `AVAudioEngine` capture with 16 kHz WAV output, metering, live Speech preview, interruption recovery, and write-failure reporting.
 - `Clients/NotesStore.swift` — JSON-persisted `[Note]` + active-note ID in UserDefaults. Owns provisional live-transcription lifecycle/recovery and published photo-analysis state. Loads notes and analyses from disk on init so views refresh automatically.
 - `Clients/PhotoStore.swift` — persists `Application Support/photos/<note-id>/<photo-id>.jpg` and sidecar `<photo-id>.json`. Downscales to 1568 px long edge at JPEG 0.75 with `UIGraphicsImageRendererFormat.scale = 1` (forcing scale-1 is critical — the default uses the screen scale and re-inflates the image).
 - `Clients/PhotoAnalysisClient.swift` — ships a JPEG to Anthropic or OpenAI with a JSON-only system prompt, parses the structured response. Recompresses on the fly (`compressForVision`) if the on-disk image is over 4 MB (Anthropic caps at 5 MB).
@@ -510,6 +519,7 @@ The widget extension lives in `QuillWidget/` as a separate target (`QuillWidgetE
 
 - `QuillWidget/QuillWidgetBundle.swift` — `@main WidgetBundle` entry.
 - `QuillWidget/QuillWidget.swift` — small + medium widget families. Small = feather + "Quill" + "Dictate" CTA. Medium = same on the left, latest-note card on the right. Both use a purple gradient `containerBackground`. The feather is drawn as a SwiftUI `FeatherShape: Shape` (filled vector path), not the PNG asset — the PNG is a thin outline that collapses to an illegible stroke at widget icon sizes.
+- `QuillWidget/QuillRecordingLiveActivity.swift` — Lock Screen + Dynamic Island recording status with Pause/Resume and Stop & Save controls. Control intents cross from the widget process to the app through `QuillRecordingControlSignal`.
 - `QuillWidget/Assets.xcassets/` — standard widget assets. The sync group includes a `PBXFileSystemSynchronizedBuildFileExceptionSet` excluding `Info.plist` from the target's Copy Bundle Resources phase (otherwise it collides with `INFOPLIST_FILE` → `QuillWidget/Info.plist`).
 - `HexCore/Models/QuillWidgetSnapshot.swift` — tiny Codable blob (title + preview + updatedAt) written by the main app into App Group `group.com.joevasquez.Quill` UserDefaults. Both targets need the **App Groups** capability with this group in their `*.entitlements`.
 - Deep links: tapping the small family or the left half of the medium family opens `quill://record` → `ContentView` starts a **new** note + begins recording. Tapping the right half of the medium family opens `quill://notes` → presents the notes list.
@@ -546,6 +556,7 @@ Defaults: model = `openai_whisper-tiny.en`, mode = `off`, provider = `anthropic`
 `Quill iOS/Info.plist` declares:
 - `NSMicrophoneUsageDescription` — recording.
 - `NSSpeechRecognitionUsageDescription` — live partial transcript while recording.
+- `NSSupportsLiveActivities` — Lock Screen and Dynamic Island recording controls.
 - `NSCameraUsageDescription` — in-note photos.
 - `NSPhotoLibraryUsageDescription` — library-sourced photos.
 - `NSLocationWhenInUseUsageDescription` — optional, tags new notes with a rough place name.

@@ -117,6 +117,14 @@ final class RecordingViewModel: ObservableObject {
   private var transcriptionTask: Task<Void, Never>?
   private var recordingSessionID = UUID()
   private var recordingStartedAt: Date?
+  private var recordingPausedAt: Date?
+  private var accumulatedPauseDuration: TimeInterval = 0
+  private var lastRecordingHealthCheckSecond = -1
+  private var lastRecoveryCheckpointSecond = -1
+  private var currentRecoveryID: UUID?
+  private var currentRecordingURL: URL?
+  private let recoveryStore = RecordingRecoveryStore.shared
+  private let liveActivity = IOSRecordingLiveActivityController.shared
   private var cancellables: Set<AnyCancellable> = []
 
   /// Prepare (download if needed + load) the Whisper model for
@@ -152,6 +160,42 @@ final class RecordingViewModel: ObservableObject {
         self?.livePartial = text
       }
       .store(in: &cancellables)
+
+    recorder.$fatalCaptureError
+      .compactMap { $0 }
+      .receive(on: RunLoop.main)
+      .sink { [weak self] message in
+        guard let self, self.phase == .recording else { return }
+        self.timerTask?.cancel()
+        _ = self.recorder.stopRecording()
+        self.checkpointRecovery()
+        self.markCurrentRecoveryNeedsAttention(reason: message)
+        Task { await self.liveActivity.end(elapsed: self.elapsedSeconds) }
+        self.phase = .error("Recording stopped because audio could not be saved. Your live transcript was kept. \(message)")
+      }
+      .store(in: &cancellables)
+
+    recorder.$isSystemInterrupted
+      .dropFirst()
+      .receive(on: RunLoop.main)
+      .sink { [weak self] interrupted in
+        guard let self, self.phase == .recording else { return }
+        if interrupted {
+          if self.recordingPausedAt == nil { self.recordingPausedAt = Date() }
+          self.isPaused = true
+          self.meterLevel = 0
+          self.checkpointRecovery()
+          Task { await self.liveActivity.update(isPaused: true, elapsed: self.elapsedSeconds) }
+        } else if !self.recorder.isManuallyPaused {
+          if let recordingPausedAt = self.recordingPausedAt {
+            self.accumulatedPauseDuration += Date().timeIntervalSince(recordingPausedAt)
+          }
+          self.recordingPausedAt = nil
+          self.isPaused = false
+          Task { await self.liveActivity.update(isPaused: false, elapsed: self.elapsedSeconds) }
+        }
+      }
+      .store(in: &cancellables)
   }
 
   var displayedText: String {
@@ -174,7 +218,7 @@ final class RecordingViewModel: ObservableObject {
     case .idle, .done, .error:
       isActionRecording = false
       wasAutoRouted = false
-      await startRecording(model: model, mode: mode, provider: provider)
+      await startRecording(model: model, mode: mode, provider: provider, captureMode: captureMode)
     case .recording:
       if isActionRecording {
         await stopAndParseAction(model: model, provider: provider)
@@ -202,9 +246,10 @@ final class RecordingViewModel: ObservableObject {
     // Invalidating the session id makes any in-flight transcription
     // callback a no-op if one is somehow already running.
     recordingSessionID = UUID()
-    if let url = recorder.stopRecording() {
-      try? FileManager.default.removeItem(at: url)
-    }
+    _ = recorder.stopRecording()
+    if let currentRecoveryID { recoveryStore.discard(id: currentRecoveryID) }
+    clearCurrentRecovery()
+    Task { await liveActivity.end(elapsed: elapsedSeconds) }
     rawTranscript = ""
     processedTranscript = ""
     livePartial = ""
@@ -222,13 +267,21 @@ final class RecordingViewModel: ObservableObject {
     guard phase == .recording else { return }
     if isPaused {
       if recorder.resume() {
+        if let recordingPausedAt {
+          accumulatedPauseDuration += Date().timeIntervalSince(recordingPausedAt)
+        }
+        recordingPausedAt = nil
         isPaused = false
+        Task { await liveActivity.update(isPaused: false, elapsed: elapsedSeconds) }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
       }
     } else {
       recorder.pause()
+      recordingPausedAt = Date()
       isPaused = true
       meterLevel = 0
+      checkpointRecovery()
+      Task { await liveActivity.update(isPaused: true, elapsed: elapsedSeconds) }
       UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
   }
@@ -244,7 +297,7 @@ final class RecordingViewModel: ObservableObject {
       parsedMultiIntents = nil
       matchedRoutine = nil
       routineDraft = nil
-      await startRecording(model: model, mode: .off, provider: provider)
+      await startRecording(model: model, mode: .off, provider: provider, captureMode: .act)
     case .recording:
       await stopAndParseAction(model: model, provider: provider)
     default:
@@ -255,7 +308,8 @@ final class RecordingViewModel: ObservableObject {
   private func startRecording(
     model: String,
     mode: AIProcessingMode,
-    provider: AIProvider
+    provider: AIProvider,
+    captureMode: QuillMode
   ) async {
     phase = .requestingPermission
     let granted = await recorder.requestPermission()
@@ -275,12 +329,19 @@ final class RecordingViewModel: ObservableObject {
     livePartial = ""
     elapsedSeconds = 0
     isPaused = false
+    recordingPausedAt = nil
+    accumulatedPauseDuration = 0
+    lastRecordingHealthCheckSecond = -1
+    lastRecoveryCheckpointSecond = -1
     aiErrorMessage = nil
 
     do {
-      _ = try recorder.startRecording()
+      let url = try recorder.startRecording()
       recordingStartedAt = Date()
+      currentRecordingURL = url
+      currentRecoveryID = recoveryStore.begin(audioURL: url, startedAt: recordingStartedAt ?? Date())
       phase = .recording
+      await liveActivity.start(modeLabel: captureMode.label, startedAt: recordingStartedAt ?? Date())
       UIImpactFeedbackGenerator(style: .medium).impactOccurred()
 
       // Meter + elapsed timer
@@ -290,8 +351,15 @@ final class RecordingViewModel: ObservableObject {
           guard let self else { return }
           if !self.isPaused {
             self.meterLevel = self.recorder.averagePower
-            if let start = self.recordingStartedAt {
-              self.elapsedSeconds = Date().timeIntervalSince(start)
+            self.elapsedSeconds = self.activeRecordingDuration()
+            let wholeSecond = Int(self.elapsedSeconds)
+            if wholeSecond != self.lastRecordingHealthCheckSecond {
+              self.lastRecordingHealthCheckSecond = wholeSecond
+              _ = self.recorder.recoverIfNeeded()
+              if wholeSecond == 0 || wholeSecond - self.lastRecoveryCheckpointSecond >= 5 {
+                self.lastRecoveryCheckpointSecond = wholeSecond
+                self.checkpointRecovery()
+              }
             }
           }
           try? await Task.sleep(for: .milliseconds(100))
@@ -311,11 +379,17 @@ final class RecordingViewModel: ObservableObject {
     captureMode: QuillMode = .auto
   ) async {
     timerTask?.cancel()
+    let expectedDuration = activeRecordingDuration()
     let url = recorder.stopRecording()
+    elapsedSeconds = expectedDuration
+    checkpointRecovery()
+    if let currentRecoveryID { recoveryStore.markProcessing(id: currentRecoveryID) }
+    await liveActivity.end(elapsed: expectedDuration)
     phase = .transcribing
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
 
     guard let url else {
+      markCurrentRecoveryNeedsAttention(reason: "Recording file was not produced.")
       phase = .error("Recording file was not produced")
       return
     }
@@ -330,7 +404,22 @@ final class RecordingViewModel: ObservableObject {
           )
         }
 
-        let results = try await whisperKit!.transcribe(audioPath: url.path)
+        let capturedDuration = recorder.recordedDuration(at: url) ?? 0
+        HexLog.recording.info(
+          "iOS recording stopped elapsed=\(expectedDuration, privacy: .public)s captured=\(capturedDuration, privacy: .public)s"
+        )
+        let decodeOptions: DecodingOptions? = switch IOSLongRecordingPolicy.transcriptionStrategy(
+          for: capturedDuration
+        ) {
+        case .continuous:
+          nil
+        case .voiceActivityChunks:
+          DecodingOptions(concurrentWorkerCount: 1, chunkingStrategy: .vad)
+        }
+        let results = try await whisperKit!.transcribe(
+          audioPath: url.path,
+          decodeOptions: decodeOptions
+        )
         let rawText = results.map(\.text).joined(separator: " ")
         let cleaned = WhisperOutputCleaner.clean(rawText)
         let text = voiceCommandsEnabled
@@ -340,14 +429,24 @@ final class RecordingViewModel: ObservableObject {
           print("RecordingViewModel: applied voice-command substitutions")
         }
 
-        try? FileManager.default.removeItem(at: url)
-
         guard sessionID == recordingSessionID else { return }
 
         rawTranscript = text
 
         if text.isEmpty {
+          markCurrentRecoveryNeedsAttention(reason: "No speech was detected in the captured audio.")
           phase = .error("No speech detected. Try again.")
+          return
+        }
+
+        guard IOSLongRecordingPolicy.audit(
+          elapsedDuration: expectedDuration,
+          capturedDuration: capturedDuration
+        ) == .complete else {
+          markCurrentRecoveryNeedsAttention(reason: "The saved audio ended earlier than the recording timer.")
+          phase = .error(
+            "The microphone stopped early after \(Self.formatDuration(capturedDuration)) of a \(Self.formatDuration(expectedDuration)) recording. Quill kept the captured audio and recovered transcript instead of silently calling it complete."
+          )
           return
         }
 
@@ -369,6 +468,7 @@ final class RecordingViewModel: ObservableObject {
           }
           // Mark handled so the default active-note append is skipped.
           isActionRecording = true
+          completeCurrentRecovery()
           phase = .done
           UINotificationFeedbackGenerator().notificationOccurred(.success)
           return
@@ -397,6 +497,11 @@ final class RecordingViewModel: ObservableObject {
           isActionRecording = true
           wasAutoRouted = true
           await routeActionTranscript(text, provider: provider, sessionID: sessionID)
+          if case .error(let message) = phase {
+            markCurrentRecoveryNeedsAttention(reason: message)
+          } else {
+            completeCurrentRecovery()
+          }
           return
         }
 
@@ -427,6 +532,7 @@ final class RecordingViewModel: ObservableObject {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
       } catch {
         guard sessionID == recordingSessionID else { return }
+        markCurrentRecoveryNeedsAttention(reason: error.localizedDescription)
         phase = .error("Transcription failed: \(error.localizedDescription)")
       }
     }
@@ -438,11 +544,17 @@ final class RecordingViewModel: ObservableObject {
     provider: AIProvider
   ) async {
     timerTask?.cancel()
+    let expectedDuration = activeRecordingDuration()
     let url = recorder.stopRecording()
+    elapsedSeconds = expectedDuration
+    checkpointRecovery()
+    if let currentRecoveryID { recoveryStore.markProcessing(id: currentRecoveryID) }
+    await liveActivity.end(elapsed: expectedDuration)
     phase = .transcribing
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
 
     guard let url else {
+      markCurrentRecoveryNeedsAttention(reason: "Recording file was not produced.")
       phase = .error("Recording file was not produced")
       return
     }
@@ -457,27 +569,150 @@ final class RecordingViewModel: ObservableObject {
           )
         }
 
-        let results = try await whisperKit!.transcribe(audioPath: url.path)
+        let capturedDuration = recorder.recordedDuration(at: url) ?? 0
+        HexLog.recording.info(
+          "iOS action recording stopped elapsed=\(expectedDuration, privacy: .public)s captured=\(capturedDuration, privacy: .public)s"
+        )
+        let decodeOptions: DecodingOptions? = switch IOSLongRecordingPolicy.transcriptionStrategy(
+          for: capturedDuration
+        ) {
+        case .continuous:
+          nil
+        case .voiceActivityChunks:
+          DecodingOptions(concurrentWorkerCount: 1, chunkingStrategy: .vad)
+        }
+        let results = try await whisperKit!.transcribe(
+          audioPath: url.path,
+          decodeOptions: decodeOptions
+        )
         let rawText = results.map(\.text).joined(separator: " ")
         let cleaned = WhisperOutputCleaner.clean(rawText)
-
-        try? FileManager.default.removeItem(at: url)
 
         guard sessionID == recordingSessionID else { return }
         rawTranscript = cleaned
 
         if cleaned.isEmpty {
+          markCurrentRecoveryNeedsAttention(reason: "No speech was detected in the captured audio.")
           phase = .error("No speech detected. Try again.")
           return
         }
 
+        guard IOSLongRecordingPolicy.audit(
+          elapsedDuration: expectedDuration,
+          capturedDuration: capturedDuration
+        ) == .complete else {
+          markCurrentRecoveryNeedsAttention(reason: "The saved audio ended earlier than the recording timer.")
+          phase = .error(
+            "The microphone stopped early after \(Self.formatDuration(capturedDuration)) of a \(Self.formatDuration(expectedDuration)) recording. Quill kept the captured audio and recovered transcript instead of silently calling it complete."
+          )
+          return
+        }
+
         await routeActionTranscript(cleaned, provider: provider, sessionID: sessionID)
+        if case .error(let message) = phase {
+          markCurrentRecoveryNeedsAttention(reason: message)
+        } else {
+          completeCurrentRecovery()
+        }
       } catch {
         guard sessionID == recordingSessionID else { return }
+        markCurrentRecoveryNeedsAttention(reason: error.localizedDescription)
         phase = .error("Action parsing failed: \(error.localizedDescription)")
       }
     }
     await transcriptionTask?.value
+  }
+
+  private func activeRecordingDuration(at date: Date = Date()) -> TimeInterval {
+    guard let recordingStartedAt else { return 0 }
+    let currentPause = recordingPausedAt.map { date.timeIntervalSince($0) } ?? 0
+    return max(0, date.timeIntervalSince(recordingStartedAt) - accumulatedPauseDuration - currentPause)
+  }
+
+  private static func formatDuration(_ duration: TimeInterval) -> String {
+    let totalSeconds = max(0, Int(duration.rounded()))
+    return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+  }
+
+  /// Links this audio file to the note that is receiving its live words.
+  func associateCurrentRecovery(with noteID: UUID) {
+    guard let currentRecoveryID else { return }
+    recoveryStore.associate(id: currentRecoveryID, noteID: noteID)
+    checkpointRecovery()
+  }
+
+  /// Remove preserved audio only after the result has landed somewhere
+  /// durable (a note or a successfully parsed action).
+  func completeCurrentRecovery() {
+    guard let currentRecoveryID else { return }
+    recoveryStore.complete(id: currentRecoveryID, deleteAudio: true)
+    clearCurrentRecovery()
+  }
+
+  func checkpointCurrentRecovery() {
+    checkpointRecovery()
+  }
+
+  /// Re-run local transcription against audio retained after an interruption.
+  /// This intentionally accepts partial output: recovery should salvage as much
+  /// as possible, not reject a file for ending early a second time.
+  func recoverRecording(
+    _ recording: RecoveryRecording,
+    model: String,
+    voiceCommandsEnabled: Bool
+  ) async throws -> String {
+    let audioURL = recording.audioURL(in: recoveryStore.directory)
+    guard FileManager.default.fileExists(atPath: audioURL.path) else {
+      let live = recording.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !live.isEmpty else {
+        throw NSError(domain: "QuillRecovery", code: 1, userInfo: [
+          NSLocalizedDescriptionKey: "The audio file is missing and there is no live transcript to keep."
+        ])
+      }
+      return live
+    }
+
+    if whisperKit == nil || whisperKit?.modelFolder?.lastPathComponent != model {
+      whisperKit = try await WhisperKit(WhisperKitConfig(model: model, download: true))
+    }
+    let duration = recorder.recordedDuration(at: audioURL) ?? recording.capturedDuration
+    let options: DecodingOptions? = IOSLongRecordingPolicy.transcriptionStrategy(for: duration) == .voiceActivityChunks
+      ? DecodingOptions(concurrentWorkerCount: 1, chunkingStrategy: .vad)
+      : nil
+    let results = try await whisperKit!.transcribe(audioPath: audioURL.path, decodeOptions: options)
+    let cleaned = WhisperOutputCleaner.clean(results.map(\.text).joined(separator: " "))
+    let recovered = voiceCommandsEnabled ? VoiceCommandSubstituter.substitute(in: cleaned) : cleaned
+    guard !recovered.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      let live = recording.liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !live.isEmpty else {
+        throw NSError(domain: "QuillRecovery", code: 2, userInfo: [
+          NSLocalizedDescriptionKey: "No speech could be recovered from this recording."
+        ])
+      }
+      return live
+    }
+    return recovered
+  }
+
+  private func checkpointRecovery() {
+    guard let currentRecoveryID else { return }
+    let captured = currentRecordingURL.flatMap { recorder.recordedDuration(at: $0) } ?? elapsedSeconds
+    recoveryStore.checkpoint(
+      id: currentRecoveryID,
+      expectedDuration: activeRecordingDuration(),
+      capturedDuration: captured,
+      liveTranscript: livePartial
+    )
+  }
+
+  private func markCurrentRecoveryNeedsAttention(reason: String) {
+    guard let currentRecoveryID else { return }
+    recoveryStore.markNeedsRecovery(id: currentRecoveryID, reason: reason)
+  }
+
+  private func clearCurrentRecovery() {
+    currentRecoveryID = nil
+    currentRecordingURL = nil
   }
 
   /// Opens the re-route window on a capture that just landed in a note.
@@ -683,6 +918,7 @@ struct ContentView: View {
   @StateObject private var vm = RecordingViewModel()
   @StateObject private var notes = NotesStore.shared
   @StateObject private var suggestions = SuggestionsController.shared
+  @StateObject private var recovery = RecordingRecoveryStore.shared
   /// View-model for the action confirmation sheet. Owned by ContentView
   /// (rather than the sheet itself via @StateObject) so the sheet can
   /// open *before* the LLM parse completes — we populate the
@@ -693,6 +929,9 @@ struct ContentView: View {
   @EnvironmentObject private var deepLinks: QuillDeepLinkRouter
   @State private var showingSettings = false
   @State private var showingNotesList = false
+  @State private var showingRecoveryCenter = false
+  @State private var showingAskQuill = false
+  @State private var askFocusedNoteID: UUID?
   @State private var lastAppendedTranscript: String = ""
   @State private var showCopied = false
   @State private var copyResetTask: Task<Void, Never>?
@@ -917,6 +1156,15 @@ struct ContentView: View {
           }
         }
       }
+      .onReceive(NotificationCenter.default.publisher(for: .quillToggleRecordingPauseRequested)) { _ in
+        vm.togglePause()
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .quillStopRecordingRequested)) { _ in
+        Task { await endCapture() }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+        vm.checkpointCurrentRecovery()
+      }
     }
       // Presentations attach to the STACK, not to the root screen —
       // otherwise a pushed note covers them: the capture sheet is a ZStack
@@ -953,7 +1201,29 @@ struct ContentView: View {
           // The sheet dismisses itself; push the detail so the picked
           // note actually opens (home is just a launcher).
           path = [.note(id)]
+        }, onAsk: {
+          askFocusedNoteID = nil
+          showingAskQuill = true
         })
+      }
+      .sheet(isPresented: $showingRecoveryCenter) {
+        RecordingRecoveryView(
+          store: recovery,
+          onRecover: recoverRecording,
+          onKeepDraft: keepRecoveredPartial
+        )
+      }
+      .sheet(isPresented: $showingAskQuill) {
+        AskQuillView(
+          notes: notes.notes,
+          focusedNoteID: askFocusedNoteID,
+          provider: aiProvider,
+          onOpenCitation: { id in
+            showingNotesList = false
+            notes.setActiveNote(id: id)
+            path = [.note(id)]
+          }
+        )
       }
       // "+ Connect an app" / "+ Add" on the mode sub-rows go straight to
       // the screen that does the thing, rather than dropping the user at
@@ -1377,6 +1647,7 @@ struct ContentView: View {
       createdNote: result.created,
       navigateOnFinalize: navigate
     )
+    vm.associateCurrentRecovery(with: result.note.id)
 
     // Recognition may produce its first hypothesis in the short interval
     // between the recorder starting and the note draft being established.
@@ -1419,21 +1690,28 @@ struct ContentView: View {
   /// last live hypothesis when one exists; otherwise remove the empty shell.
   private func preserveDraftAfterTranscriptionFailure() {
     guard let capture = activeNoteCapture else { return }
-    let partial = notes.notes
+    let livePartial = notes.notes
       .first(where: { $0.id == capture.noteID })?
       .pendingTranscription?.text
       .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    if partial.isEmpty {
+    let recovered = vm.rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+    let bestAvailableText = recovered.isEmpty ? livePartial : recovered
+    if bestAvailableText.isEmpty {
       discardActiveNoteCapture()
     } else {
-      _ = finalizeActiveNoteCapture(finalText: "", offerReroute: false)
+      _ = finalizeActiveNoteCapture(
+        finalText: bestAvailableText,
+        offerReroute: false,
+        completeRecovery: false
+      )
     }
   }
 
   @discardableResult
   private func finalizeActiveNoteCapture(
     finalText: String,
-    offerReroute shouldOfferReroute: Bool
+    offerReroute shouldOfferReroute: Bool,
+    completeRecovery: Bool = true
   ) -> Bool {
     guard let capture = activeNoteCapture,
           let result = notes.finalizeTranscriptionDraft(
@@ -1445,6 +1723,7 @@ struct ContentView: View {
 
     activeNoteCapture = nil
     activeCaptureMode = nil
+    if completeRecovery { vm.completeCurrentRecovery() }
     let appended = result.appendedText.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !appended.isEmpty else { return true }
     lastAppendedTranscript = appended
@@ -1518,6 +1797,10 @@ struct ContentView: View {
           tapAddPhoto()
         },
         onEditBody: { editingNoteID = id },
+        onAsk: {
+          askFocusedNoteID = id
+          showingAskQuill = true
+        },
         onRename: {
           notes.setActiveNote(id: id)
           tapRenameTitle()
@@ -1651,9 +1934,46 @@ struct ContentView: View {
         }
       },
       onTapSettings: { showingSettings = true },
+      recoveryCount: recovery.recordings.count,
+      onTapRecovery: { showingRecoveryCenter = true },
       onTapSuggestions: (selectedPlanRaw == "pro" && suggestionsEnabled)
         ? { path.append(.suggestions) } : nil
     )
+  }
+
+  // MARK: - Recovery Center
+
+  private func recoverRecording(_ recording: RecoveryRecording) async throws -> UUID? {
+    let transcript = try await vm.recoverRecording(
+      recording,
+      model: selectedModel,
+      voiceCommandsEnabled: voiceCommandsEnabled
+    )
+    guard let note = notes.applyRecoveredRecording(
+      noteID: recording.noteID,
+      liveTranscript: recording.liveTranscript,
+      finalTranscript: transcript
+    ) else { return nil }
+    recovery.complete(id: recording.id, deleteAudio: true)
+    notes.setActiveNote(id: note.id)
+    notes.generateTitleIfNeeded(noteID: note.id, provider: aiProvider)
+    path = [.note(note.id)]
+    UINotificationFeedbackGenerator().notificationOccurred(.success)
+    return note.id
+  }
+
+  private func keepRecoveredPartial(_ recording: RecoveryRecording) -> UUID? {
+    guard let note = notes.applyRecoveredRecording(
+      noteID: recording.noteID,
+      liveTranscript: recording.liveTranscript,
+      finalTranscript: recording.liveTranscript
+    ) else { return nil }
+    recovery.complete(id: recording.id, deleteAudio: true)
+    notes.setActiveNote(id: note.id)
+    notes.generateTitleIfNeeded(noteID: note.id, provider: aiProvider)
+    path = [.note(note.id)]
+    UINotificationFeedbackGenerator().notificationOccurred(.success)
+    return note.id
   }
 
   // MARK: - Append-on-done
@@ -1691,6 +2011,7 @@ struct ContentView: View {
     // had been lost. Location is decoration; it lands later via `setLocation`.
     let isNewNote = notes.activeNote == nil
     let note = notes.appendToActiveNote(text, locationIfCreating: nil)
+    vm.completeCurrentRecovery()
     // Kick off AI title generation on the background. No-op if the note
     // already has a locked-in title (user-renamed or previously AI-titled)
     // — see `generateTitleIfNeeded`.
