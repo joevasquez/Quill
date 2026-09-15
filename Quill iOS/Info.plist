@@ -32,11 +32,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>34</string>
-	<!-- Quill uses only exempt encryption: HTTPS to AI providers, Google,
-	     and MCP servers, plus the system Keychain. Whisper runs on-device.
-	     testflight.sh rewrites this plist while bumping the build, so restore
-	     this explanatory comment after each upload. -->
+	<string>35</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
