@@ -16,7 +16,8 @@
 //    status item, hosting the live transcript card (SwiftUI drives its
 //    content and reports visibility/size; this controller positions it).
 //
-//  Click behavior (spec): idle → open menu; while capturing → cancel.
+//  Clicking always opens the menu. During capture it exposes explicit
+//  Stop & Save / Discard controls so an accidental click cannot lose audio.
 //
 
 import AppKit
@@ -35,8 +36,11 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
 
   private let appMenu = NSMenu()
   private let headerItem = NSMenuItem()
+  private let stopRecordingItem = NSMenuItem()
+  private let cancelRecordingItem = NSMenuItem()
   private let pasteItem = NSMenuItem()
   private let pendingItem = NSMenuItem()
+  private let recoveryItem = NSMenuItem()
   private let modeSubmenu = NSMenu(title: "Mode")
 
   private var bloomPanel: NSPanel?
@@ -156,15 +160,8 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
   // MARK: - Click handling
 
   @objc private func statusItemClicked() {
-    // Spec: clicking the orb while a capture is live cancels it.
-    let t = store.state.transcription
-    if hexSettings.displayMode == .chip,
-       t.isRecording || t.isTranscribing || t.isAIProcessing {
-      transcriptionStore.send(.cancel)
-      return
-    }
-    // Otherwise pop the app menu. Assign-and-click so the button action
-    // (and its live/cancel branch) stays in control; menuDidClose detaches.
+    // Always pop the menu. A click while recording must never be destructive;
+    // the menu presents explicit Stop & Save and Discard choices instead.
     statusItem.menu = appMenu
     statusItem.button?.performClick(nil)
   }
@@ -181,6 +178,18 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
 
     headerItem.isEnabled = false
     appMenu.addItem(headerItem)
+
+    stopRecordingItem.title = "Stop & Save Recording"
+    stopRecordingItem.action = #selector(stopAndSaveRecording)
+    stopRecordingItem.target = self
+    stopRecordingItem.isHidden = true
+    appMenu.addItem(stopRecordingItem)
+
+    cancelRecordingItem.title = "Discard Recording"
+    cancelRecordingItem.action = #selector(discardRecording)
+    cancelRecordingItem.target = self
+    cancelRecordingItem.isHidden = true
+    appMenu.addItem(cancelRecordingItem)
 
     let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
     updates.target = self
@@ -213,6 +222,12 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
     pendingItem.isHidden = true
     appMenu.addItem(pendingItem)
 
+    recoveryItem.title = "Recording Recovery…"
+    recoveryItem.action = #selector(openSettingsFromRecovery)
+    recoveryItem.target = self
+    recoveryItem.isHidden = true
+    appMenu.addItem(recoveryItem)
+
     appMenu.addItem(.separator())
 
     let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
@@ -228,6 +243,14 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
 
   func menuWillOpen(_ menu: NSMenu) {
     let mode = store.state.transcription.selectedMode
+    let transcription = store.state.transcription
+
+    stopRecordingItem.isHidden = !transcription.isRecording
+    cancelRecordingItem.isHidden = !transcription.isRecording
+    if transcription.isRecording {
+      stopRecordingItem.title = "Stop & Save Recording"
+      cancelRecordingItem.title = "Discard Recording"
+    }
 
     // Header: "Quill" + mode chip, matching the spec's header row.
     let header = NSMutableAttributedString(
@@ -285,16 +308,25 @@ final class QuillStatusItemController: NSObject, NSMenuDelegate {
         pendingItem.isEnabled = true
       }
     }
+
+    let recoveryCount = MacRecordingRecoveryStore.shared.recordings.count
+    recoveryItem.isHidden = recoveryCount == 0
+    recoveryItem.title = recoveryCount == 1
+      ? "1 Recording to Recover…"
+      : "\(recoveryCount) Recordings to Recover…"
   }
 
   @objc private func checkForUpdates() { CheckForUpdatesViewModel.shared.checkForUpdates() }
   @objc private func pasteLastTranscript() { store.send(.pasteLastTranscript) }
+  @objc private func stopAndSaveRecording() { transcriptionStore.send(.stopRecording) }
+  @objc private func discardRecording() { transcriptionStore.send(.cancel) }
 
   @objc private func openTypedAction() {
     TypedActionPanelController.shared.show(store: transcriptionStore)
   }
   @objc private func openSettings() { onOpenSettings() }
   @objc private func openSettingsFromPending() { onOpenSettings() }
+  @objc private func openSettingsFromRecovery() { onOpenSettings() }
   @objc private func quit() { NSApplication.shared.terminate(nil) }
 
   @objc private func selectMode(_ sender: NSMenuItem) {

@@ -68,7 +68,10 @@ struct NoteDetailView: View {
   @Environment(\.colorScheme) private var colorScheme
   private var theme: QuillTheme { .of(colorScheme) }
 
+  @State private var showingDeleteConfirmation = false
   @State private var draft: String = ""
+  @State private var isBodyEditing = false
+  @State private var editingPhotoIDs: Set<UUID> = []
 
   var body: some View {
     VStack(spacing: 0) {
@@ -83,11 +86,46 @@ struct NoteDetailView: View {
           .padding(.horizontal, 16)
           .padding(.bottom, 6)
       }
-      bodyScroll
-      composer
+      if isBodyEditing {
+        MarkdownTextEditorIOS(text: Binding(
+          get: { note.body },
+          set: { notes.updateBody(id: note.id, to: $0) }
+        ), focusOnAppear: true)
+      } else {
+        bodyScroll
+        composer
+      }
     }
     .background(pageBackground.ignoresSafeArea())
     .toolbar(.hidden, for: .navigationBar)
+    .onDisappear { if isBodyEditing { finishBodyEditing() } }
+    .alert("Delete Note?", isPresented: $showingDeleteConfirmation) {
+      Button("Delete", role: .destructive) {
+        isBodyEditing = false
+        editingPhotoIDs = []
+        notes.deleteNote(id: note.id)
+        dismiss()
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("This permanently removes the note and all attached photos. This can't be undone.")
+    }
+  }
+
+  private func beginBodyEditing() {
+    editingPhotoIDs = Set(NoteContent.photoIDs(in: note.body))
+    isBodyEditing = true
+  }
+
+  private func finishBodyEditing() {
+    let removed = editingPhotoIDs.subtracting(NoteContent.photoIDs(in: note.body))
+    editingPhotoIDs = []
+    isBodyEditing = false
+    for photoID in removed {
+      try? FileManager.default.removeItem(at: PhotoStore.shared.url(noteID: note.id, photoID: photoID))
+      try? FileManager.default.removeItem(at: PhotoStore.shared.analysisURL(noteID: note.id, photoID: photoID))
+      notes.deletePhotoFromCloud(noteID: note.id, photoID: photoID)
+    }
   }
 
   // MARK: - Header
@@ -118,10 +156,24 @@ struct NoteDetailView: View {
       .accessibilityLabel("Rename note")
       .accessibilityHint("Opens the title editor")
 
-      roundButton("sparkle.magnifyingglass", "Ask Quill", tint: QuillDesign.brand.color(), action: onAsk)
-      shareMenu
-      roundButton("camera", "Add photo", action: onAddPhoto)
-      roundButton("square.and.pencil", "Edit text", tint: QuillDesign.brand.color(), action: onEditBody)
+      if isBodyEditing {
+        Button("Done", action: finishBodyEditing)
+          .fontWeight(.semibold)
+      }
+      Menu {
+        Button(action: onAsk) { Label("Ask", systemImage: "sparkle.magnifyingglass") }
+        Button(action: onAddPhoto) { Label("Add Picture", systemImage: "photo") }
+        shareMenu
+        Divider()
+        Button(role: .destructive) { showingDeleteConfirmation = true } label: {
+          Label("Delete Note", systemImage: "trash")
+        }
+      } label: {
+        Image(systemName: "ellipsis")
+          .frame(width: 44, height: 44)
+          .contentShape(Rectangle())
+      }
+      .accessibilityLabel("Note actions")
     }
     .padding(.horizontal, 16)
     .padding(.top, 4)
@@ -147,7 +199,7 @@ struct NoteDetailView: View {
         )
       }
     } label: {
-      Image(systemName: "square.and.arrow.up")
+      Label("Share", systemImage: "square.and.arrow.up")
         .quillFont(15, weight: .medium)
         .foregroundStyle(theme.text2)
         .frame(width: 36, height: 36)
@@ -254,7 +306,8 @@ struct NoteDetailView: View {
         if let pending = note.pendingEdit {
           diffView(from: pending.previousBody, to: note.body)
         } else if note.body.isEmpty, liveText.isEmpty {
-          Text("Empty — hold the orb below to start dictating.")
+          Text("Tap to write, or hold the orb below to dictate.")
+            .onTapGesture(perform: beginBodyEditing)
             .quillFont(16.5)
             .italic()
             .foregroundStyle(theme.text3)
@@ -364,7 +417,9 @@ struct NoteDetailView: View {
           toggleCheckbox(segmentText: text, lineIndex: lineIndex)
         }
       )
-      .textSelection(.enabled)
+      .contentShape(Rectangle())
+      .onTapGesture(perform: beginBodyEditing)
+      .accessibilityAction(named: "Edit note", beginBodyEditing)
     case .photo(let photoID):
       VStack(alignment: .leading, spacing: 8) {
         if let ui = PhotoStore.shared.loadImage(noteID: note.id, photoID: photoID) {

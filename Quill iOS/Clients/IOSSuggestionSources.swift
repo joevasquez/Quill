@@ -193,7 +193,9 @@ enum IOSSuggestionSources {
       }
       guard let tools, !tools.isEmpty else { continue }
 
-      let readTools = tools.filter { isCallableReadTool($0) }.prefix(2)
+      let readTools = MCPToolAccessStore.enabledTools(tools, for: server.id)
+        .filter { isCallableReadTool($0) }
+        .prefix(2)
       guard !readTools.isEmpty else { continue }
 
       var sections: [String] = []

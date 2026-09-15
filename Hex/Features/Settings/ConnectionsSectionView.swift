@@ -36,6 +36,7 @@ struct ConnectionsSectionView: View {
   @State private var mcpToolLists: [UUID: [MCPTool]] = [:]
   @State private var mcpErrors: [UUID: String] = [:]
   @State private var mcpSignedIn: [UUID: Bool] = [:]
+  @State private var mcpToolAccess = MCPToolAccessStore.load()
   @State private var busyServers: Set<UUID> = []
   @State private var showAddMCPServer = false
   @State private var editingMCP: MCPEditContext?
@@ -221,11 +222,27 @@ struct ConnectionsSectionView: View {
   private func mcpExpansion(server: MCPServerConfig?) -> some View {
     if let server {
       if let tools = mcpToolLists[server.id], !tools.isEmpty {
+        HStack(spacing: 8) {
+          Text("\(enabledToolCount(tools, serverID: server.id)) of \(tools.count) enabled")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+          Spacer()
+          Button("Enable All") { setAllTools(true, tools: tools, serverID: server.id) }
+            .controlSize(.mini)
+          Button("Disable All") { setAllTools(false, tools: tools, serverID: server.id) }
+            .controlSize(.mini)
+        }
+        .padding(.bottom, 4)
+
         ForEach(tools, id: \.name) { tool in
-          expansionLine(
-            symbol: "wrench.and.screwdriver",
+          MCPToolToggleRow(
+            symbol: MCPToolRisk.isWriteLike(tool.name) ? "pencil.and.outline" : "magnifyingglass",
             title: ConnectionCapabilities.prettyToolName(tool.name, serverName: server.name),
-            detail: tool.description
+            detail: tool.description,
+            isEnabled: Binding(
+              get: { mcpToolAccess.isEnabled(serverID: server.id, toolName: tool.name) },
+              set: { setTool($0, tool: tool, serverID: server.id) }
+            )
           )
         }
       } else if busyServers.contains(server.id) {
@@ -249,6 +266,20 @@ struct ConnectionsSectionView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
     }
+  }
+
+  private func enabledToolCount(_ tools: [MCPTool], serverID: UUID) -> Int {
+    tools.filter { mcpToolAccess.isEnabled(serverID: serverID, toolName: $0.name) }.count
+  }
+
+  private func setTool(_ enabled: Bool, tool: MCPTool, serverID: UUID) {
+    mcpToolAccess.setEnabled(enabled, serverID: serverID, toolName: tool.name)
+    MCPToolAccessStore.save(mcpToolAccess)
+  }
+
+  private func setAllTools(_ enabled: Bool, tools: [MCPTool], serverID: UUID) {
+    mcpToolAccess.setAllEnabled(enabled, serverID: serverID, toolNames: tools.map(\.name))
+    MCPToolAccessStore.save(mcpToolAccess)
   }
 
   private func chevron(_ expanded: Bool) -> some View {
@@ -677,6 +708,8 @@ struct ConnectionsSectionView: View {
       settings.mcpServers.removeAll { $0.id == server.id }
     }
     await MCPToolCatalog.shared.remove(serverID: server.id)
+    mcpToolAccess.setAllEnabled(true, serverID: server.id, toolNames: [])
+    MCPToolAccessStore.save(mcpToolAccess)
     @Dependency(\.keychain) var keychain
     await keychain.delete(server.keychainTokenKey)
     await keychain.delete(server.oauthKeychainKey)
@@ -725,6 +758,70 @@ struct ConnectionsSectionView: View {
 
   private var agentName: String {
     hexSettings.agentName.isEmpty ? "Hermes" : hexSettings.agentName
+  }
+}
+
+/// Compact tool-permission row. Descriptions stay out of the scanning path:
+/// hover the title for a native help tag or click the info button for a
+/// persistent popover.
+private struct MCPToolToggleRow: View {
+  let symbol: String
+  let title: String
+  let detail: String?
+  @Binding var isEnabled: Bool
+  @State private var showingInfo = false
+
+  private var meaningfulDetail: String? {
+    guard let detail else { return nil }
+    let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  var body: some View {
+    HStack(spacing: 8) {
+      Image(systemName: symbol)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(width: 16)
+
+      Text(title)
+        .font(.caption.weight(.medium))
+        .lineLimit(1)
+        .help(meaningfulDetail ?? "No additional details provided by this tool.")
+
+      if let meaningfulDetail {
+        Button {
+          showingInfo.toggle()
+        } label: {
+          Image(systemName: "info.circle")
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+        }
+        .buttonStyle(.borderless)
+        .help("Show tool details")
+        .accessibilityLabel("Details for \(title)")
+        .popover(isPresented: $showingInfo, arrowEdge: .trailing) {
+          VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+              .font(.headline)
+            Text(meaningfulDetail)
+              .font(.callout)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+          .padding(14)
+          .frame(width: 300, alignment: .leading)
+        }
+      }
+
+      Spacer(minLength: 8)
+
+      Toggle("Allow \(title)", isOn: $isEnabled)
+        .labelsHidden()
+        .toggleStyle(.switch)
+        .controlSize(.mini)
+    }
+    .padding(.vertical, 2)
   }
 }
 

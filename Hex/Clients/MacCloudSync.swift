@@ -126,11 +126,17 @@ final class MacCloudSync: ObservableObject {
   /// per-note debounce because Mac editing sessions are keystroke-heavy.
   private static let autoUploadDelay: Duration = .seconds(7)
 
+  private var cloudSyncEnabled: Bool {
+    @Shared(.hexSettings) var settings: HexSettings
+    return settings.cloudSyncEnabled
+  }
+
   /// Mark dirty AND schedule a debounced upload — edits sync themselves
   /// a few seconds after the user stops typing instead of waiting for a
   /// manual Sync Now.
   func markDirtyAndScheduleUpload(id: UUID) {
     markDirty(id: id)
+    guard cloudSyncEnabled, isGoogleAuthorized() else { return }
     pendingAutoUploads[id]?.cancel()
     pendingAutoUploads[id] = Task { [weak self] in
       try? await Task.sleep(for: Self.autoUploadDelay)
@@ -144,38 +150,128 @@ final class MacCloudSync: ObservableObject {
     dirtyNoteIDs.remove(id)
   }
 
+  /// Renames locally first, then lets the normal debounced uploader carry
+  /// the change across devices. An explicit rename disables auto-titling.
+  func renameNote(id: UUID, title: String) {
+    let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty,
+          let index = cloudNotes.firstIndex(where: { $0.id == id })
+    else { return }
+
+    cloudNotes[index].title = trimmed
+    cloudNotes[index].isAutoTitle = false
+    cloudNotes[index].updatedAt = Date()
+    markDirtyAndScheduleUpload(id: id)
+  }
+
+  /// One deletion path for the editor toolbar and sidebar row menu. The
+  /// local cache is flushed immediately; cloud deletion uses the existing
+  /// tombstone path so another device cannot resurrect a stale copy.
+  func deleteNote(id: UUID) {
+    pendingAutoUploads[id]?.cancel()
+    pendingAutoUploads[id] = nil
+    let photoIDs = cloudNotes
+      .first { $0.id == id }
+      .map { NoteContent.photoIDs(in: $0.body) } ?? []
+
+    cloudNotes.removeAll { $0.id == id }
+    dirtyNoteIDs.remove(id)
+    cloudNotePhotos[id] = nil
+    MacPhotoStore.shared.deleteAllPhotos(noteID: id)
+    persistLocalCacheNow()
+
+    Task {
+      await deleteNoteFromCloud(id: id, photoIDs: photoIDs)
+    }
+  }
+
+  func pauseAutomaticSync() {
+    for task in pendingAutoUploads.values { task.cancel() }
+    pendingAutoUploads.removeAll()
+    status = .idle
+  }
+
+  /// Creates a locally durable Mac note and schedules cloud upload when sync
+  /// is available. Used by recovery and by dictations with no text target.
+  @discardableResult
+  func createNote(body: String, title: String = "") -> UUID {
+    let now = Date()
+    let note = SyncableNote(
+      id: UUID(),
+      title: title,
+      body: body,
+      createdAt: now,
+      updatedAt: now,
+      isAutoTitle: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      sourceDevice: Host.current().localizedName ?? "Mac",
+      sourcePlatform: .macOS
+    )
+    cloudNotes.insert(note, at: 0)
+    markDirtyAndScheduleUpload(id: note.id)
+    // Recovery/fallback saves should survive an immediate quit, not wait for
+    // the normal one-second editor debounce.
+    persistLocalCacheNow()
+    return note.id
+  }
+
   func uploadDirtyNote(id: UUID) async {
-    guard let note = cloudNotes.first(where: { $0.id == id }),
+    guard cloudSyncEnabled,
+          let note = cloudNotes.first(where: { $0.id == id }),
           let accessToken = await getAccessToken(),
           let email = getUserEmail()
     else { return }
 
     status = .syncing
+    await CloudSyncManager.shared.clearLastError()
     await CloudSyncManager.shared.uploadNote(note, accessToken: accessToken, userEmail: email)
-    dirtyNoteIDs.remove(id)
-    status = .completed(transcriptsUp: 0, notesDown: 0, at: Date())
+    if let error = await CloudSyncManager.shared.lastError {
+      status = .failed(error)
+    } else {
+      dirtyNoteIDs.remove(id)
+      status = .completed(transcriptsUp: 0, notesDown: 0, at: Date())
+    }
   }
 
   func uploadAllDirtyNotes() async {
-    guard let accessToken = await getAccessToken(),
+    guard cloudSyncEnabled,
+          let accessToken = await getAccessToken(),
           let email = getUserEmail()
     else { return }
 
     status = .syncing
     let dirty = cloudNotes.filter { dirtyNoteIDs.contains($0.id) }
+    await CloudSyncManager.shared.clearLastError()
     for note in dirty {
       await CloudSyncManager.shared.uploadNote(note, accessToken: accessToken, userEmail: email)
     }
-    dirtyNoteIDs.removeAll()
-    status = .completed(transcriptsUp: 0, notesDown: dirty.count, at: Date())
+    if let error = await CloudSyncManager.shared.lastError {
+      status = .failed(error)
+    } else {
+      dirtyNoteIDs.removeAll()
+      status = .completed(transcriptsUp: 0, notesDown: dirty.count, at: Date())
+    }
   }
 
   func isGoogleAuthorized() -> Bool {
+    guard !UserDefaults.standard.bool(forKey: GoogleOAuthClient.reconnectRequiredDefaultsKey) else {
+      return false
+    }
     let email = UserDefaults.standard.string(forKey: GoogleOAuthClient.googleAccountEmailDefaultsKey)
     return email?.isEmpty == false
   }
 
   func syncTranscripts(_ transcripts: [Transcript]) async {
+    guard cloudSyncEnabled else {
+      status = .idle
+      return
+    }
+    // App activation and Home appearance can arrive together. The shared
+    // manager represents overlapping work with an empty result, so coalesce
+    // duplicate requests here before that result can flash-clear the list.
+    guard status != .syncing else {
+      syncLogger.info("macOS sync already in progress; coalescing duplicate request")
+      return
+    }
     status = .syncing
     guard let accessToken = await getAccessToken(),
           let email = getUserEmail()
@@ -183,6 +279,7 @@ final class MacCloudSync: ObservableObject {
       status = .failed("Not signed in to Google.")
       return
     }
+    await CloudSyncManager.shared.clearLastError()
 
     let device = Host.current().localizedName ?? "Mac"
 
@@ -236,9 +333,18 @@ final class MacCloudSync: ObservableObject {
       }
     }
     self.cloudNotePhotos = photosByNote
+    // Push the local edits we just preserved — otherwise a note edited
+    // offline stays dirty forever, since nothing else retries it.
+    for note in locallyDirty {
+      await CloudSyncManager.shared.uploadNote(note, accessToken: accessToken, userEmail: email)
+      if await CloudSyncManager.shared.lastError == nil {
+        dirtyNoteIDs.remove(note.id)
+      }
+    }
+
     // Writes swallow their errors so one bad record can't abort the batch,
     // so ask the manager whether anything actually failed — otherwise a
-    // fully-rejected sync would still report "completed".
+    // fully-rejected sync would still report "completed" and clear its dot.
     if let failure = await CloudSyncManager.shared.lastError {
       self.status = .failed(failure)
       await CloudSyncManager.shared.clearLastError()
@@ -247,13 +353,17 @@ final class MacCloudSync: ObservableObject {
     }
 
     syncLogger.info("macOS sync complete: \(merged.count) notes (\(locallyDirty.count) local edits preserved), \(result.transcriptsUploaded) transcripts uploaded, \(manifests.count) photo manifests")
+  }
 
-    // Push the local edits we just preserved — otherwise a note edited
-    // offline stays dirty forever, since nothing else retries it.
-    for note in locallyDirty {
-      await CloudSyncManager.shared.uploadNote(note, accessToken: accessToken, userEmail: email)
-      dirtyNoteIDs.remove(note.id)
+  /// Refresh on app activation without repeatedly hitting the network while
+  /// the user moves between Quill and another app.
+  func syncIfNeeded(_ transcripts: [Transcript], minimumInterval: TimeInterval = 300) async {
+    guard cloudSyncEnabled, isGoogleAuthorized() else { return }
+    if case let .completed(_, _, at) = status,
+       Date().timeIntervalSince(at) < minimumInterval {
+      return
     }
+    await syncTranscripts(transcripts)
   }
 
   func deleteTranscriptFromCloud(id: UUID) async {
@@ -290,6 +400,7 @@ final class MacCloudSync: ObservableObject {
   /// when a note with missing photos is opened, so photos appear without
   /// waiting for the next full sync.
   func fetchMissingPhotos(for note: SyncableNote) async {
+    guard cloudSyncEnabled else { return }
     let missing = NoteContent.photoIDs(in: note.body).filter {
       !MacPhotoStore.shared.hasPhoto(noteID: note.id, photoID: $0)
     }
@@ -308,7 +419,8 @@ final class MacCloudSync: ObservableObject {
   }
 
   func uploadTranscript(_ transcript: Transcript) async {
-    guard let accessToken = await getAccessToken(),
+    guard cloudSyncEnabled,
+          let accessToken = await getAccessToken(),
           let email = getUserEmail()
     else { return }
 
@@ -327,7 +439,8 @@ final class MacCloudSync: ObservableObject {
   }
 
   func fetchCloudNotes() async -> [SyncableNote] {
-    guard let accessToken = await getAccessToken(),
+    guard cloudSyncEnabled,
+          let accessToken = await getAccessToken(),
           let email = getUserEmail()
     else { return [] }
 

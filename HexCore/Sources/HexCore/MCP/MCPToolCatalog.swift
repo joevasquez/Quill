@@ -99,7 +99,7 @@ public actor MCPToolCatalog {
     var lines: [String] = []
     for server in enabled {
       guard let entry = entries[server.id], !entry.tools.isEmpty else { continue }
-      for tool in entry.tools {
+      for tool in MCPToolAccessStore.enabledTools(entry.tools, for: server.id) {
         var line = "- server: \(server.name), tool: \(tool.name)"
         if let description = tool.description, !description.isEmpty {
           line += " — \(description.prefix(240))"

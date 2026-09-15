@@ -143,7 +143,7 @@ struct Quill_iOSTests {
     func longAIFormattingIsChunkedWithoutDroppingContent() {
         let paragraphs = (0..<20).map { "Paragraph \($0): " + String(repeating: "detail ", count: 45) }
         let input = paragraphs.joined(separator: "\n\n")
-        let chunks = IOSLongTextChunker.chunks(input, maxCharacters: 1_000)
+        let chunks = LongTextChunker.chunks(input, maxCharacters: 1_000)
 
         #expect(chunks.count > 1)
         #expect(chunks.allSatisfy { $0.count <= 1_000 })

@@ -57,7 +57,6 @@ struct GeneralSettingsTabView: View {
       SoundSectionView(store: store)
       GeneralSectionView(store: store)
       KeyboardShortcutReferenceView(store: store)
-      CloudSyncSectionView(store: store)
       AboutSectionView(store: store)
       AdvancedSettingsToggle(summary: "Settings export, import, and reset.")
     }
@@ -67,16 +66,42 @@ struct GeneralSettingsTabView: View {
   }
 }
 
-// MARK: - Plan
+// MARK: - Account
 
-/// The subscription surface: Free vs Pro comparison + activation.
-struct PlanSettingsTabView: View {
+/// One account surface for plan, Google identity, and cross-device sync.
+/// Service-level Google capabilities remain in Connections.
+struct AccountSettingsTabView: View {
+  @ObserveInjection var inject
+  @Bindable var store: StoreOf<SettingsFeature>
+
+  var body: some View {
+    ScrollView {
+      VStack(spacing: 0) {
+        GoogleAccountSectionView(store: store)
+        Form {
+          PlanSectionView(store: store)
+          CloudSyncSectionView(store: store)
+        }
+        .formStyle(.grouped)
+      }
+    }
+    .task { await store.send(.task).finish() }
+    .enableInjection()
+  }
+}
+
+// MARK: - Appearance
+
+/// Visual presentation only: app theme and the recording indicator's
+/// placement/style. Keeping these out of General makes the main settings
+/// pane about behavior rather than aesthetics.
+struct AppearanceSettingsTabView: View {
   @ObserveInjection var inject
   @Bindable var store: StoreOf<SettingsFeature>
 
   var body: some View {
     Form {
-      PlanSectionView(store: store)
+      AppearanceSectionView(store: store)
     }
     .formStyle(.grouped)
     .task { await store.send(.task).finish() }
@@ -134,6 +159,7 @@ struct RecordingSettingsTabView: View {
       }
       HotKeySectionView(store: store)
       RecordingBehaviorSectionView(store: store)
+      RecordingRecoverySectionView()
       HistorySectionView(store: store)
       // Paste mechanics and word corrections are troubleshooting tools —
       // most people never need them, and the per-app delay list is long.
@@ -182,20 +208,7 @@ struct IntegrationsSettingsTabView: View {
   @Bindable var store: StoreOf<SettingsFeature>
 
   var body: some View {
-    // Stack the Google Account panel above the per-integration catalog so
-    // sign-in is the first thing the user sees on this tab. ScrollView wraps
-    // both because each child uses `.formStyle(.grouped)` — without it the
-    // catalog can clip under the window's bottom edge on smaller windows.
-    ScrollView {
-      VStack(spacing: 0) {
-        GoogleAccountSectionView(store: store)
-        // One unified surface: native integrations + featured MCP
-        // brands render as the same kind of row ("Apps & services"),
-        // with custom MCP servers below. The Agent tab keeps identity/
-        // routines/memory.
-        ConnectionsSectionView()
-      }
-    }
+    ConnectionsSectionView()
     .task { await store.send(.task).finish() }
     .enableInjection()
   }

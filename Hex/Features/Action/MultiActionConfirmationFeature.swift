@@ -687,7 +687,7 @@ struct MultiActionConfirmationFeature {
         guard !answer.isEmpty else { return .none }
         let bundleID = state.sourceAppBundleID
         return .run { [pasteboard] send in
-          await pasteboard.paste(answer, bundleID)
+          _ = await pasteboard.paste(answer, bundleID)
           await send(.completionDismissed)
         }
 

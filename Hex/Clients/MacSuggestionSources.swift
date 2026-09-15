@@ -17,6 +17,24 @@ import os
 
 private let macSourcesLogger = HexLog.aiProcessing
 
+private actor SuggestionAuthFailureCache {
+  private var unauthenticatedServerIDs: Set<UUID> = []
+
+  func shouldSkip(_ id: UUID, hasToken: Bool) -> Bool {
+    if hasToken {
+      unauthenticatedServerIDs.remove(id)
+      return false
+    }
+    return unauthenticatedServerIDs.contains(id)
+  }
+
+  func markUnauthenticated(_ id: UUID) {
+    unauthenticatedServerIDs.insert(id)
+  }
+}
+
+private let suggestionAuthFailures = SuggestionAuthFailureCache()
+
 @MainActor
 enum MacSuggestionSources {
   private static let store = EKEventStore()
@@ -270,6 +288,9 @@ enum MacSuggestionSources {
     for server in servers where server.isEnabled {
       guard let source = suggestionSource(for: server) else { continue }
       let token = await MCPOAuthClient.resolveAuthToken(for: server)
+      if await suggestionAuthFailures.shouldSkip(server.id, hasToken: token?.isEmpty == false) {
+        continue
+      }
 
       var tools = await MCPToolCatalog.shared.cachedTools(for: server.id)?.tools
       if tools == nil {
@@ -277,7 +298,8 @@ enum MacSuggestionSources {
       }
       guard let tools, !tools.isEmpty else { continue }
 
-      let readTools = tools.filter { isCallableReadTool($0) }.prefix(2)
+      let permittedTools = MCPToolAccessStore.enabledTools(tools, for: server.id)
+      let readTools = permittedTools.filter { isCallableReadTool($0) }.prefix(2)
       guard !readTools.isEmpty else { continue }
 
       var sections: [String] = []
@@ -293,6 +315,11 @@ enum MacSuggestionSources {
             sections.append("\(tool.name):\n\(String(result.prefix(1800)))")
           }
         } catch {
+          if let mcpError = error as? MCPError,
+             case let .httpError(code, _) = mcpError,
+             code == 401 || code == 403 {
+            await suggestionAuthFailures.markUnauthenticated(server.id)
+          }
           macSourcesLogger.info("Suggestion MCP read \(tool.name, privacy: .private) failed: \(error.localizedDescription, privacy: .public)")
         }
       }

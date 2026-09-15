@@ -91,6 +91,10 @@ struct TranscriptionFeature {
     /// label it with what the user actually wanted.
     var autoSampleID: UUID?
     var recordingSessionID = UUID()
+    /// Durable recovery entry for the current capture. The audio file is
+    /// checkpointed while recording and retained until a transcript/action is
+    /// safely committed.
+    var recordingRecoveryID: UUID?
     @Shared(.hexSettings) var hexSettings: HexSettings
     @Shared(.isRemappingScratchpadFocused) var isRemappingScratchpadFocused: Bool = false
     @Shared(.modelBootstrapState) var modelBootstrapState: ModelBootstrapState
@@ -109,6 +113,7 @@ struct TranscriptionFeature {
     // Recording flow
     case startRecording
     case stopRecording
+    case recordingRecoveryCheckpoint
 
     // Cancel/discard flow
     case cancel   // Explicit cancellation with sound
@@ -262,6 +267,7 @@ struct TranscriptionFeature {
     case editNeedsSelectionTimer
     case editAcceptanceTimer
     case rerouteWindow
+    case recordingRecoveryCheckpoint
   }
 
   @Dependency(\.transcription) var transcription
@@ -333,7 +339,12 @@ struct TranscriptionFeature {
       case let .transcriptionResult(result, audioURL, sessionID):
         guard sessionID == state.recordingSessionID else {
           transcriptionFeatureLogger.info("Ignoring stale transcription result from session \(sessionID)")
-          return .run { _ in try? FileManager.default.removeItem(at: audioURL) }
+          return .run { _ in
+            await MacRecordingRecoveryStore.shared.markNeedsRecovery(
+              audioURL: audioURL,
+              reason: "A newer recording started before this transcript could be committed."
+            )
+          }
         }
         return handleTranscriptionResult(&state, result: result, audioURL: audioURL)
 
@@ -341,7 +352,10 @@ struct TranscriptionFeature {
         guard sessionID == state.recordingSessionID else {
           transcriptionFeatureLogger.info("Ignoring stale transcription error from session \(sessionID)")
           return .run { _ in
-            if let audioURL { try? FileManager.default.removeItem(at: audioURL) }
+            await MacRecordingRecoveryStore.shared.markNeedsRecovery(
+              audioURL: audioURL,
+              reason: error.localizedDescription
+            )
           }
         }
         return handleTranscriptionError(&state, error: error, audioURL: audioURL)
@@ -362,6 +376,23 @@ struct TranscriptionFeature {
           state.autoDetectedMode = AutoModeClassifier.classifyPartial(text).indicatorMode
         }
         return .none
+
+      case .recordingRecoveryCheckpoint:
+        guard state.isRecording,
+              let recoveryID = state.recordingRecoveryID,
+              let startedAt = state.recordingStartTime
+        else { return .none }
+        let elapsed = now.timeIntervalSince(startedAt)
+        let liveTranscript = state.partialTranscript
+        return .run { [recording] _ in
+          let destination = await MacRecordingRecoveryStore.shared.audioURL(for: recoveryID)
+          guard await recording.checkpointCurrentRecording(destination) else { return }
+          await MacRecordingRecoveryStore.shared.recordCheckpoint(
+            id: recoveryID,
+            expectedDuration: elapsed,
+            liveTranscript: liveTranscript
+          )
+        }
 
       case let .inlineEditSelectionCaptured(selection):
         state.inlineEditSelection = selection
@@ -719,7 +750,7 @@ struct TranscriptionFeature {
         let bundleID = state.sourceAppBundleID
         return .merge(
           .run { [pasteboard] _ in
-            await pasteboard.paste(rawText, bundleID)
+            _ = await pasteboard.paste(rawText, bundleID)
             soundEffect.play(.pasteTranscript)
           },
           .run { send in
@@ -756,7 +787,7 @@ struct TranscriptionFeature {
         let bundleID = state.sourceAppBundleID
         return .merge(
           .run { [pasteboard] _ in
-            await pasteboard.paste(rawText, bundleID)
+            _ = await pasteboard.paste(rawText, bundleID)
             soundEffect.play(.pasteTranscript)
           },
           .run { send in
@@ -1065,6 +1096,7 @@ private extension TranscriptionFeature {
       )
     }
     state.recordingSessionID = UUID()
+    state.recordingRecoveryID = state.recordingSessionID
     state.pendingEditResult = nil
     state.editNeedsSelectionMessage = nil
     state.capturedContext = nil
@@ -1106,12 +1138,16 @@ private extension TranscriptionFeature {
     let contextEnrichmentEnabled = state.hexSettings.contextEnrichmentEnabled && state.hexSettings.aiProcessingEnabled
 
     let outputLanguage = state.hexSettings.outputLanguage
+    let recoveryID = state.recordingRecoveryID
 
     return .merge(
       .cancel(id: CancelID.recordingCleanup),
       .cancel(id: CancelID.liveTranscription),
       .cancel(id: CancelID.transcription),
       .run { [sleepManagement, contextClient, preventSleep = state.hexSettings.preventSystemSleep] send in
+        if let recoveryID {
+          await MacRecordingRecoveryStore.shared.begin(id: recoveryID, startedAt: startTime)
+        }
         // Play sound immediately for instant feedback
         soundEffect.play(.startRecording)
 
@@ -1137,12 +1173,23 @@ private extension TranscriptionFeature {
           await send(.partialTranscriptUpdated(partial))
         }
       }
-      .cancellable(id: CancelID.liveTranscription, cancelInFlight: true)
+      .cancellable(id: CancelID.liveTranscription, cancelInFlight: true),
+      .run { send in
+        var delay: Duration = .seconds(3)
+        while !Task.isCancelled {
+          try await Task.sleep(for: delay)
+          await send(.recordingRecoveryCheckpoint)
+          delay = .seconds(15)
+        }
+      }
+      .cancellable(id: CancelID.recordingRecoveryCheckpoint, cancelInFlight: true)
     )
   }
 
   func handleStopRecording(_ state: inout State) -> Effect<Action> {
     state.isRecording = false
+    let recoveryID = state.recordingRecoveryID
+    let liveTranscriptAtStop = state.partialTranscript
     state.partialTranscript = ""
     
     let stopTime = now
@@ -1172,11 +1219,15 @@ private extension TranscriptionFeature {
       transcriptionFeatureLogger.notice("Discarding short recording per decision \(String(describing: decision))")
       return .merge(
         .cancel(id: CancelID.liveTranscription),
+        .cancel(id: CancelID.recordingRecoveryCheckpoint),
         .run { [speechRecognition] _ in await speechRecognition.stopRecognition() },
         .run { _ in
           let url = await recording.stopRecording()
           guard !Task.isCancelled else { return }
           try? FileManager.default.removeItem(at: url)
+          if let recoveryID {
+            await MacRecordingRecoveryStore.shared.discard(id: recoveryID)
+          }
         }
         .cancellable(id: CancelID.recordingCleanup, cancelInFlight: true)
       )
@@ -1199,7 +1250,10 @@ private extension TranscriptionFeature {
     // Action mode captures too (AX-only, no clipboard fallback) so
     // commands like "add this to my Kearney list" can resolve "this"
     // to the highlighted text in the source app.
-    if isEditMode || isAutoMode || isActionMode || state.hexSettings.inlineEditEnabled {
+    // Capture target editability for every mode. Dictate uses this to decide
+    // whether there is confidently no destination and should save into a new
+    // Quill note. `.unknown` remains conservative for Citrix/Electron.
+    do {
       // ONE walk of the AX tree yields both the selection and whether the
       // focused element can take text. Two separate calls doubled the stall
       // at stop time in apps that don't answer AX at all (Electron, Chrome),
@@ -1208,8 +1262,8 @@ private extension TranscriptionFeature {
       // Bound to locals before logging: os.Logger interpolation is an
       // escaping autoclosure and can't capture the inout `state`.
       let target = focus.editableTarget
+      state.editableTarget = target
       if isAutoMode {
-        state.editableTarget = target
         transcriptionFeatureLogger.info("Auto: editable target = \(target.rawValue)")
       }
       if let selection = focus.selection {
@@ -1224,7 +1278,6 @@ private extension TranscriptionFeature {
           )
         }
       }
-    } else {
     }
 
     // Otherwise, proceed to transcription
@@ -1234,11 +1287,11 @@ private extension TranscriptionFeature {
     let model = state.hexSettings.selectedModel
     let language = state.hexSettings.outputLanguage
     let sessionID = state.recordingSessionID
-
     state.isPrewarming = true
 
     let transcriptionEffect: Effect<Action> = .merge(
       .cancel(id: CancelID.liveTranscription),
+      .cancel(id: CancelID.recordingRecoveryCheckpoint),
       .run { [speechRecognition] _ in await speechRecognition.stopRecognition() },
       .run { [sleepManagement] send in
         // Allow system to sleep again
@@ -1249,7 +1302,18 @@ private extension TranscriptionFeature {
           let capturedURL = await recording.stopRecording()
           guard !Task.isCancelled else { return }
           soundEffect.play(.stopRecording)
-          audioURL = capturedURL
+          let securedURL: URL
+          if let recoveryID {
+            securedURL = try await MacRecordingRecoveryStore.shared.secureFinalAudio(
+              id: recoveryID,
+              sourceURL: capturedURL,
+              expectedDuration: duration,
+              liveTranscript: liveTranscriptAtStop
+            )
+          } else {
+            securedURL = capturedURL
+          }
+          audioURL = securedURL
 
           // Create transcription options with the selected language
           // Note: cap concurrency to avoid audio I/O overloads on some Macs
@@ -1259,10 +1323,10 @@ private extension TranscriptionFeature {
             chunkingStrategy: .vad,
           )
 
-          let result = try await transcription.transcribe(capturedURL, model, decodeOptions) { _ in }
+          let result = try await transcription.transcribe(securedURL, model, decodeOptions) { _ in }
 
-          transcriptionFeatureLogger.notice("Transcribed audio from \(capturedURL.lastPathComponent) to text length \(result.count)")
-          await send(.transcriptionResult(result, capturedURL, sessionID: sessionID))
+          transcriptionFeatureLogger.notice("Transcribed audio from \(securedURL.lastPathComponent) to text length \(result.count)")
+          await send(.transcriptionResult(result, securedURL, sessionID: sessionID))
         } catch {
           transcriptionFeatureLogger.error("Transcription failed: \(error.localizedDescription)")
           await send(.transcriptionError(error, audioURL, sessionID: sessionID))
@@ -1322,11 +1386,16 @@ private func transcriptionWordCount(of text: String) -> Int {
   text.split { $0.isWhitespace || $0.isNewline }.count
 }
 
-/// Deletes a recording, tolerating the nil a re-route passes (the first
-/// dispatch already consumed the file).
+/// Retains an uncommitted recording for explicit recovery. A re-route passes
+/// nil because the first dispatch already committed the file.
 private func removeRecordingFile(_ url: URL?) {
   guard let url else { return }
-  try? FileManager.default.removeItem(at: url)
+  Task { @MainActor in
+    MacRecordingRecoveryStore.shared.markNeedsRecovery(
+      audioURL: url,
+      reason: "Quill couldn't safely finish processing this recording."
+    )
+  }
 }
 
 /// How long a finished Auto-mode run stays re-routable.
@@ -1385,7 +1454,15 @@ private extension TranscriptionFeature {
 
     // If empty text, nothing else to do
     guard !result.isEmpty else {
-      return .none
+      let recoveryID = state.recordingRecoveryID
+      return .run { _ in
+        if let recoveryID {
+          await MacRecordingRecoveryStore.shared.markNeedsRecovery(
+            id: recoveryID,
+            reason: "No speech could be recovered automatically. The audio was kept."
+          )
+        }
+      }
     }
 
     // Voice command detection — check before any text processing.
@@ -1565,6 +1642,7 @@ private extension TranscriptionFeature {
     let inlineEditSelection = dispatch.selection
     let sessionID = state.recordingSessionID
     let selectedMode = state.selectedMode
+    let editableTarget = state.editableTarget
 
     // A re-route is the user overruling the classifier, so only an Auto run
     // that landed on its own gets to offer one. `offerReroute` is captured by
@@ -1650,7 +1728,7 @@ private extension TranscriptionFeature {
           let replaced = await inlineEdit.replaceSelection(edited)
           if !replaced {
             transcriptionFeatureLogger.warning("Inline edit: AX replace failed; falling back to paste")
-            await pasteboard.paste(edited, sourceAppBundleID)
+            _ = await pasteboard.paste(edited, sourceAppBundleID)
           }
           await send(.inlineEditApplied(PendingEditResult(
             original: selection,
@@ -1710,7 +1788,7 @@ private extension TranscriptionFeature {
           )
           transcriptionFeatureLogger.info("Edit mode (no selection): AI generated \(generated.count) chars")
           await send(.aiProcessingFinished)
-          await pasteboard.paste(generated, sourceAppBundleID)
+          _ = await pasteboard.paste(generated, sourceAppBundleID)
           soundEffect.play(.pasteTranscript)
           if let offer = makeRerouteOffer(true) { await send(.rerouteOffered(offer)) }
           try? await storeTranscriptInHistory(
@@ -1898,6 +1976,7 @@ private extension TranscriptionFeature {
           sourceAppName: sourceAppName,
           audioURL: audioURL,
           mode: .dictate,
+          editableTarget: editableTarget,
           transcriptionHistory: transcriptionHistory
         )
         if let offer = makeRerouteOffer(true) { await send(.rerouteOffered(offer)) }
@@ -1931,7 +2010,7 @@ private extension TranscriptionFeature {
     sourceAppBundleID: String?
   ) -> Effect<Action> {
     .run { [pasteboard, soundEffect] _ in
-      try? FileManager.default.removeItem(at: audioURL)
+      await MacRecordingRecoveryStore.shared.complete(audioURL: audioURL, deleteAudio: true)
 
       switch command {
       case .newParagraph:
@@ -1947,13 +2026,13 @@ private extension TranscriptionFeature {
       case .redo:
         await pasteboard.sendKeyboardCommand(.init(key: .z, modifiers: [.command, .shift]))
       case .period:
-        await pasteboard.paste(".", sourceAppBundleID)
+        _ = await pasteboard.paste(".", sourceAppBundleID)
       case .comma:
-        await pasteboard.paste(",", sourceAppBundleID)
+        _ = await pasteboard.paste(",", sourceAppBundleID)
       case .questionMark:
-        await pasteboard.paste("?", sourceAppBundleID)
+        _ = await pasteboard.paste("?", sourceAppBundleID)
       case .exclamationMark:
-        await pasteboard.paste("!", sourceAppBundleID)
+        _ = await pasteboard.paste("!", sourceAppBundleID)
       }
 
       soundEffect.play(.pasteTranscript)
@@ -1969,11 +2048,20 @@ private extension TranscriptionFeature {
     state.isPrewarming = false
     state.error = error.localizedDescription
     
-    if let audioURL {
-      try? FileManager.default.removeItem(at: audioURL)
+    let recoveryID = state.recordingRecoveryID
+    return .run { _ in
+      if let audioURL {
+        await MacRecordingRecoveryStore.shared.markNeedsRecovery(
+          audioURL: audioURL,
+          reason: error.localizedDescription
+        )
+      } else if let recoveryID {
+        await MacRecordingRecoveryStore.shared.markNeedsRecovery(
+          id: recoveryID,
+          reason: error.localizedDescription
+        )
+      }
     }
-
-    return .none
   }
 
   /// Save transcript to history, handling max-entries pruning and cloud sync.
@@ -1992,6 +2080,7 @@ private extension TranscriptionFeature {
   ) async throws {
     guard let audioURL else { return }
     @Shared(.hexSettings) var hexSettings: HexSettings
+    var committedTranscript: Transcript?
 
     if hexSettings.saveTranscriptionHistory {
       let transcript = try await transcriptPersistence.save(
@@ -2002,6 +2091,7 @@ private extension TranscriptionFeature {
         sourceAppName,
         mode
       )
+      committedTranscript = transcript
 
       transcriptionHistory.withLock { history in
         history.history.insert(transcript, at: 0)
@@ -2020,8 +2110,10 @@ private extension TranscriptionFeature {
       try? FileManager.default.removeItem(at: audioURL)
     }
 
+    await MacRecordingRecoveryStore.shared.complete(audioURL: audioURL, deleteAudio: false)
+
     if hexSettings.cloudSyncEnabled {
-      let transcript = Transcript(
+      let transcript = committedTranscript ?? Transcript(
         timestamp: Date(),
         text: text,
         audioPath: audioURL,
@@ -2048,8 +2140,41 @@ private extension TranscriptionFeature {
     sourceAppName: String?,
     audioURL: URL?,
     mode: TranscriptionMode?,
+    editableTarget: EditableTarget = .unknown,
     transcriptionHistory: Shared<TranscriptionHistory>
   ) async throws {
+    let destination = DictationDestinationPolicy.route(
+      mode: mode ?? .dictate,
+      target: editableTarget,
+      pasteOutcome: .notAttempted,
+      hasSpeech: !result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    )
+    if destination == .newQuillNote {
+      await MainActor.run {
+        let id = MacCloudSync.shared.createNote(body: result)
+        NoteSelectionState.shared.selectedNoteID = id
+      }
+      transcriptionFeatureLogger.notice("No editable destination; saved dictation as a Quill note")
+    } else {
+      let pasteOutcome = await pasteboard.paste(result, sourceAppBundleID)
+      let resolvedDestination = DictationDestinationPolicy.route(
+        mode: mode ?? .dictate,
+        target: editableTarget,
+        pasteOutcome: pasteOutcome,
+        hasSpeech: true
+      )
+      if resolvedDestination == .newQuillNote {
+        await MainActor.run {
+          let id = MacCloudSync.shared.createNote(body: result)
+          NoteSelectionState.shared.selectedNoteID = id
+        }
+        transcriptionFeatureLogger.notice("Paste target disappeared; saved dictation as a Quill note")
+      }
+    }
+
+    // Keep the recovery audio until the visible destination has accepted the
+    // text (or a Quill note has been durably created). This matters when local
+    // history is disabled: storeTranscriptInHistory removes the audio.
     try await storeTranscriptInHistory(
       text: result,
       audioURL: audioURL,
@@ -2059,8 +2184,6 @@ private extension TranscriptionFeature {
       mode: mode,
       transcriptionHistory: transcriptionHistory
     )
-
-    await pasteboard.paste(result, sourceAppBundleID)
     soundEffect.play(.pasteTranscript)
   }
 }
@@ -2074,10 +2197,12 @@ private extension TranscriptionFeature {
     state.isPrewarming = false
     state.isAIProcessing = false
     state.partialTranscript = ""
+    let recoveryID = state.recordingRecoveryID
 
     return .merge(
       .cancel(id: CancelID.transcription),
       .cancel(id: CancelID.liveTranscription),
+      .cancel(id: CancelID.recordingRecoveryCheckpoint),
       .run { [sleepManagement] _ in
         // Allow system to sleep again
         await sleepManagement.allowSleep()
@@ -2085,6 +2210,9 @@ private extension TranscriptionFeature {
         let url = await recording.stopRecording()
         guard !Task.isCancelled else { return }
         try? FileManager.default.removeItem(at: url)
+        if let recoveryID {
+          await MacRecordingRecoveryStore.shared.discard(id: recoveryID)
+        }
         soundEffect.play(.cancel)
       }
       .cancellable(id: CancelID.recordingCleanup, cancelInFlight: true)
@@ -2094,16 +2222,23 @@ private extension TranscriptionFeature {
   func handleDiscard(_ state: inout State) -> Effect<Action> {
     state.isRecording = false
     state.isPrewarming = false
+    let recoveryID = state.recordingRecoveryID
 
     // Silently discard - no sound effect
-    return .run { [sleepManagement] _ in
-      // Allow system to sleep again
-      await sleepManagement.allowSleep()
-      let url = await recording.stopRecording()
-      guard !Task.isCancelled else { return }
-      try? FileManager.default.removeItem(at: url)
-    }
-    .cancellable(id: CancelID.recordingCleanup, cancelInFlight: true)
+    return .merge(
+      .cancel(id: CancelID.recordingRecoveryCheckpoint),
+      .run { [sleepManagement] _ in
+        // Allow system to sleep again
+        await sleepManagement.allowSleep()
+        let url = await recording.stopRecording()
+        guard !Task.isCancelled else { return }
+        try? FileManager.default.removeItem(at: url)
+        if let recoveryID {
+          await MacRecordingRecoveryStore.shared.discard(id: recoveryID)
+        }
+      }
+      .cancellable(id: CancelID.recordingCleanup, cancelInFlight: true)
+    )
   }
 }
 

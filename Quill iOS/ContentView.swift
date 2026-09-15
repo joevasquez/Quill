@@ -900,6 +900,7 @@ final class RecordingViewModel: ObservableObject {
 enum QuillRoute: Hashable {
   case note(UUID)
   case suggestions
+  case notes
 }
 
 struct ContentView: View {
@@ -927,6 +928,9 @@ struct ContentView: View {
   /// long-lived instance also avoids the brief flicker that comes
   /// from rebuilding the VM on every presentation.
   @EnvironmentObject private var deepLinks: QuillDeepLinkRouter
+  @State private var sidebarVisibility: NavigationSplitViewVisibility = .automatic
+  @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+  @State private var showingSidebar = false
   @State private var showingSettings = false
   @State private var showingNotesList = false
   @State private var showingRecoveryCenter = false
@@ -1005,6 +1009,105 @@ struct ContentView: View {
   }
 
   var body: some View {
+    Group {
+      if horizontalSizeClass == .compact {
+        ZStack(alignment: .leading) {
+          mainContent
+            .accessibilityHidden(showingSidebar)
+          if showingSidebar {
+            Color.black.opacity(0.25)
+              .ignoresSafeArea()
+              .onTapGesture { showingSidebar = false }
+              .accessibilityLabel("Close sidebar")
+              .accessibilityAddTraits(.isButton)
+            sidebarContent
+              .frame(maxWidth: 300)
+              .frame(maxHeight: .infinity)
+              .transition(.move(edge: .leading))
+          }
+        }
+        .animation(.easeInOut(duration: 0.2), value: showingSidebar)
+      } else {
+        NavigationSplitView(columnVisibility: $sidebarVisibility) {
+          sidebarContent
+        } detail: {
+          mainContent
+        }
+      }
+    }
+    .sheet(isPresented: $showingSettings) { SettingsView() }
+  }
+
+  private var sidebarContent: some View {
+    VStack(spacing: 0) {
+      HStack {
+        Text("Quill").font(.title2.bold())
+        Spacer()
+        if horizontalSizeClass == .compact {
+          Button { showingSidebar = false } label: {
+            Image(systemName: "xmark").frame(width: 44, height: 44)
+          }
+          .accessibilityLabel("Close sidebar")
+        }
+      }
+      .padding(.horizontal, 20)
+      .padding(.top, 12)
+      List {
+        Group {
+          Button(action: createNoteFromSidebar) {
+            Label("New Note", systemImage: "square.and.pencil")
+          }
+          Button { openSidebarRoute(.suggestions) } label: {
+            Label("Suggestions", systemImage: "lightbulb")
+          }
+          Button { openSidebarRoute(.notes) } label: {
+            Label("Notes", systemImage: "note.text")
+          }
+        }
+        .listRowBackground(Color.clear)
+      }
+      .listStyle(.sidebar)
+      .scrollContentBackground(.hidden)
+      Button { showingSettings = true } label: {
+        Label("Settings", systemImage: "gearshape")
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(20)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+    }
+    .background(backgroundGradient.ignoresSafeArea())
+    .toolbar(.hidden, for: .navigationBar)
+  }
+
+  private var sidebarAccess: some View {
+    HStack {
+      Button(action: showSidebar) {
+        Label("Sidebar", systemImage: "sidebar.left")
+          .padding(.horizontal, 16)
+          .frame(minHeight: 44)
+      }
+      Spacer()
+    }
+    .background(backgroundGradient)
+  }
+
+  private func showSidebar() {
+    showingSidebar = true
+    sidebarVisibility = .all
+  }
+
+  private func openSidebarRoute(_ route: QuillRoute) {
+    path = [route]
+    showingSidebar = false
+  }
+
+  private func createNoteFromSidebar() {
+    let note = notes.startNewNote(location: nil)
+    openSidebarRoute(.note(note.id))
+  }
+
+  private var mainContent: some View {
     NavigationStack(path: $path) {
       ZStack(alignment: .bottom) {
         backgroundGradient
@@ -1022,6 +1125,12 @@ struct ContentView: View {
         switch route {
         case .note(let id):
           noteDetail(for: id)
+        case .notes:
+          NotesListView(store: notes, embedded: true, onOpenNote: { id in
+            notes.setActiveNote(id: id)
+            path.append(.note(id))
+          })
+          .safeAreaInset(edge: .top, spacing: 0) { sidebarAccess }
         case .suggestions:
           QuillSuggestionsPage(
             suggestions: suggestions.current,
@@ -1192,9 +1301,6 @@ struct ContentView: View {
             ? "The words recognized so far can be kept in the note, or the recording can be discarded."
             : "The recording has not produced a recoverable transcript yet."
         )
-      }
-      .sheet(isPresented: $showingSettings) {
-        SettingsView()
       }
       .sheet(isPresented: $showingNotesList) {
         NotesListView(store: notes, onOpenNote: { id in
@@ -1925,7 +2031,7 @@ struct ContentView: View {
 
   private var headerBar: some View {
     QuillTopBar(
-      onTapList: { showingNotesList = true },
+      onTapList: showSidebar,
       onTapNewNote: {
         Task {
           let loc = await LocationClient.shared.currentPlace()

@@ -15,6 +15,7 @@ import HexCore
 import SwiftUI
 
 struct HomeView: View {
+  @Bindable var transcriptionStore: StoreOf<TranscriptionFeature>
   /// Jump to the Notes pane with this note selected.
   var openNote: (UUID) -> Void
   /// Jump to General settings (the Pro plan toggle lives there).
@@ -55,6 +56,7 @@ struct HomeView: View {
   /// Holds the live action confirmation when one is routed into the window
   /// instead of the menu-bar popdown (see InAppActionPresenter).
   @ObservedObject private var actionPresenter = InAppActionPresenter.shared
+  @State private var isActComposerVisible = false
 
   /// Everything the agent could route to right now.
   private var actDestinations: [QuillActDestination] {
@@ -144,6 +146,9 @@ struct HomeView: View {
     // covers the window being closed — SwiftUI tears the pane down with it.
     .onAppear { actionPresenter.isHomeVisible = true }
     .onDisappear { actionPresenter.isHomeVisible = false }
+    .onChange(of: sectionRaw) { _, _ in
+      isActComposerVisible = false
+    }
     .task {
       await controller.refreshOnAppear()
       if cloudSync.isGoogleAuthorized() {
@@ -276,62 +281,140 @@ struct HomeView: View {
 
   // MARK: - Capture row
 
-  /// The doing surface, and what the toggle above it governs: in Act, what
-  /// you type goes to the agent (with `@` destination tagging); in Notes,
-  /// it becomes a new note. Dictate is available from either.
+  /// Both halves begin with two deliberate choices. Their text surfaces only
+  /// appear after the user explicitly chooses to type or write.
+  @ViewBuilder
   private var captureRow: some View {
-    HStack(alignment: .top, spacing: 10) {
-      switch section {
-      case .act:
-        ActCommandField(
-          destinations: routableDestinations,
-          icon: "bolt.fill",
-          accent: QuillDesign.actionAccent,
-          placeholder: "Type a command — \u{201C}remind me to call Kelly Friday\u{201D}",
-          hint: "Type @ to send this to a specific app",
-          onSubmit: submitCommand
-        )
-        // Identity per mode, so switching visibly changes what the bar
-        // does rather than only what's listed below it.
-        .id(HomeSection.act)
+    switch section {
+    case .act:
+      if isActComposerVisible {
+        HStack(alignment: .top, spacing: 8) {
+          ActCommandField(
+            destinations: routableDestinations,
+            icon: "bolt.fill",
+            accent: QuillDesign.actionAccent,
+            placeholder: "Type a command — \u{201C}remind me to call Kelly Friday\u{201D}",
+            hint: "Type @ to send this to a specific app",
+            onSubmit: submitCommand
+          )
+          .id(HomeSection.act)
 
-      case .notes:
-        ActCommandField(
-          destinations: [],
-          icon: "square.and.pencil",
-          accent: QuillDesign.brand.color(),
-          placeholder: "Start a note — give it a title and press return",
-          hint: nil,
-          onSubmit: { title, _ in startDictation(title: title) }
-        )
-        .id(HomeSection.notes)
+          Button {
+            QuillMotion.run(.easeOut(duration: 0.16)) {
+              isActComposerVisible = false
+            }
+          } label: {
+            Image(systemName: "xmark")
+              .frame(width: 18, height: 18)
+          }
+          .buttonStyle(.borderless)
+          .help("Hide text input")
+          .accessibilityLabel("Hide text input")
+
+          actionVoiceButton
+        }
+        .transition(.opacity.combined(with: .move(edge: .top)))
+      } else {
+        HStack(spacing: 10) {
+          Spacer(minLength: 0)
+          actionVoiceButton
+          Button {
+            QuillMotion.run(.easeOut(duration: 0.16)) {
+              isActComposerVisible = true
+            }
+          } label: {
+            Label("Type an action", systemImage: "keyboard")
+          }
+          .buttonStyle(.bordered)
+          .controlSize(.large)
+          .disabled(actionCaptureIsBusy)
+          .help("Type a command for Quill")
+          Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
       }
 
-      Button {
-        startDictation(title: "")
-      } label: {
-        Label("Dictate", systemImage: "mic.fill")
+    case .notes:
+      HStack(spacing: 10) {
+        Spacer(minLength: 0)
+        noteDictateButton
+        Button {
+          startTextNote()
+        } label: {
+          Label("Write a note", systemImage: "square.and.pencil")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .help("Create a blank note and start writing")
+        Spacer(minLength: 0)
       }
-      .buttonStyle(.borderedProminent)
-      .tint(QuillDesign.brand.color())
-      .controlSize(.large)
-      .help("Start dictating into a new note")
+      .frame(maxWidth: .infinity)
     }
+  }
+
+  private var actionRecordingIsActive: Bool {
+    transcriptionStore.isRecording && transcriptionStore.selectedMode == .action
+  }
+
+  private var actionCaptureIsBusy: Bool {
+    transcriptionStore.isTranscribing
+      || transcriptionStore.isAIProcessing
+      || transcriptionStore.isPrewarming
+      || (transcriptionStore.isRecording && !actionRecordingIsActive)
+  }
+
+  private var actionVoiceButton: some View {
+    Button {
+      if actionRecordingIsActive {
+        transcriptionStore.send(.stopRecording)
+      } else {
+        transcriptionStore.send(.setMode(.action))
+        transcriptionStore.send(.startRecording)
+      }
+    } label: {
+      Label(
+        actionRecordingIsActive ? "Finish action" : "Speak an action",
+        systemImage: actionRecordingIsActive ? "stop.fill" : "mic.fill"
+      )
+    }
+    .buttonStyle(.borderedProminent)
+    .tint(actionRecordingIsActive ? .red : QuillDesign.actionAccent)
+    .controlSize(.large)
+    .disabled(actionCaptureIsBusy)
+    .help(actionRecordingIsActive ? "Finish and review this action" : "Speak an action for Quill")
+  }
+
+  private var noteDictateButton: some View {
+    Button {
+      startDictation(title: "")
+    } label: {
+      Label("Dictate a note", systemImage: "mic.fill")
+    }
+    .buttonStyle(.borderedProminent)
+    .tint(QuillDesign.brand.color())
+    .controlSize(.large)
+    .help("Start dictating into a new note")
+  }
+
+  private func startTextNote() {
+    let note = makeNote(title: "")
+    cloudSync.cloudNotes.insert(note, at: 0)
+    cloudSync.markDirty(id: note.id)
+    openNote(note.id)
   }
 
   private func submitCommand(_ text: String, pinned: [QuillActDestination]) {
     guard !text.isEmpty else { return }
+    isActComposerVisible = false
     // Same pipeline as the menu bar's "Type a Command…" panel — routines,
     // memory, MCP context, then the confirmation panel. The targeting
     // carries both user signals: what they pinned with `@`, and what's
     // left enabled on the chip row.
-    HexApp.appStore.send(
-      .transcription(
-        .typedActionSubmitted(
-          text,
-          targeting: ActTargeting(
-            all: actDestinations, muted: mutedDestinations, pinned: pinned
-          )
+    transcriptionStore.send(
+      .typedActionSubmitted(
+        text,
+        targeting: ActTargeting(
+          all: actDestinations, muted: mutedDestinations, pinned: pinned
         )
       )
     )
@@ -340,8 +423,16 @@ struct HomeView: View {
   /// Create a note (pre-titled for a meeting when given), open it in the
   /// Notes editor, and start dictation the moment the editor appears.
   private func startDictation(title: String) {
+    let note = makeNote(title: title)
+    cloudSync.cloudNotes.insert(note, at: 0)
+    cloudSync.markDirty(id: note.id)
+    NoteSelectionState.shared.pendingDictationNoteID = note.id
+    openNote(note.id)
+  }
+
+  private func makeNote(title: String) -> SyncableNote {
     let now = Date()
-    let note = SyncableNote(
+    return SyncableNote(
       id: UUID(),
       title: title,
       body: "",
@@ -351,10 +442,6 @@ struct HomeView: View {
       sourceDevice: Host.current().localizedName ?? "Mac",
       sourcePlatform: .macOS
     )
-    cloudSync.cloudNotes.insert(note, at: 0)
-    cloudSync.markDirty(id: note.id)
-    NoteSelectionState.shared.pendingDictationNoteID = note.id
-    openNote(note.id)
   }
 
   // MARK: - Meeting strip
@@ -564,39 +651,37 @@ struct HomeView: View {
         .padding(16)
         .quillCard()
       } else {
-        ForEach(recentNotes, id: \.id) { note in
-          noteRow(note)
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+          ForEach(recentNotes, id: \.id) { note in
+            noteRow(note, relativeTo: context.date)
+          }
         }
       }
     }
   }
 
-  /// Slim single-preview-line row — the note itself is one click away, so
-  /// Home doesn't need to preview it at length.
-  private func noteRow(_ note: SyncableNote) -> some View {
+  /// Home only needs to identify a recent note. The editor owns its content,
+  /// metadata, and other detail once the user opens it.
+  private func noteRow(_ note: SyncableNote, relativeTo now: Date) -> some View {
     Button {
       openNote(note.id)
     } label: {
       HStack(spacing: 10) {
-        VStack(alignment: .leading, spacing: 1) {
-          Text(noteDisplayTitle(note))
-            .font(.subheadline.weight(.semibold))
-            .lineLimit(1)
-          Text(notePreview(note))
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
+        Text(noteDisplayTitle(note))
+          .font(.system(size: 15, weight: .semibold))
+          .lineLimit(1)
         Spacer(minLength: 8)
-        Text(note.updatedAt.formatted(date: .abbreviated, time: .shortened))
+        Text(RelativeNoteTimestamp.label(for: note.updatedAt, relativeTo: now))
           .font(.caption)
-          .foregroundStyle(.tertiary)
+          .foregroundStyle(.secondary)
+          .monospacedDigit()
+          .fixedSize()
         Image(systemName: "chevron.right")
           .font(.system(size: 9, weight: .semibold))
           .foregroundStyle(.tertiary)
       }
-      .padding(.vertical, 9)
-      .padding(.horizontal, 12)
+      .padding(.vertical, 12)
+      .padding(.horizontal, 14)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
@@ -613,9 +698,6 @@ struct HomeView: View {
     return words.isEmpty ? "New Note" : String(words.prefix(60))
   }
 
-  private func notePreview(_ note: SyncableNote) -> String {
-    String(NoteContent.stripPhotos(from: note.body).prefix(120))
-  }
 }
 
 // MARK: - Suggestion card

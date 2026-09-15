@@ -134,12 +134,11 @@ enum IOSGoogleOAuthClient {
     request.timeoutInterval = 15
 
     // No client_secret for iOS-type clients.
-    let body = [
-      "client_id=\(clientId)",
-      "refresh_token=\(refreshToken)",
-      "grant_type=refresh_token",
-    ].joined(separator: "&")
-    request.httpBody = body.data(using: .utf8)
+    request.httpBody = iosGoogleOAuthFormBody([
+      URLQueryItem(name: "client_id", value: clientId),
+      URLQueryItem(name: "refresh_token", value: refreshToken),
+      URLQueryItem(name: "grant_type", value: "refresh_token"),
+    ])
 
     let (data, response) = try await URLSession.shared.data(for: request)
     guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
@@ -230,14 +229,13 @@ enum IOSGoogleOAuthClient {
     request.timeoutInterval = 15
 
     // PKCE token exchange: send code_verifier instead of client_secret.
-    let body = [
-      "code=\(code)",
-      "client_id=\(clientId)",
-      "code_verifier=\(codeVerifier)",
-      "redirect_uri=\(redirectURI)",
-      "grant_type=authorization_code",
-    ].joined(separator: "&")
-    request.httpBody = body.data(using: .utf8)
+    request.httpBody = iosGoogleOAuthFormBody([
+      URLQueryItem(name: "code", value: code),
+      URLQueryItem(name: "client_id", value: clientId),
+      URLQueryItem(name: "code_verifier", value: codeVerifier),
+      URLQueryItem(name: "redirect_uri", value: redirectURI),
+      URLQueryItem(name: "grant_type", value: "authorization_code"),
+    ])
 
     let (data, response) = try await URLSession.shared.data(for: request)
     guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
@@ -320,6 +318,12 @@ enum IOSGoogleOAuthClient {
       }
     }
   }
+}
+
+private func iosGoogleOAuthFormBody(_ items: [URLQueryItem]) -> Data? {
+  var components = URLComponents()
+  components.queryItems = items
+  return components.percentEncodedQuery?.data(using: .utf8)
 }
 
 // MARK: - Presentation context

@@ -64,7 +64,7 @@ enum TextAIClient {
 
     let result: String
     do {
-      let chunks = IOSLongTextChunker.chunks(text)
+      let chunks = LongTextChunker.chunks(text)
       var formattedChunks: [String] = []
       formattedChunks.reserveCapacity(chunks.count)
       for chunk in chunks {

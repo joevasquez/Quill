@@ -181,6 +181,7 @@ private func resolveCredential(for provider: AIProvider) async throws -> LLMCred
 private func isActionProModeActive() -> Bool {
   @Shared(.hexSettings) var hexSettings: HexSettings
   guard hexSettings.selectedPlan == "pro" else { return false }
+  guard !UserDefaults.standard.bool(forKey: GoogleOAuthClient.reconnectRequiredDefaultsKey) else { return false }
   let email = UserDefaults.standard.string(forKey: GoogleOAuthClient.googleAccountEmailDefaultsKey)
   return email?.isEmpty == false
 }

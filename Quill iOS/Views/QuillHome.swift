@@ -34,6 +34,8 @@ struct QuillTopBar: View {
 
   var body: some View {
     HStack(spacing: 10) {
+      button("sidebar.left", "Show sidebar", onTapList)
+
       Image("Feather")
         .resizable()
         .renderingMode(.template)
@@ -48,9 +50,6 @@ struct QuillTopBar: View {
 
       Spacer()
 
-      if let onTapSuggestions {
-        button("lightbulb.max", "Suggestions", onTapSuggestions)
-      }
       if recoveryCount > 0, let onTapRecovery {
         Button(action: onTapRecovery) {
           Image(systemName: "waveform.badge.exclamationmark")
@@ -73,9 +72,7 @@ struct QuillTopBar: View {
         .buttonStyle(QuillPressStyle())
         .accessibilityLabel("\(recoveryCount) recording\(recoveryCount == 1 ? "" : "s") to recover")
       }
-      button("list.bullet", "Notes", onTapList)
       button("square.and.pencil", "New note", onTapNewNote)
-      button("gearshape", "Settings", onTapSettings)
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 10)

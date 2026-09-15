@@ -30,6 +30,7 @@ struct ConnectionsView: View {
   /// Full cached tool lists, so an expanded row can show what a server
   /// actually offers (not just the count).
   @State private var toolLists: [UUID: [MCPTool]] = [:]
+  @State private var toolAccess = MCPToolAccessStore.load()
   @State private var serverErrors: [UUID: String] = [:]
   @State private var signedIn: [UUID: Bool] = [:]
   @State private var busyServers: Set<UUID> = []
@@ -223,12 +224,30 @@ struct ConnectionsView: View {
   private func mcpExpansion(server: MCPServerConfig?) -> some View {
     if let server {
       if let tools = toolLists[server.id], !tools.isEmpty {
+        HStack(spacing: 8) {
+          Text("\(enabledToolCount(tools, serverID: server.id)) of \(tools.count) enabled")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+          Spacer()
+          Button("Enable All") { setAllTools(true, tools: tools, serverID: server.id) }
+            .font(.caption2.weight(.semibold))
+          Button("Disable All") { setAllTools(false, tools: tools, serverID: server.id) }
+            .font(.caption2.weight(.semibold))
+        }
+        .padding(.bottom, 4)
+
         ForEach(tools, id: \.name) { tool in
-          expansionLine(
-            symbol: "wrench.and.screwdriver",
-            title: prettyToolName(tool.name, serverName: server.name),
-            detail: tool.description
-          )
+          Toggle(isOn: Binding(
+            get: { toolAccess.isEnabled(serverID: server.id, toolName: tool.name) },
+            set: { setTool($0, tool: tool, serverID: server.id) }
+          )) {
+            expansionLine(
+              symbol: MCPToolRisk.isWriteLike(tool.name) ? "pencil.and.outline" : "magnifyingglass",
+              title: prettyToolName(tool.name, serverName: server.name),
+              detail: tool.description
+            )
+          }
+          .tint(QuillDesign.brand.color())
         }
       } else if busyServers.contains(server.id) {
         HStack(spacing: 8) {
@@ -252,6 +271,20 @@ struct ConnectionsView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
     }
+  }
+
+  private func enabledToolCount(_ tools: [MCPTool], serverID: UUID) -> Int {
+    tools.filter { toolAccess.isEnabled(serverID: serverID, toolName: $0.name) }.count
+  }
+
+  private func setTool(_ enabled: Bool, tool: MCPTool, serverID: UUID) {
+    toolAccess.setEnabled(enabled, serverID: serverID, toolName: tool.name)
+    MCPToolAccessStore.save(toolAccess)
+  }
+
+  private func setAllTools(_ enabled: Bool, tools: [MCPTool], serverID: UUID) {
+    toolAccess.setAllEnabled(enabled, serverID: serverID, toolNames: tools.map(\.name))
+    MCPToolAccessStore.save(toolAccess)
   }
 
   private func expansionLine(symbol: String, title: String, detail: String?) -> some View {
@@ -608,6 +641,8 @@ struct ConnectionsView: View {
     servers.removeAll { $0.id == server.id }
     persistServers()
     await MCPToolCatalog.shared.remove(serverID: server.id)
+    toolAccess.setAllEnabled(true, serverID: server.id, toolNames: [])
+    MCPToolAccessStore.save(toolAccess)
     IOSMCPOAuthClient.deleteAllCredentials(for: server)
   }
 

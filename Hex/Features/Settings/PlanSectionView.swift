@@ -49,7 +49,7 @@ struct PlanSectionView: View {
       .listRowBackground(Color.clear)
 
       if isPro, !googleConnected {
-        Label("Sign in to Google (Integrations tab) to use Pro's built-in AI.", systemImage: "exclamationmark.triangle.fill")
+        Label("Sign in to Google above to use Pro's built-in AI.", systemImage: "exclamationmark.triangle.fill")
           .font(.callout)
           .foregroundStyle(.orange)
       }

@@ -75,6 +75,10 @@ extension GoogleOAuthClient: DependencyKey {
   /// UserDefaults key for the cached account email — shared across Settings
   /// section views and onboarding so they stay in sync without polling.
   static let googleAccountEmailDefaultsKey = "quill.googleAccountEmail"
+  /// A 400/401 refresh response means the saved grant is no longer usable.
+  /// Remember that state so background sync and Suggestions do not hammer
+  /// Google's token endpoint until the user signs in again.
+  static let reconnectRequiredDefaultsKey = "quill.googleReconnectRequired"
 
   private static let tokenEndpoint = URL(string: "https://oauth2.googleapis.com/token")!
   private static let userInfoEndpoint = URL(string: "https://www.googleapis.com/oauth2/v3/userinfo")!
@@ -158,6 +162,25 @@ extension GoogleOAuthClient: DependencyKey {
   }
 
   private static let tokenCache = TokenCache()
+  private static let refreshGate = RefreshGate()
+
+  private actor RefreshGate {
+    private var inFlight: Task<String, Error>?
+
+    func run(_ operation: @escaping @Sendable () async throws -> String) async throws -> String {
+      if let inFlight { return try await inFlight.value }
+      let task = Task { try await operation() }
+      inFlight = task
+      do {
+        let value = try await task.value
+        inFlight = nil
+        return value
+      } catch {
+        inFlight = nil
+        throw error
+      }
+    }
+  }
 
   static var liveValue: Self {
     let cache = tokenCache
@@ -210,12 +233,17 @@ extension GoogleOAuthClient: DependencyKey {
           refreshToken: tokens.refreshToken,
           expiresAt: tokens.expiresAt
         )
+        UserDefaults.standard.removeObject(forKey: reconnectRequiredDefaultsKey)
 
         oauthLogger.info("Google OAuth tokens stored in Keychain")
         return tokens
       },
       refreshIfNeeded: {
         @Dependency(\.keychain) var keychain
+
+        guard !UserDefaults.standard.bool(forKey: reconnectRequiredDefaultsKey) else {
+          throw GoogleOAuthError.reauthenticationRequired
+        }
 
         // Populate the in-memory cache from keychain once per launch.
         await cache.load(keychain: keychain)
@@ -228,54 +256,50 @@ extension GoogleOAuthClient: DependencyKey {
           return tokens.accessToken
         }
 
-        oauthLogger.info("Google access token expired or expiring soon; refreshing")
+        return try await refreshGate.run {
+          oauthLogger.info("Google access token expired or expiring soon; refreshing")
 
-        var request = URLRequest(url: tokenEndpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 15
+          var request = URLRequest(url: tokenEndpoint)
+          request.httpMethod = "POST"
+          request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+          request.timeoutInterval = 15
+          request.httpBody = googleOAuthFormBody([
+            URLQueryItem(name: "client_id", value: clientId),
+            URLQueryItem(name: "refresh_token", value: tokens.refreshToken),
+            URLQueryItem(name: "grant_type", value: "refresh_token"),
+          ])
 
-        // No client_secret for iOS-type clients. Google accepts public-client
-        // refresh requests with just client_id + refresh_token.
-        let body = [
-          "client_id=\(clientId)",
-          "refresh_token=\(tokens.refreshToken)",
-          "grant_type=refresh_token",
-        ].joined(separator: "&")
-        request.httpBody = body.data(using: .utf8)
+          let (data, response) = try await URLSession.shared.data(for: request)
+          guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            oauthLogger.error("Google token refresh failed: HTTP \(code, privacy: .public)")
+            captureError(
+              GoogleOAuthError.refreshFailed(code),
+              context: ErrorContext.feature("google_oauth")
+                .tag("op", "refresh")
+                .tag("status", String(code))
+            )
+            if code == 400 || code == 401 {
+              cache.clear()
+              UserDefaults.standard.set(true, forKey: reconnectRequiredDefaultsKey)
+              throw GoogleOAuthError.reauthenticationRequired
+            }
+            throw GoogleOAuthError.refreshFailed(code)
+          }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-          let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-          oauthLogger.error("Google token refresh failed: HTTP \(code, privacy: .public)")
-          // Refresh failures are usually "token revoked" (401) or upstream
-          // outages (5xx). Either way they're real errors worth surfacing.
-          captureError(
-            GoogleOAuthError.refreshFailed(code),
-            context: ErrorContext.feature("google_oauth")
-              .tag("op", "refresh")
-              .tag("status", String(code))
-          )
-          throw GoogleOAuthError.refreshFailed(code)
+          guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let newAccessToken = json["access_token"] as? String,
+                let expiresIn = json["expires_in"] as? Int
+          else { throw GoogleOAuthError.invalidTokenResponse }
+
+          let newExpiry = Date().addingTimeInterval(TimeInterval(expiresIn))
+          try? await keychain.save(KeychainKey.googleAccessToken, newAccessToken)
+          let newExpiryString = ISO8601DateFormatter().string(from: newExpiry)
+          try? await keychain.save(KeychainKey.googleTokenExpiry, newExpiryString)
+          cache.updateAccess(token: newAccessToken, expiresAt: newExpiry)
+          oauthLogger.info("Google access token refreshed, expires in \(expiresIn, privacy: .public)s")
+          return newAccessToken
         }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let newAccessToken = json["access_token"] as? String,
-              let expiresIn = json["expires_in"] as? Int
-        else {
-          throw GoogleOAuthError.invalidTokenResponse
-        }
-
-        let newExpiry = Date().addingTimeInterval(TimeInterval(expiresIn))
-        try? await keychain.save(KeychainKey.googleAccessToken, newAccessToken)
-        let newExpiryString = ISO8601DateFormatter().string(from: newExpiry)
-        try? await keychain.save(KeychainKey.googleTokenExpiry, newExpiryString)
-
-        // Update the in-memory cache with the fresh access token.
-        cache.updateAccess(token: newAccessToken, expiresAt: newExpiry)
-
-        oauthLogger.info("Google access token refreshed, expires in \(expiresIn, privacy: .public)s")
-        return newAccessToken
       },
       isAuthorized: {
         // Use the cached email in UserDefaults as a fast, synchronous
@@ -286,6 +310,7 @@ extension GoogleOAuthClient: DependencyKey {
         // settings tab switch.
         let email = UserDefaults.standard.string(forKey: googleAccountEmailDefaultsKey)
         return email?.isEmpty == false
+          && !UserDefaults.standard.bool(forKey: reconnectRequiredDefaultsKey)
       },
       disconnect: {
         @Dependency(\.keychain) var keychain
@@ -294,6 +319,7 @@ extension GoogleOAuthClient: DependencyKey {
         await keychain.delete(KeychainKey.googleTokenExpiry)
         cache.clear()
         UserDefaults.standard.removeObject(forKey: googleAccountEmailDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: reconnectRequiredDefaultsKey)
         oauthLogger.info("Google OAuth tokens cleared from Keychain")
       },
       fetchUserEmail: {
@@ -342,14 +368,13 @@ extension GoogleOAuthClient: DependencyKey {
     request.timeoutInterval = 15
 
     // PKCE token exchange: send code_verifier instead of client_secret.
-    let body = [
-      "code=\(code)",
-      "client_id=\(clientId)",
-      "code_verifier=\(codeVerifier)",
-      "redirect_uri=\(redirectURI)",
-      "grant_type=authorization_code",
-    ].joined(separator: "&")
-    request.httpBody = body.data(using: .utf8)
+    request.httpBody = googleOAuthFormBody([
+      URLQueryItem(name: "code", value: code),
+      URLQueryItem(name: "client_id", value: clientId),
+      URLQueryItem(name: "code_verifier", value: codeVerifier),
+      URLQueryItem(name: "redirect_uri", value: redirectURI),
+      URLQueryItem(name: "grant_type", value: "authorization_code"),
+    ])
 
     let (data, response) = try await URLSession.shared.data(for: request)
     guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
@@ -438,6 +463,12 @@ extension GoogleOAuthClient: DependencyKey {
   }
 }
 
+private func googleOAuthFormBody(_ items: [URLQueryItem]) -> Data? {
+  var components = URLComponents()
+  components.queryItems = items
+  return components.percentEncodedQuery?.data(using: .utf8)
+}
+
 extension DependencyValues {
   var googleOAuth: GoogleOAuthClient {
     get { self[GoogleOAuthClient.self] }
@@ -484,6 +515,7 @@ enum GoogleOAuthError: LocalizedError {
   case sessionFailedToStart
   case tokenExchangeFailed(Int)
   case refreshFailed(Int)
+  case reauthenticationRequired
   case invalidTokenResponse
 
   var errorDescription: String? {
@@ -491,7 +523,7 @@ enum GoogleOAuthError: LocalizedError {
     case .invalidURL:
       "Could not construct Google OAuth URL"
     case .notAuthorized:
-      "Not signed in to Google — connect in Settings → Integrations."
+      "Not signed in to Google — connect in Settings → Account."
     case .invalidCallback:
       "Invalid OAuth callback from Google"
     case .userCancelled:
@@ -501,7 +533,9 @@ enum GoogleOAuthError: LocalizedError {
     case .tokenExchangeFailed(let code):
       "Google token exchange failed (HTTP \(code))"
     case .refreshFailed(let code):
-      "Google token refresh failed (HTTP \(code)) — try reconnecting in Settings."
+      "Google token refresh failed (HTTP \(code)) — reconnect in Settings → Account."
+    case .reauthenticationRequired:
+      "Google sign-in expired — reconnect in Settings → Account."
     case .invalidTokenResponse:
       "Unexpected response from Google OAuth"
     }

@@ -18,15 +18,61 @@ final class NoteSelectionState: ObservableObject {
   /// meeting strip) alongside `selectedNoteID`: when the editor for this
   /// note appears, it starts dictation immediately and clears the flag.
   @Published var pendingDictationNoteID: UUID?
+  private var pendingSelectionUpdate: Task<Void, Never>?
   private init() {}
+
+  /// A `List` can write its selection while SwiftUI is still reconciling
+  /// the row hierarchy. Publishing from that setter synchronously produces
+  /// undefined-behavior warnings, so cross-pane selection is relayed on the
+  /// next main-actor turn instead. New clicks supersede older pending ones.
+  func selectAfterViewUpdate(_ noteID: UUID?) {
+    pendingSelectionUpdate?.cancel()
+    pendingSelectionUpdate = Task { @MainActor [weak self] in
+      await Task.yield()
+      guard !Task.isCancelled, self?.selectedNoteID != noteID else { return }
+      self?.selectedNoteID = noteID
+    }
+  }
 }
 
-// MARK: - Sidebar list (hosted in the AppView sidebar)
+/// Shared note-age language for Home and the Notes list. Keeping the
+/// product-defined boundaries here prevents the two surfaces drifting.
+enum RelativeNoteTimestamp {
+  static func label(for date: Date, relativeTo now: Date = Date()) -> String {
+    let elapsed = now.timeIntervalSince(date)
+    guard elapsed >= 60 else { return "Just now" }
+
+    let minutes = Int(elapsed / 60)
+    if minutes < 60 { return ageLabel(minutes, singular: "minute") }
+
+    let hours = Int(elapsed / 3_600)
+    if hours < 24 { return ageLabel(hours, singular: "hour") }
+
+    let days = Int(elapsed / 86_400)
+    if days < 31 { return ageLabel(days, singular: "day") }
+
+    let calendar = Calendar.current
+    let months = max(1, calendar.dateComponents([.month], from: date, to: now).month ?? 1)
+    if months < 12 { return ageLabel(months, singular: "month") }
+
+    let years = max(1, calendar.dateComponents([.year], from: date, to: now).year ?? 1)
+    return ageLabel(years, singular: "year")
+  }
+
+  private static func ageLabel(_ value: Int, singular: String) -> String {
+    "\(value) \(singular)\(value == 1 ? "" : "s") ago"
+  }
+}
+
+// MARK: - Notes list
 
 struct NotesSidebarList: View {
   @ObservedObject private var cloudSync = MacCloudSync.shared
   @ObservedObject private var selection = NoteSelectionState.shared
   @State private var searchQuery: String = ""
+  @State private var renamingNoteID: UUID?
+  @State private var renameDraft = ""
+  @State private var deletingNoteID: UUID?
 
   private var sortedNotes: [SyncableNote] {
     cloudSync.cloudNotes.sorted { $0.updatedAt > $1.updatedAt }
@@ -47,6 +93,13 @@ struct NotesSidebarList: View {
          place.localizedCaseInsensitiveContains(trimmed) { return true }
       return false
     }
+  }
+
+  private var deferredListSelection: Binding<UUID?> {
+    Binding(
+      get: { selection.selectedNoteID },
+      set: { selection.selectAfterViewUpdate($0) }
+    )
   }
 
   var body: some View {
@@ -76,19 +129,81 @@ struct NotesSidebarList: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else {
-      List(selection: $selection.selectedNoteID) {
+      List(selection: deferredListSelection) {
         if visibleNotes.isEmpty {
           ContentUnavailableView.search(text: searchQuery)
         } else {
           ForEach(visibleNotes) { note in
-            NoteListRow(note: note, isDirty: cloudSync.dirtyNoteIDs.contains(note.id))
+            NoteListRow(
+              note: note,
+              isDirty: cloudSync.dirtyNoteIDs.contains(note.id),
+              isSelected: selection.selectedNoteID == note.id,
+              onRename: { beginRenaming(note) },
+              onDelete: { deletingNoteID = note.id }
+            )
               .tag(Optional(note.id))
+              .listRowInsets(EdgeInsets())
+              .listRowSeparator(.hidden)
+              .listRowBackground(Color.clear)
           }
         }
       }
       .listStyle(.sidebar)
-      .searchable(text: $searchQuery, placement: .sidebar, prompt: "Search notes")
+      .searchable(text: $searchQuery, placement: .automatic, prompt: "Search notes")
+      .alert("Rename Note", isPresented: renameAlertIsPresented) {
+        TextField("Title", text: $renameDraft)
+        Button("Cancel", role: .cancel) { renamingNoteID = nil }
+        Button("Rename") {
+          if let id = renamingNoteID {
+            cloudSync.renameNote(id: id, title: renameDraft)
+          }
+          renamingNoteID = nil
+        }
+        .disabled(renameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      } message: {
+        Text("Enter a new title for this note.")
+      }
+      .alert("Delete Note", isPresented: deleteAlertIsPresented) {
+        Button("Cancel", role: .cancel) { deletingNoteID = nil }
+        Button("Delete", role: .destructive) {
+          if let id = deletingNoteID {
+            deleteNote(id: id)
+          }
+          deletingNoteID = nil
+        }
+      } message: {
+        Text("This note will be deleted from your devices. This cannot be undone.")
+      }
     }
+  }
+
+  private var renameAlertIsPresented: Binding<Bool> {
+    Binding(
+      get: { renamingNoteID != nil },
+      set: { if !$0 { renamingNoteID = nil } }
+    )
+  }
+
+  private var deleteAlertIsPresented: Binding<Bool> {
+    Binding(
+      get: { deletingNoteID != nil },
+      set: { if !$0 { deletingNoteID = nil } }
+    )
+  }
+
+  private func beginRenaming(_ note: SyncableNote) {
+    renamingNoteID = note.id
+    renameDraft = note.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    if renameDraft.isEmpty {
+      renameDraft = NoteListRow.displayTitle(for: note)
+    }
+  }
+
+  private func deleteNote(id: UUID) {
+    if selection.selectedNoteID == id {
+      selection.selectedNoteID = nil
+    }
+    cloudSync.deleteNote(id: id)
   }
 
   private func createNewNote() {
@@ -114,8 +229,16 @@ struct NotesSidebarList: View {
 private struct NoteListRow: View {
   let note: SyncableNote
   let isDirty: Bool
+  let isSelected: Bool
+  let onRename: () -> Void
+  let onDelete: () -> Void
+  @State private var isHovering = false
 
   private var displayTitle: String {
+    Self.displayTitle(for: note)
+  }
+
+  static func displayTitle(for note: SyncableNote) -> String {
     let trimmed = note.title.trimmingCharacters(in: .whitespacesAndNewlines)
     if !trimmed.isEmpty { return trimmed }
     let stripped = NoteContent.stripPhotos(from: note.body)
@@ -124,42 +247,90 @@ private struct NoteListRow: View {
     return words.isEmpty ? "New Note" : String(words.prefix(60))
   }
 
-  private var preview: String {
-    let cleaned = NoteContent.stripPhotos(from: note.body)
-    return String(cleaned.prefix(120))
+  private var sourceLabel: String {
+    return note.sourcePlatform == .iOS ? "iPhone" : "Mac"
   }
 
   var body: some View {
-    HStack(spacing: 0) {
-      VStack(alignment: .leading, spacing: 4) {
-        Text(displayTitle)
-          .font(.headline)
-          .lineLimit(1)
-        if !preview.isEmpty {
-          Text(preview)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(2)
-        }
-        HStack(spacing: 6) {
-          Text(note.updatedAt, format: .relative(presentation: .named))
+    VStack(spacing: 0) {
+      HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(displayTitle)
+            .font(.system(size: 13.5, weight: .medium))
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+          TimelineView(.periodic(from: .now, by: 60)) { context in
+            HStack(spacing: 5) {
+              Text(RelativeNoteTimestamp.label(for: note.updatedAt, relativeTo: context.date))
+                .monospacedDigit()
+              Text("·")
+              Image(systemName: note.sourcePlatform == .iOS ? "iphone" : "desktopcomputer")
+              Text(sourceLabel)
+                .lineLimit(1)
+            }
             .font(.caption2)
             .foregroundStyle(.tertiary)
-          if note.sourcePlatform == .iOS {
-            Label("iOS", systemImage: "iphone")
-              .font(.caption2)
-              .foregroundStyle(.tertiary)
           }
         }
+
+        if isDirty && !isHovering {
+          Circle()
+            .fill(Color.orange)
+            .frame(width: 7, height: 7)
+            .help("Waiting to sync")
+        }
+
+        Menu {
+          Button(action: onRename) {
+            Label("Rename", systemImage: "pencil")
+          }
+          Divider()
+          Button(role: .destructive, action: onDelete) {
+            Label("Delete", systemImage: "trash")
+          }
+        } label: {
+          Image(systemName: "ellipsis")
+            .font(.system(size: 13, weight: .semibold))
+            .frame(width: 24, height: 24)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .opacity(isHovering ? 1 : 0)
+        .allowsHitTesting(isHovering)
+        .help("Note actions")
       }
-      Spacer(minLength: 4)
-      if isDirty {
-        Circle()
-          .fill(Color.orange)
-          .frame(width: 8, height: 8)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 9)
+      .background(
+        RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
+          .fill(
+            isSelected
+              ? Color.accentColor.opacity(0.16)
+              : (isHovering ? Color.primary.opacity(0.055) : Color.clear)
+          )
+      )
+      .contentShape(Rectangle())
+
+      Divider()
+        .opacity(0.38)
+        .padding(.leading, 10)
+    }
+    .onHover { hovering in
+      withAnimation(.easeOut(duration: 0.12)) {
+        isHovering = hovering
       }
     }
-    .padding(.vertical, 4)
+    .contextMenu {
+      Button(action: onRename) {
+        Label("Rename", systemImage: "pencil")
+      }
+      Divider()
+      Button(role: .destructive, action: onDelete) {
+        Label("Delete", systemImage: "trash")
+      }
+    }
   }
 }
 
@@ -170,9 +341,9 @@ struct NotesView: View {
   @ObservedObject private var photoStore = MacPhotoStore.shared
   @ObservedObject private var selection = NoteSelectionState.shared
   @Shared(.hexSettings) private var hexSettings
-  @State private var isManuallyRefreshing = false
   @State private var showDeleteConfirmation = false
   @State private var noteToDelete: UUID?
+  @State private var showingAskQuill = false
 
   private var sortedNotes: [SyncableNote] {
     cloudSync.cloudNotes.sorted { $0.updatedAt > $1.updatedAt }
@@ -186,12 +357,7 @@ struct NotesView: View {
           note: $cloudSync.cloudNotes[noteIndex],
           photoStore: photoStore,
           isDirty: cloudSync.dirtyNoteIDs.contains(id),
-          onSync: { syncNote(id: id) },
-          onMarkDirty: { cloudSync.markDirtyAndScheduleUpload(id: id) },
-          onDelete: {
-            noteToDelete = id
-            showDeleteConfirmation = true
-          }
+          onMarkDirty: { cloudSync.markDirtyAndScheduleUpload(id: id) }
         )
       } else {
         notesLandingView
@@ -199,11 +365,35 @@ struct NotesView: View {
     }
     .toolbar {
       ToolbarItemGroup(placement: .primaryAction) {
+        Button { showingAskQuill = true } label: {
+          Label("Ask Quill", systemImage: "sparkle.magnifyingglass")
+        }
+        .help("Ask Quill about your notes")
+        .disabled(cloudSync.cloudNotes.isEmpty)
+        Menu {
+          Button("Delete Note", role: .destructive) {
+            noteToDelete = selection.selectedNoteID
+            showDeleteConfirmation = noteToDelete != nil
+          }
+          .disabled(selection.selectedNoteID == nil)
+        } label: {
+          Label("More", systemImage: "ellipsis.circle")
+        }
+        .help("More note actions")
+        .disabled(selection.selectedNoteID == nil)
         newNoteButton
       }
     }
     .task {
       refresh()
+    }
+    .sheet(isPresented: $showingAskQuill) {
+      MacAskQuillView(
+        notes: cloudSync.cloudNotes,
+        focusedNoteID: selection.selectedNoteID,
+        provider: hexSettings.aiProvider,
+        onOpenCitation: { selection.selectedNoteID = $0 }
+      )
     }
     .alert("Delete Note", isPresented: $showDeleteConfirmation) {
       Button("Cancel", role: .cancel) {
@@ -243,13 +433,6 @@ struct NotesView: View {
           .foregroundStyle(.secondary)
       }
       Spacer()
-
-      // Cloud Sync panel — only when Google is connected
-      if cloudSync.isGoogleAuthorized() {
-        cloudSyncPanel
-          .padding(.horizontal, 60)
-          .padding(.bottom, 24)
-      }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
@@ -273,82 +456,6 @@ struct NotesView: View {
     }
   }
 
-  // MARK: - Cloud Sync panel
-
-  @ViewBuilder
-  private var cloudSyncPanel: some View {
-    VStack(spacing: 12) {
-      Toggle(isOn: Binding(
-        get: { hexSettings.cloudSyncEnabled },
-        set: { newValue in $hexSettings.withLock { $0.cloudSyncEnabled = newValue } }
-      )) {
-        Label("Sync to Cloud", systemImage: "icloud.and.arrow.up")
-      }
-      .toggleStyle(.switch)
-
-      if hexSettings.cloudSyncEnabled {
-        Button {
-          refresh()
-        } label: {
-          HStack {
-            Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
-            Spacer()
-            if case .syncing = cloudSync.status {
-              ProgressView().controlSize(.small)
-            }
-          }
-        }
-        .disabled(isSyncing)
-
-        syncStatusText
-      }
-
-      Text("When on, your notes and transcriptions sync to Google Cloud so you can access them across devices.")
-        .font(.caption)
-        .foregroundStyle(.tertiary)
-    }
-    .padding(16)
-    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: QuillDesign.Radius.card))
-  }
-
-  @ViewBuilder
-  private var syncStatusText: some View {
-    switch cloudSync.status {
-    case .idle:
-      Label("No sync since launch", systemImage: "clock")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-    case .syncing:
-      Label("Syncing…", systemImage: "arrow.triangle.2.circlepath")
-        .font(.caption)
-        .foregroundStyle(.blue)
-    case .completed(let up, let down, let at):
-      let when = at.formatted(.relative(presentation: .named))
-      HStack(spacing: 12) {
-        Label {
-          if up == 0 && down == 0 {
-            Text("Up to date")
-          } else {
-            Text("\(up)↑ \(down)↓")
-          }
-        } icon: {
-          Image(systemName: "checkmark.circle.fill")
-            .foregroundStyle(.green)
-        }
-        .font(.caption)
-        Spacer()
-        Text(when)
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-      }
-    case .failed(let msg):
-      Label(msg, systemImage: "exclamationmark.triangle.fill")
-        .font(.caption)
-        .foregroundStyle(.red)
-        .lineLimit(2)
-    }
-  }
-
   // MARK: - Toolbar buttons
 
   @ViewBuilder
@@ -360,23 +467,14 @@ struct NotesView: View {
     }
     .help("New Note")
     .accessibilityLabel("New Note")
-  }
-
-  private var isSyncing: Bool {
-    if case .syncing = cloudSync.status { return true }
-    return false
+    .keyboardShortcut("n", modifiers: .command)
   }
 
   private func refresh() {
+    guard hexSettings.cloudSyncEnabled, cloudSync.isGoogleAuthorized() else { return }
     @Shared(.transcriptionHistory) var history: TranscriptionHistory
     Task {
       await cloudSync.syncTranscripts(history.history)
-    }
-  }
-
-  private func syncNote(id: UUID) {
-    Task {
-      await cloudSync.uploadDirtyNote(id: id)
     }
   }
 
@@ -401,17 +499,7 @@ struct NotesView: View {
     if selection.selectedNoteID == id {
       selection.selectedNoteID = nil
     }
-    // Capture the photo ids BEFORE the note leaves the array — the cloud
-    // cleanup needs them (mirrors iOS NotesStore.deleteNote).
-    let photoIDs = cloudSync.cloudNotes
-      .first { $0.id == id }
-      .map { NoteContent.photoIDs(in: $0.body) } ?? []
-    cloudSync.cloudNotes.removeAll { $0.id == id }
-    cloudSync.clearDirty(id: id)
-    MacPhotoStore.shared.deleteAllPhotos(noteID: id)
-    Task {
-      await cloudSync.deleteNoteFromCloud(id: id, photoIDs: photoIDs)
-    }
+    cloudSync.deleteNote(id: id)
   }
 }
 
@@ -421,9 +509,7 @@ private struct NoteEditorView: View {
   @Binding var note: SyncableNote
   @ObservedObject var photoStore: MacPhotoStore
   let isDirty: Bool
-  let onSync: () -> Void
   let onMarkDirty: () -> Void
-  let onDelete: () -> Void
 
   @State private var editingTitle: String = ""
   @State private var editingBody: String = ""
@@ -431,6 +517,9 @@ private struct NoteEditorView: View {
   @State private var textViewRef: NSTextView?
   @FocusState private var bodyFocused: Bool
   @StateObject private var dictation = NoteDictationController()
+  @State private var dictationDraftRange: NSRange?
+  @State private var dictationDraftPrefix = ""
+  @ObservedObject private var cloudSync = MacCloudSync.shared
   @ObservedObject private var selection = NoteSelectionState.shared
   /// AI cleanup for note dictations (.notes mode: structured bullets).
   /// Persisted — it's a working style, not a per-recording choice.
@@ -506,6 +595,11 @@ private struct NoteEditorView: View {
       consumePendingDictation()
       fetchMissingPhotos()
     }
+    .onChange(of: note.title) { _, newTitle in
+      if editingTitle != newTitle {
+        editingTitle = newTitle
+      }
+    }
     .onChange(of: selection.pendingDictationNoteID) { _, _ in
       consumePendingDictation()
     }
@@ -527,7 +621,7 @@ private struct NoteEditorView: View {
           !dictation.isRecording, !dictation.isProcessing
     else { return }
     selection.pendingDictationNoteID = nil
-    dictation.toggle(cleanup: cleanupDictation) { text in insertDictation(text) }
+    toggleNoteDictation()
   }
 
   // MARK: - Title
@@ -1015,9 +1109,7 @@ private struct NoteEditorView: View {
       .accessibilityValue(cleanupDictation ? "On" : "Off")
 
       Button {
-        dictation.toggle(cleanup: cleanupDictation) { text in
-          insertDictation(text)
-        }
+        toggleNoteDictation()
       } label: {
         Image(systemName: dictation.isRecording ? "stop.circle.fill" : "mic.fill")
           .foregroundStyle(dictation.isRecording ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
@@ -1034,35 +1126,39 @@ private struct NoteEditorView: View {
         .foregroundStyle(.tertiary)
         .monospacedDigit()
 
-      if isDirty {
-        Button {
-          onSync()
-        } label: {
-          Label("Sync", systemImage: "arrow.triangle.2.circlepath")
-            .font(.caption.bold())
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(.orange)
-        .controlSize(.small)
-      }
-
-      Button(role: .destructive) {
-        onDelete()
-      } label: {
-        Image(systemName: "trash")
-      }
-      .buttonStyle(.borderless)
-      .help("Delete this note")
-      .accessibilityLabel("Delete this note")
+      syncStateLabel
+        .font(.caption)
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 8)
     .background(.bar)
   }
 
+  @ViewBuilder
+  private var syncStateLabel: some View {
+    if !hexSettings.cloudSyncEnabled || !cloudSync.isGoogleAuthorized() {
+      Label("On this Mac", systemImage: "internaldrive")
+        .foregroundStyle(.tertiary)
+    } else if case .failed = cloudSync.status {
+      Label("Sync issue", systemImage: "exclamationmark.icloud")
+        .foregroundStyle(.orange)
+        .help("Open Settings → Account to retry cloud sync")
+    } else if isDirty {
+      Label("Saving…", systemImage: "arrow.triangle.2.circlepath.icloud")
+        .foregroundStyle(.secondary)
+    } else {
+      Label("Synced", systemImage: "checkmark.icloud")
+        .foregroundStyle(.tertiary)
+    }
+  }
+
   /// Inserts a finished dictation at the caret (or appends when the text
   /// view isn't available), with sensible separation from surrounding text.
   private func insertDictation(_ text: String) {
+    if dictationDraftRange != nil {
+      replaceDictationDraft(with: text, isFinal: true)
+      return
+    }
     if let tv = textViewRef {
       let ns = tv.string as NSString
       let sel = tv.selectedRange()
@@ -1080,6 +1176,57 @@ private struct NoteEditorView: View {
       tv.insertText(payload, replacementRange: sel)
     } else {
       editingBody = editingBody.isEmpty ? text : editingBody + "\n\n" + text
+    }
+  }
+
+  private func toggleNoteDictation() {
+    if !dictation.isRecording {
+      dictationDraftRange = nil
+      dictationDraftPrefix = ""
+    }
+    dictation.toggle(
+      cleanup: cleanupDictation,
+      onPartial: { partial in replaceDictationDraft(with: partial, isFinal: false) },
+      insert: { final in insertDictation(final) }
+    )
+  }
+
+  /// Keeps live words in the note itself. The provisional range is replaced
+  /// in place as recognition hypotheses change, then replaced exactly once by
+  /// the authoritative local-model transcript.
+  private func replaceDictationDraft(with text: String, isFinal: Bool) {
+    guard let tv = textViewRef, let storage = tv.textStorage else {
+      if isFinal { editingBody = editingBody.isEmpty ? text : editingBody + "\n\n" + text }
+      return
+    }
+
+    let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !clean.isEmpty else { return }
+    if let range = dictationDraftRange {
+      let replacement = dictationDraftPrefix + clean
+      storage.replaceCharacters(in: range, with: replacement)
+      dictationDraftRange = NSRange(location: range.location, length: (replacement as NSString).length)
+    } else {
+      let source = storage.string as NSString
+      let selection = tv.selectedRange()
+      if selection.location > 0 {
+        let previous = Character(UnicodeScalar(source.character(at: selection.location - 1)) ?? " ")
+        if previous.isNewline { dictationDraftPrefix = "" }
+        else if selection.location == source.length { dictationDraftPrefix = "\n\n" }
+        else if !previous.isWhitespace { dictationDraftPrefix = " " }
+      }
+      let replacement = dictationDraftPrefix + clean
+      storage.replaceCharacters(in: selection, with: replacement)
+      dictationDraftRange = NSRange(location: selection.location, length: (replacement as NSString).length)
+    }
+
+    if let range = dictationDraftRange {
+      tv.setSelectedRange(NSRange(location: range.location + range.length, length: 0))
+    }
+    editingBody = storage.string
+    if isFinal {
+      dictationDraftRange = nil
+      dictationDraftPrefix = ""
     }
   }
 

@@ -19,6 +19,7 @@ private let mcpExecLogger = HexLog.action
 enum MCPExecutionError: LocalizedError {
   case notAnMCPIntent
   case unknownServer(String)
+  case disabledTool(String)
 
   var errorDescription: String? {
     switch self {
@@ -26,6 +27,8 @@ enum MCPExecutionError: LocalizedError {
       "Not an MCP action"
     case .unknownServer(let name):
       "No connected MCP server named \u{201C}\(name)\u{201D} — check Settings → Agent"
+    case .disabledTool(let name):
+      "The MCP tool \u{201C}\(name)\u{201D} is disabled in Settings → Connections."
     }
   }
 }
@@ -44,6 +47,9 @@ enum MCPActionExecutor {
       $0.isEnabled && $0.name.caseInsensitiveCompare(serverName) == .orderedSame
     }) else {
       throw MCPExecutionError.unknownServer(serverName)
+    }
+    guard MCPToolAccessStore.isEnabled(serverID: server.id, toolName: toolName) else {
+      throw MCPExecutionError.disabledTool(toolName)
     }
 
     // OAuth access token (refreshed if needed) when the server is

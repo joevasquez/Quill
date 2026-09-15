@@ -151,6 +151,10 @@ struct GoogleAccountSectionView: View {
       }
     } else {
       connectedEmail = nil
+      var current = IntegrationConnectionStore.decode(connectedData)
+      current.remove(.gmail)
+      current.remove(.googleCalendar)
+      connectedData = IntegrationConnectionStore.encode(current)
     }
   }
 

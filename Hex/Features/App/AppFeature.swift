@@ -48,8 +48,10 @@ struct AppFeature {
     /// AI post-processing settings: API keys, modes, voice commands,
     /// inline edit, custom user-authored modes.
     case ai
-    /// Free vs Pro comparison + plan activation.
-    case plan
+    /// Identity, Free vs Pro, Google sign-in, and cross-device sync.
+    case account
+    /// Theme and recording-indicator presentation.
+    case appearance
     /// Integration connections (Todoist, Apple Reminders, Notion,
     /// Things, Slack, Linear). Frontend-only as of 0.9.x — connection
     /// state is persisted but send adapters land in a follow-up.
@@ -140,7 +142,7 @@ struct AppFeature {
           // No source app to reactivate — this action is triggered by
           // a user hotkey / menu click; the frontmost app at that
           // moment IS the target.
-          await pasteboard.paste(lastTranscript, nil)
+          _ = await pasteboard.paste(lastTranscript, nil)
         }
         
       case .transcription(.modelMissing):
@@ -194,7 +196,11 @@ struct AppFeature {
         // reopened after lunch isn't showing a stale morning feed.
         return .merge(
           .send(.checkPermissions),
-          .run { _ in await MacSuggestionsController.shared.refreshOnAppear() }
+          .run { _ in await MacSuggestionsController.shared.refreshOnAppear() },
+          .run { _ in
+            @Shared(.transcriptionHistory) var history: TranscriptionHistory
+            await MacCloudSync.shared.syncIfNeeded(history.history)
+          }
         )
 
       case .requestMicrophone:
@@ -405,74 +411,36 @@ struct AppFeature {
 
 }
 
-/// Top-level "mode" the sidebar is in. The user toggles between
-/// these via a segmented control at the top of the sidebar — when
-/// Settings is selected the sidebar lists configuration sub-tabs,
-/// when History is selected the sidebar collapses so the transcript
-/// list and detail get the full window width.
-private enum SidebarMode: String, CaseIterable, Identifiable {
-  case home, settings, history, actions, notes
-  var id: String { rawValue }
+/// Stable, app-level navigation. Contextual lists (notes and settings) live
+/// in the workspace beside this sidebar instead of replacing it.
+private enum PrimaryDestination: Hashable {
+  case home, notes, actions, history, settings
 }
 
 struct AppView: View {
   @Bindable var store: StoreOf<AppFeature>
-  @State private var columnVisibility = NavigationSplitViewVisibility.automatic
-  /// Resolved from `store.activeTab` so sub-tab clicks keep the
-  /// sidebar in the right mode without an extra source of truth.
-  private var sidebarMode: SidebarMode {
+  @State private var lastSettingsTab: AppFeature.ActiveTab = .general
+
+  private var primaryDestination: PrimaryDestination {
     switch store.state.activeTab {
-    case .home: .home
-    case .history: .history
-    case .actions: .actions
-    case .notes: .notes
-    default: .settings
+    case .home: return .home
+    case .notes: return .notes
+    case .actions: return .actions
+    case .history: return .history
+    default: return .settings
     }
   }
 
-  /// Home's destination row. Extracted from the `.toolbar` call site: with
-  /// four buttons inline the whole `detail:` switch stopped type-checking in
-  /// reasonable time.
-  @ToolbarContentBuilder
-  private var homeToolbar: some ToolbarContent {
-    ToolbarItemGroup(placement: .primaryAction) {
-      homeToolbarButton(.notes, label: "Notes", icon: "list.bullet", help: "Notes")
-      homeToolbarButton(
-        .actions, label: "Actions", icon: "bolt.badge.clock",
-        help: "Action history and traces"
-      )
-      homeToolbarButton(.history, label: "History", icon: "chart.bar.xaxis", help: "History")
-      homeToolbarButton(.general, label: "Settings", icon: "gearshape", help: "Settings")
-    }
-  }
-
-  private func homeToolbarButton(
-    _ tab: AppFeature.ActiveTab, label: String, icon: String, help: String
-  ) -> some View {
-    Button {
-      store.send(.setActiveTab(tab))
-    } label: {
-      Label(label, systemImage: icon)
-    }
-    .help(help)
-  }
-
-  /// "← Home" for every non-home pane — with the sidebar toggle gone,
-  /// Home is the hub and this is the way back.
-  private var backToHome: some ToolbarContent {
-    ToolbarItem(placement: .navigation) {
-      Button {
-        store.send(.setActiveTab(.home))
-      } label: {
-        Label("Home", systemImage: "chevron.left")
-      }
-      .help("Back to Home")
+  private var isSettingsTab: Bool {
+    switch store.state.activeTab {
+    case .general, .account, .appearance, .agent, .recording, .ai, .integrations: true
+    default: false
     }
   }
 
   var body: some View {
-    NavigationSplitView(columnVisibility: $columnVisibility) {
-      sidebarContent
+    NavigationSplitView {
+      primarySidebar
     } detail: {
       detailContent
     }
@@ -481,11 +449,8 @@ struct AppView: View {
     .onReceive(NotificationCenter.default.publisher(for: .openRecordingSettings)) { _ in
       store.send(.setActiveTab(.recording))
     }
-    // Home, History and Actions have no sidebar content — collapse the
-    // column entirely there; Settings (sub-tabs) and Notes (note list) keep it.
     .onChange(of: store.state.activeTab, initial: true) { _, newTab in
-      let hasSidebar = newTab != .home && newTab != .history && newTab != .actions
-      columnVisibility = hasSidebar ? .all : .detailOnly
+      if isSettingsTab { lastSettingsTab = newTab }
     }
     .sheet(isPresented: Binding(
       get: { !store.settings.hexSettings.hasCompletedOnboarding },
@@ -503,44 +468,64 @@ struct AppView: View {
     .enableInjection()
   }
 
-  /// Home is the navigation hub (toolbar icons + back buttons replace the
-  /// old segmented mode toggle), so the sidebar only exists where it carries
-  /// real content: Settings sub-tabs and the note list. Home, History and
-  /// Actions collapse it entirely via `columnVisibility`.
+  /// Persistent app navigation. Toolbars remain contextual to the current
+  /// destination instead of doubling as navigation controls.
   @ViewBuilder
-  private var sidebarContent: some View {
-      Group {
-        // Panes with no sidebar at all — also drop the window's
-        // sidebar-toggle button there so an empty column can't be summoned.
-        if sidebarMode == .home || sidebarMode == .history || sidebarMode == .actions {
-          VStack(alignment: .leading, spacing: 0) {}
-            .toolbar(removing: .sidebarToggle)
-        } else {
-          VStack(alignment: .leading, spacing: 0) {
-            if sidebarMode == .settings {
-              List(selection: $store.activeTab) {
-                tabRow(.general, label: "General", icon: "gearshape.fill", tint: .gray)
-                tabRow(.agent, label: agentTabLabel, icon: "sparkles", tint: .purple)
-                tabRow(.recording, label: "Recording", icon: "mic.fill", tint: .red)
-                tabRow(.ai, label: "AI Processing", icon: "wand.and.stars", tint: .blue)
-                tabRow(.integrations, label: "Integrations", icon: "app.connected.to.app.below.fill", tint: .teal)
-                tabRow(.plan, label: "Subscription", icon: "crown.fill", tint: .yellow)
-              }
-              .listStyle(.sidebar)
-            } else {
-              NotesSidebarList()
-            }
-          }
-        }
+  private var primarySidebar: some View {
+    VStack(spacing: 0) {
+      List {
+        primaryNavigationButton(.home, label: "Home", icon: "house")
+        primaryNavigationButton(.notes, label: "Notes", icon: "note.text")
+        primaryNavigationButton(.actions, label: "Actions", icon: "bolt.badge.clock")
+        primaryNavigationButton(.history, label: "History", icon: "clock.arrow.circlepath")
       }
-      .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 280)
+      .listStyle(.sidebar)
+
+      Divider()
+      primaryNavigationButton(.settings, label: "Settings", icon: "gearshape")
+        .padding(8)
+    }
+    .navigationTitle("Quill")
+    .navigationSplitViewColumnWidth(min: 155, ideal: 175, max: 220)
+  }
+
+  private func primaryNavigationButton(
+    _ destination: PrimaryDestination,
+    label: String,
+    icon: String
+  ) -> some View {
+    Button {
+      switch destination {
+      case .home: store.send(.setActiveTab(.home))
+      case .notes: store.send(.setActiveTab(.notes))
+      case .actions: store.send(.setActiveTab(.actions))
+      case .history: store.send(.setActiveTab(.history))
+      case .settings: store.send(.setActiveTab(lastSettingsTab))
+      }
+    } label: {
+      Label(label, systemImage: icon)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .padding(.horizontal, 8)
+    .padding(.vertical, 6)
+    .background(
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
+        .fill(primaryDestination == destination ? Color.accentColor.opacity(0.18) : Color.clear)
+    )
+    .accessibilityAddTraits(primaryDestination == destination ? .isSelected : [])
   }
 
   @ViewBuilder
   private var detailContent: some View {
+    if isSettingsTab {
+      settingsWorkspace
+    } else {
       switch store.state.activeTab {
       case .home:
         HomeView(
+          transcriptionStore: store.scope(state: \.transcription, action: \.transcription),
           openNote: { id in
             NoteSelectionState.shared.selectedNoteID = id
             store.send(.setActiveTab(.notes))
@@ -550,7 +535,52 @@ struct AppView: View {
           openNotesPane: { store.send(.setActiveTab(.notes)) }
         )
         .navigationTitle("Home")
-        .toolbar { homeToolbar }
+      case .notes:
+        notesWorkspace
+      case .history:
+        HistoryView(store: store.scope(state: \.history, action: \.history))
+          .navigationTitle("History")
+      case .actions:
+        ActionRunsView()
+          .navigationTitle("Actions")
+      case .general, .account, .appearance, .agent, .recording, .ai, .integrations:
+        EmptyView()
+      }
+    }
+  }
+
+  private var notesWorkspace: some View {
+    HSplitView {
+      NotesSidebarList()
+        .frame(minWidth: 210, idealWidth: 240, maxWidth: 300)
+      NotesView()
+        .frame(minWidth: 360)
+        .navigationTitle("Notes")
+    }
+  }
+
+  private var settingsWorkspace: some View {
+    HSplitView {
+      List(selection: $store.activeTab) {
+        tabRow(.general, label: "General", icon: "gearshape")
+        tabRow(.account, label: "Account", icon: "person.crop.circle")
+        tabRow(.appearance, label: "Appearance", icon: "paintbrush")
+        tabRow(.agent, label: agentTabLabel, icon: "sparkles")
+        tabRow(.recording, label: "Recording", icon: "mic")
+        tabRow(.ai, label: "AI Processing", icon: "wand.and.stars")
+        tabRow(.integrations, label: "Integrations", icon: "app.connected.to.app.below.fill")
+      }
+      .listStyle(.sidebar)
+      .frame(minWidth: 190, idealWidth: 220, maxWidth: 270)
+
+      settingsDetail
+        .frame(minWidth: 420)
+    }
+  }
+
+  @ViewBuilder
+  private var settingsDetail: some View {
+    switch store.state.activeTab {
       case .general:
         GeneralSettingsTabView(
           store: store.scope(state: \.settings, action: \.settings),
@@ -559,44 +589,31 @@ struct AppView: View {
           inputMonitoringPermission: store.inputMonitoringPermission
         )
         .navigationTitle("General")
-        .toolbar { backToHome }
+      case .account:
+        AccountSettingsTabView(store: store.scope(state: \.settings, action: \.settings))
+          .navigationTitle("Account")
+      case .appearance:
+        AppearanceSettingsTabView(store: store.scope(state: \.settings, action: \.settings))
+          .navigationTitle("Appearance")
       case .agent:
         AgentSettingsTabView(store: store.scope(state: \.settings, action: \.settings))
           .navigationTitle(agentTabLabel)
-          .toolbar { backToHome }
       case .recording:
         RecordingSettingsTabView(
           store: store.scope(state: \.settings, action: \.settings),
           microphonePermission: store.microphonePermission
         )
         .navigationTitle("Recording")
-        .toolbar { backToHome }
       case .ai:
         AISettingsTabView(store: store.scope(state: \.settings, action: \.settings))
           .navigationTitle("AI")
-          .toolbar { backToHome }
       case .integrations:
         IntegrationsSettingsTabView(store: store.scope(state: \.settings, action: \.settings))
           .navigationTitle("Integrations")
-          .toolbar { backToHome }
-      case .plan:
-        PlanSettingsTabView(store: store.scope(state: \.settings, action: \.settings))
-          .navigationTitle("Subscription")
-          .toolbar { backToHome }
-      case .history:
-        HistoryView(store: store.scope(state: \.history, action: \.history))
-          .navigationTitle("History")
-          .toolbar { backToHome }
-      case .actions:
-        ActionRunsView()
-          .navigationTitle("Actions")
-          .toolbar { backToHome }
-      case .notes:
-        NotesView()
-          .navigationTitle("Notes")
-          .toolbar { backToHome }
+      case .home, .notes, .history, .actions:
+        EmptyView()
       }
-    }
+  }
 
   /// Extracted from the `.sheet` call site along with the rest of the split
   /// view's body — inline it and `body` stops type-checking in reasonable time.
@@ -624,10 +641,10 @@ struct AppView: View {
 
   /// Sidebar row builder. Encodes the consistent button-as-row
   /// pattern used by every entry in the navigation list and keeps
-  /// the call sites readable. Icons render in System Settings-style
-  /// tinted tiles so the list scans by color as well as label.
+  /// the call sites readable. One monochrome symbol language matches the
+  /// primary sidebar; Quill violet appears only on the active destination.
   @ViewBuilder
-  private func tabRow(_ tab: AppFeature.ActiveTab, label: String, icon: String, tint: Color) -> some View {
+  private func tabRow(_ tab: AppFeature.ActiveTab, label: String, icon: String) -> some View {
     Button {
       store.send(.setActiveTab(tab))
     } label: {
@@ -636,13 +653,10 @@ struct AppView: View {
           .font(.system(size: 13))
       } icon: {
         Image(systemName: icon)
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(.white)
+          .symbolRenderingMode(.monochrome)
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(store.state.activeTab == tab ? QuillDesign.brand.color() : Color.primary)
           .frame(width: 22, height: 22)
-          .background(
-            RoundedRectangle(cornerRadius: QuillDesign.Radius.chip, style: .continuous)
-              .fill(tint.gradient)
-          )
       }
     }
     .buttonStyle(.plain)

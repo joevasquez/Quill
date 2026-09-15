@@ -62,45 +62,58 @@ extension AIProcessingClient: DependencyKey {
         let useProProxy = false
         #endif
 
-        let response: String
+        let chunks = skipTranscriptWrapping ? [text] : LongTextChunker.chunks(text)
+        var formattedChunks: [String] = []
+        formattedChunks.reserveCapacity(chunks.count)
         do {
-          // Pro mode: route through the server-side proxy (no local API key needed).
-          if useProProxy {
-            #if os(macOS)
-            @Dependency(\.googleOAuth) var googleOAuth
-            guard let accessToken = try? await googleOAuth.refreshIfNeeded() else {
-              aiLogger.warning("Pro mode active but Google not signed in; skipping AI processing")
-              return text
-            }
-            response = try await ProAIProxyClient.process(
-              text: text,
-              systemPrompt: enrichedPrompt,
-              accessToken: accessToken,
-              skipTranscriptWrapping: skipTranscriptWrapping
-            )
-            #else
-            response = text // unreachable — useProProxy is constant false on iOS
-            #endif
-          } else {
-            switch provider {
-            case .openAI:
-              guard let apiKey = await keychain.read(KeychainKey.openAIAPIKey),
-                    !apiKey.isEmpty
-              else {
-                aiLogger.warning("OpenAI API key not configured; skipping AI processing")
+          for chunk in chunks {
+            let chunkResponse: String
+            // Pro mode: route through the server-side proxy (no local API key needed).
+            if useProProxy {
+              #if os(macOS)
+              @Dependency(\.googleOAuth) var googleOAuth
+              guard let accessToken = try? await googleOAuth.refreshIfNeeded() else {
+                aiLogger.warning("Pro mode active but Google not signed in; skipping AI processing")
                 return text
               }
-              response = try await callOpenAI(text: text, systemPrompt: enrichedPrompt, apiKey: apiKey, skipTranscriptWrapping: skipTranscriptWrapping)
+              chunkResponse = try await ProAIProxyClient.process(
+                text: chunk,
+                systemPrompt: enrichedPrompt,
+                accessToken: accessToken,
+                skipTranscriptWrapping: skipTranscriptWrapping
+              )
+              #else
+              chunkResponse = chunk // unreachable — useProProxy is constant false on iOS
+              #endif
+            } else {
+              switch provider {
+              case .openAI:
+                guard let apiKey = await keychain.read(KeychainKey.openAIAPIKey),
+                      !apiKey.isEmpty
+                else {
+                  aiLogger.warning("OpenAI API key not configured; skipping AI processing")
+                  return text
+                }
+                chunkResponse = try await callOpenAI(text: chunk, systemPrompt: enrichedPrompt, apiKey: apiKey, skipTranscriptWrapping: skipTranscriptWrapping)
 
-            case .anthropic:
-              guard let apiKey = await keychain.read(KeychainKey.anthropicAPIKey),
-                    !apiKey.isEmpty
-              else {
-                aiLogger.warning("Anthropic API key not configured; skipping AI processing")
-                return text
+              case .anthropic:
+                guard let apiKey = await keychain.read(KeychainKey.anthropicAPIKey),
+                      !apiKey.isEmpty
+                else {
+                  aiLogger.warning("Anthropic API key not configured; skipping AI processing")
+                  return text
+                }
+                let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                chunkResponse = try await callAnthropic(text: chunk, systemPrompt: enrichedPrompt, apiKey: trimmedKey, skipTranscriptWrapping: skipTranscriptWrapping)
               }
-              let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-              response = try await callAnthropic(text: text, systemPrompt: enrichedPrompt, apiKey: trimmedKey, skipTranscriptWrapping: skipTranscriptWrapping)
+            }
+
+            let trimmed = chunkResponse.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || (!skipTranscriptWrapping && TranscriptRefusalDetector.isRefusal(trimmed)) {
+              aiLogger.warning("One AI formatting chunk was unusable; preserving its raw transcript")
+              formattedChunks.append(chunk)
+            } else {
+              formattedChunks.append(trimmed)
             }
           }
         } catch {
@@ -115,6 +128,8 @@ extension AIProcessingClient: DependencyKey {
           )
           throw error
         }
+
+        let response = formattedChunks.joined(separator: "\n\n")
 
         // Safety net: if the model still treated the transcript as a
         // conversation (e.g. answered a question instead of
@@ -154,6 +169,7 @@ extension AIProcessingClient: DependencyKey {
 private func isProModeActive() -> Bool {
   @Shared(.hexSettings) var hexSettings: HexSettings
   guard hexSettings.selectedPlan == "pro" else { return false }
+  guard !UserDefaults.standard.bool(forKey: GoogleOAuthClient.reconnectRequiredDefaultsKey) else { return false }
   let email = UserDefaults.standard.string(forKey: GoogleOAuthClient.googleAccountEmailDefaultsKey)
   return email?.isEmpty == false
 }
@@ -183,7 +199,7 @@ private func callOpenAI(text: String, systemPrompt: String, apiKey: String, skip
   request.httpMethod = "POST"
   request.setValue("application/json", forHTTPHeaderField: "Content-Type")
   request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-  request.timeoutInterval = 15
+  request.timeoutInterval = 60
 
   let userMessage = skipTranscriptWrapping ? text : TranscriptWrapper.wrap(text)
 
@@ -236,7 +252,7 @@ private func callAnthropic(text: String, systemPrompt: String, apiKey: String, s
   request.setValue("application/json", forHTTPHeaderField: "Content-Type")
   request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
   request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-  request.timeoutInterval = 15
+  request.timeoutInterval = 60
 
   let userMessage = skipTranscriptWrapping ? text : TranscriptWrapper.wrap(text)
 

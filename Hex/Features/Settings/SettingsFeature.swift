@@ -959,7 +959,10 @@ struct SettingsFeature {
 
       case let .setCloudSyncEnabled(enabled):
         state.$hexSettings.withLock { $0.cloudSyncEnabled = enabled }
-        return .none
+        if enabled {
+          return .send(.syncNow)
+        }
+        return .run { _ in await MacCloudSync.shared.pauseAutomaticSync() }
 
       case .syncNow:
         let history = state.transcriptionHistory.history

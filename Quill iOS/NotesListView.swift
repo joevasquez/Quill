@@ -23,6 +23,7 @@ struct NotesListView: View {
   /// pushes the note detail — home is a launcher now, so just setting the
   /// active note and dismissing lands the user on a screen that doesn't
   /// show the note at all.
+  var embedded = false
   var onOpenNote: ((UUID) -> Void)?
   var onAsk: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
@@ -93,6 +94,10 @@ struct NotesListView: View {
     }
   }
 
+  private func closeList() {
+    if !embedded { dismiss() }
+  }
+
   // MARK: - Header
 
   /// Compose left, "Notes" centred, close right — then the search field.
@@ -102,7 +107,7 @@ struct NotesListView: View {
         roundButton("square.and.pencil", "New note") {
           let new = store.startNewNote(location: nil)
           UINotificationFeedbackGenerator().notificationOccurred(.success)
-          dismiss()
+          closeList()
           onOpenNote?(new.id)
         }
 
@@ -117,14 +122,14 @@ struct NotesListView: View {
         HStack(spacing: 8) {
           if let onAsk {
             roundButton("sparkle.magnifyingglass", "Ask Quill") {
-              dismiss()
+              closeList()
               Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(250))
                 onAsk()
               }
             }
           }
-          roundButton("xmark", "Close") { dismiss() }
+          roundButton(embedded ? "chevron.left" : "xmark", embedded ? "Back" : "Close") { dismiss() }
         }
       }
 
@@ -205,7 +210,7 @@ struct NotesListView: View {
               onTap: {
                 store.setActiveNote(id: note.id)
                 UISelectionFeedbackGenerator().selectionChanged()
-                dismiss()
+                closeList()
                 onOpenNote?(note.id)
               },
               onRename: {

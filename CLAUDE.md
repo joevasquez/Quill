@@ -545,6 +545,12 @@ The iOS target imports `HexCore` for:
 
 macOS-only clients (`SleepManagementClient`, `PermissionClient`) have iOS stub `liveValue`s so `HexCore` compiles for both platforms.
 
+### Sidebar and note editing
+
+`ContentView` uses an independently controlled sidebar overlay on compact iPhone layouts and `NavigationSplitView` on regular layouts. Do not couple the iPhone sidebar to `preferredCompactColumn` alongside a pushed detail `NavigationStack`: reopening stopped working after navigation. The sidebar uses the same `backgroundGradient` as the main screen, with transparent list rows, New Note at the top, and Settings pinned below the list. Home and the Notes list expose sidebar access; note detail and Suggestions intentionally do not.
+
+`NoteDetailView` enters inline `MarkdownTextEditorIOS` editing when the user taps note text. Changes save through `NotesStore.updateBody`; Done returns to reading. The header menu stays available and contains Ask, Add Picture, Share, and Delete Note (with confirmation). Photo cleanup waits until editing ends, and deletion uses the store's existing local/cloud deletion path.
+
 ### Settings Model
 
 iOS uses `@AppStorage` with plain `UserDefaults` keys (namespaced as `quill.*`), **not** the macOS `HexSettings` struct. Keep the two in sync manually if adding shared settings.

@@ -18,6 +18,7 @@ import UIKit
 
 struct MarkdownTextEditorIOS: UIViewRepresentable {
   @Binding var text: String
+  var focusOnAppear = false
 
   func makeCoordinator() -> Coordinator {
     Coordinator(self)
@@ -39,6 +40,9 @@ struct MarkdownTextEditorIOS: UIViewRepresentable {
     tv.inputAccessoryView = context.coordinator.makeToolbar()
     tv.text = text
     Coordinator.applyHighlight(tv)
+    if focusOnAppear {
+      DispatchQueue.main.async { tv.becomeFirstResponder() }
+    }
     return tv
   }
 

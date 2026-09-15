@@ -26,7 +26,7 @@ struct PasteboardClient {
     /// settle before inserting text, so pastes reliably land in the
     /// user's intended app even when they've Cmd-Tabbed to a different
     /// window while Whisper / AI post-processing was running.
-    var paste: @Sendable (String, String?) async -> Void
+    var paste: @Sendable (String, String?) async -> DictationPasteOutcome = { _, _ in .unverified }
     var copy: @Sendable (String) async -> Void
     var sendKeyboardCommand: @Sendable (KeyboardCommand) async -> Void
 }
@@ -90,14 +90,19 @@ struct PasteboardClientLive {
     }
 
     @MainActor
-    func paste(text: String, sourceAppBundleID: String?) async {
+    func paste(text: String, sourceAppBundleID: String?) async -> DictationPasteOutcome {
         // Before doing anything, bring the user's intended target app
         // back to front. Without this, a paste that lands 1-3s after
         // the hotkey release (Whisper + AI post-processing take time)
         // goes to whichever app the user Cmd-Tabbed to during the
         // wait — not the app they were dictating into. See the file's
         // `reactivateSourceApp` for the full rationale.
-        await reactivateSourceApp(bundleID: sourceAppBundleID)
+        guard await reactivateSourceApp(bundleID: sourceAppBundleID) else {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+            return .targetUnavailable
+        }
 
         // Hard refuse to paste into Quill itself. If the user has our
         // Settings / History / menu bar popover frontmost when the
@@ -114,7 +119,7 @@ struct PasteboardClientLive {
             )
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
-            return
+            return .targetUnavailable
         }
 
         let targetBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
@@ -123,10 +128,12 @@ struct PasteboardClientLive {
             pasteboardLogger.info("Using \(pasteDelay)ms clipboard paste delay for \(targetBundleID, privacy: .public)")
         }
 
+        let outcome: DictationPasteOutcome
         if hexSettings.useClipboardPaste {
-            await pasteWithClipboard(text, clipboardPasteDelayMs: pasteDelay)
+            outcome = await pasteWithClipboard(text, clipboardPasteDelayMs: pasteDelay)
         } else {
             simulateTypingWithAppleScript(text)
+            outcome = .unverified
         }
 
         // After either path, make sure the clipboard contains the
@@ -152,6 +159,7 @@ struct PasteboardClientLive {
                 pasteboardLogger.debug("Synced clipboard to transcription (post-paste safety)")
             }
         }
+        return outcome
     }
 
     /// Bring the user's recording-time target app back to front so
@@ -162,23 +170,23 @@ struct PasteboardClientLive {
     /// (long recordings + AI post-processing) where the user is very
     /// likely to have switched contexts during the wait.
     @MainActor
-    private func reactivateSourceApp(bundleID: String?) async {
+    private func reactivateSourceApp(bundleID: String?) async -> Bool {
         guard let bundleID, !bundleID.isEmpty else {
             pasteboardLogger.debug("No source app bundle ID; skipping reactivation")
-            return
+            return true
         }
         // If we are the frontmost app (e.g. the user was recording
         // *into* Quill, or Settings is open), don't reactivate — any
         // paste should go to whatever is front. The Quill-refuse
         // guard above handles the pathological case.
-        if bundleID == Bundle.main.bundleIdentifier { return }
+        if bundleID == Bundle.main.bundleIdentifier { return true }
 
         let running = NSRunningApplication.runningApplications(
             withBundleIdentifier: bundleID
         )
         guard let app = running.first else {
-            pasteboardLogger.info("Source app \(bundleID) no longer running; pasting into whatever is front")
-            return
+            pasteboardLogger.notice("Source app \(bundleID) is no longer running; keeping dictation in Quill")
+            return false
         }
 
         // Already frontmost? Still nudge focus + short wait — this
@@ -197,6 +205,7 @@ struct PasteboardClientLive {
         // than ~80ms and AX frequently reads the stale focused
         // element.
         try? await Task.sleep(for: .milliseconds(120))
+        return NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID
     }
     
     @MainActor
@@ -318,7 +327,7 @@ struct PasteboardClientLive {
     }
 
     @MainActor
-    func pasteWithClipboard(_ text: String, clipboardPasteDelayMs: Int = 0) async {
+    func pasteWithClipboard(_ text: String, clipboardPasteDelayMs: Int = 0) async -> DictationPasteOutcome {
         // Check Accessibility permission once. Both the AX-insertion
         // path AND the Cmd+V injection path require it (CGEvent.post
         // silently fails without AX trust). If denied, we can still
@@ -344,7 +353,7 @@ struct PasteboardClientLive {
         if hasAXPermission,
            (try? Self.insertTextAtCursor(text)) != nil {
             pasteboardLogger.debug("Pasted via Accessibility (verified, clipboard untouched)")
-            return
+            return .inserted
         }
 
         if hasAXPermission {
@@ -398,6 +407,7 @@ struct PasteboardClientLive {
                 pasteboardLogger.debug("Restored previous clipboard contents after paste")
             }
         }
+        return hasAXPermission ? .unverified : .clipboardOnly
     }
 
     @MainActor

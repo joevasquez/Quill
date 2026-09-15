@@ -35,6 +35,7 @@ struct RecordingClient {
   var warmUpRecorder: @Sendable () async -> Void = {}
   var cleanup: @Sendable () async -> Void = {}
   var snapshotCurrentRecording: @Sendable () async -> URL? = { nil }
+  var checkpointCurrentRecording: @Sendable (URL) async -> Bool = { _ in false }
 }
 
 extension RecordingClient: DependencyKey {
@@ -52,7 +53,8 @@ extension RecordingClient: DependencyKey {
       getDefaultInputDeviceName: { await live.getDefaultInputDeviceName() },
       warmUpRecorder: { await live.warmUpRecorder() },
       cleanup: { await live.cleanup() },
-      snapshotCurrentRecording: { await live.snapshotCurrentRecording() }
+      snapshotCurrentRecording: { await live.snapshotCurrentRecording() },
+      checkpointCurrentRecording: { await live.checkpointCurrentRecording(to: $0) }
     )
   }
 }
@@ -1519,6 +1521,79 @@ actor RecordingClientLive {
       recordingLogger.warning("Failed to snapshot recording: \(error.localizedDescription)")
       return nil
     }
+  }
+
+  /// Appends only newly captured WAV bytes into a durable recovery file.
+  /// The header is committed last, so an interruption leaves the previous
+  /// checkpoint playable instead of corrupting it.
+  func checkpointCurrentRecording(to destination: URL) -> Bool {
+    guard let sourceURL = activeRecordingSourceURL() else {
+      recordingLogger.debug("checkpointCurrentRecording: no active recording URL")
+      return false
+    }
+
+    do {
+      let fm = FileManager.default
+      try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+      if !fm.fileExists(atPath: destination.path) {
+        _ = fm.createFile(atPath: destination.path, contents: nil)
+      }
+
+      let source = try FileHandle(forReadingFrom: sourceURL)
+      let target = try FileHandle(forUpdating: destination)
+      defer {
+        try? source.close()
+        try? target.close()
+      }
+
+      let sourceSize = try source.seekToEnd()
+      var targetSize = try target.seekToEnd()
+      guard sourceSize > 44 else { return false }
+      if targetSize > sourceSize || targetSize < 44 {
+        try target.truncate(atOffset: 0)
+        targetSize = 0
+      }
+
+      if sourceSize > targetSize {
+        try source.seek(toOffset: targetSize)
+        try target.seek(toOffset: targetSize)
+        var remaining = sourceSize - targetSize
+        while remaining > 0 {
+          let count = Int(min(remaining, 256 * 1024))
+          guard let data = try source.read(upToCount: count), !data.isEmpty else { break }
+          try target.write(contentsOf: data)
+          remaining -= UInt64(data.count)
+        }
+      }
+
+      let committedSize = try target.seekToEnd()
+      guard committedSize > 44 else { return false }
+      try target.synchronize()
+      try Self.patchWAVHeader(target, fileSize: committedSize)
+      try target.synchronize()
+      recordingLogger.debug("Incremental recovery checkpoint committed (\(committedSize) bytes)")
+      return true
+    } catch {
+      recordingLogger.warning("Incremental recovery checkpoint failed: \(error.localizedDescription)")
+      return false
+    }
+  }
+
+  private func activeRecordingSourceURL() -> URL? {
+    guard let session = activeRecordingSession else { return nil }
+    switch session.backend {
+    case .captureEngine: return captureController.activeRecordingURL
+    case .recorderFallback: return recordingURL
+    }
+  }
+
+  private static func patchWAVHeader(_ handle: FileHandle, fileSize: UInt64) throws {
+    let riffSize = UInt32(clamping: fileSize - 8).littleEndian
+    let dataSize = UInt32(clamping: fileSize - 44).littleEndian
+    try handle.seek(toOffset: 4)
+    try handle.write(contentsOf: withUnsafeBytes(of: riffSize) { Data($0) })
+    try handle.seek(toOffset: 40)
+    try handle.write(contentsOf: withUnsafeBytes(of: dataSize) { Data($0) })
   }
 }
 
