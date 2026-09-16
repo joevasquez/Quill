@@ -115,33 +115,60 @@ struct MarkdownTextEditorIOS: UIViewRepresentable {
 
     // MARK: - Formatting toolbar
 
-    func makeToolbar() -> UIToolbar {
-      let toolbar = UIToolbar(frame: CGRect(x: 0, y: 0, width: 320, height: 44))
-      toolbar.items = [
-        button("bold") { [weak self] in self?.wrapSelection(prefix: "**", suffix: "**") },
-        button("italic") { [weak self] in self?.wrapSelection(prefix: "_", suffix: "_") },
-        button("strikethrough") { [weak self] in self?.wrapSelection(prefix: "~~", suffix: "~~") },
-        button("chevron.left.forwardslash.chevron.right") { [weak self] in self?.wrapSelection(prefix: "`", suffix: "`") },
-        .flexibleSpace(),
-        button("number") { [weak self] in self?.insertAtLineStart("# ") },
-        button("list.bullet") { [weak self] in self?.insertAtLineStart("- ") },
-        button("checklist") { [weak self] in self?.insertAtLineStart("- [ ] ") },
-        button("list.number") { [weak self] in self?.insertAtLineStart("1. ") },
-        button("text.quote") { [weak self] in self?.insertAtLineStart("> ") },
-        .flexibleSpace(),
-        UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in
-          self?.textView?.resignFirstResponder()
-        }),
-      ]
-      toolbar.sizeToFit()
-      return toolbar
+    func makeToolbar() -> UIView {
+      // A scrolling accessory avoids compressing UIKit bar-button wrappers
+      // to zero width on narrow keyboards. Done remains outside the scroller.
+      let accessory = UIView(frame: CGRect(x: 0, y: 0, width: 320, height: 44))
+      accessory.autoresizingMask = [.flexibleWidth]
+      accessory.backgroundColor = .secondarySystemBackground
+      let scroll = UIScrollView()
+      scroll.showsHorizontalScrollIndicator = false
+      scroll.translatesAutoresizingMaskIntoConstraints = false
+      let row = UIStackView(arrangedSubviews: [
+        button("bold", "Bold") { [weak self] in self?.wrapSelection(prefix: "**", suffix: "**") },
+        button("italic", "Italic") { [weak self] in self?.wrapSelection(prefix: "_", suffix: "_") },
+        button("strikethrough", "Strikethrough") { [weak self] in self?.wrapSelection(prefix: "~~", suffix: "~~") },
+        button("chevron.left.forwardslash.chevron.right", "Code") { [weak self] in self?.wrapSelection(prefix: "`", suffix: "`") },
+        button("number", "Heading") { [weak self] in self?.insertAtLineStart("# ") },
+        button("list.bullet", "Bulleted list") { [weak self] in self?.insertAtLineStart("- ") },
+        button("checklist", "Checklist") { [weak self] in self?.insertAtLineStart("- [ ] ") },
+        button("list.number", "Numbered list") { [weak self] in self?.insertAtLineStart("1. ") },
+        button("text.quote", "Quote") { [weak self] in self?.insertAtLineStart("> ") },
+      ])
+      row.translatesAutoresizingMaskIntoConstraints = false
+      row.axis = .horizontal
+      let done = UIButton(type: .system)
+      done.setTitle("Done", for: .normal)
+      done.translatesAutoresizingMaskIntoConstraints = false
+      done.addAction(UIAction { [weak self] _ in self?.textView?.resignFirstResponder() }, for: .touchUpInside)
+      accessory.addSubview(scroll)
+      accessory.addSubview(done)
+      scroll.addSubview(row)
+      NSLayoutConstraint.activate([
+        scroll.leadingAnchor.constraint(equalTo: accessory.leadingAnchor),
+        scroll.topAnchor.constraint(equalTo: accessory.topAnchor),
+        scroll.bottomAnchor.constraint(equalTo: accessory.bottomAnchor),
+        scroll.trailingAnchor.constraint(equalTo: done.leadingAnchor),
+        done.trailingAnchor.constraint(equalTo: accessory.trailingAnchor),
+        done.topAnchor.constraint(equalTo: accessory.topAnchor),
+        done.bottomAnchor.constraint(equalTo: accessory.bottomAnchor),
+        done.widthAnchor.constraint(equalToConstant: 64),
+        row.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
+        row.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
+        row.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
+        row.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
+        row.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
+      ])
+      return accessory
     }
 
-    private func button(_ symbol: String, action: @escaping () -> Void) -> UIBarButtonItem {
-      UIBarButtonItem(
-        image: UIImage(systemName: symbol),
-        primaryAction: UIAction { _ in action() }
-      )
+    private func button(_ symbol: String, _ label: String, action: @escaping () -> Void) -> UIButton {
+      let button = UIButton(type: .system)
+      button.setImage(UIImage(systemName: symbol), for: .normal)
+      button.accessibilityLabel = label
+      button.widthAnchor.constraint(equalToConstant: 44).isActive = true
+      button.addAction(UIAction { _ in action() }, for: .touchUpInside)
+      return button
     }
 
     /// Wraps the current selection in markdown markers; with no selection,

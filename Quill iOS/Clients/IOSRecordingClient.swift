@@ -56,6 +56,7 @@ final class IOSRecordingClient {
   private var speechRecognizer: SFSpeechRecognizer?
   private let speechRequest = LockedSpeechRequest()
   private var speechTask: SFSpeechRecognitionTask?
+  private var speechRotationTask: Task<Void, Never>?
   private var speechRestartTask: Task<Void, Never>?
   private var speechTaskGeneration = 0
   private var isLivePreviewCapturing = false
@@ -301,6 +302,8 @@ final class IOSRecordingClient {
     averagePower = 0
 
     // Tear down live preview
+    speechRotationTask?.cancel()
+    speechRotationTask = nil
     speechRestartTask?.cancel()
     speechRestartTask = nil
     speechTaskGeneration += 1
@@ -396,6 +399,14 @@ final class IOSRecordingClient {
     let generation = speechTaskGeneration
     speechRecognizer = recognizer
     speechRequest.replace(with: request)
+    // Commit bounded preview segments instead of letting a long request
+    // revise the entire meeting. The independent WAV capture never stops.
+    speechRotationTask?.cancel()
+    speechRotationTask = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(45))
+      guard !Task.isCancelled else { return }
+      self?.finishLivePreviewTask(generation: generation)
+    }
     self.speechTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
       guard let self else { return }
       Task { @MainActor in
@@ -419,6 +430,8 @@ final class IOSRecordingClient {
   private func finishLivePreviewTask(generation: Int) {
     guard isLivePreviewCapturing, generation == speechTaskGeneration else { return }
 
+    speechRotationTask?.cancel()
+    speechRotationTask = nil
     liveTranscriptAccumulator.finishRecognitionTask()
     livePartialTranscript = liveTranscriptAccumulator.combinedText
     speechTaskGeneration += 1

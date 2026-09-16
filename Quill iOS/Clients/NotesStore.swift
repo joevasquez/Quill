@@ -14,6 +14,7 @@
 
 import Combine
 import Foundation
+import os
 import HexCore
 import SwiftUI
 import UIKit
@@ -174,14 +175,62 @@ final class NotesStore: ObservableObject {
     return (note, true)
   }
 
-  /// Replaces the current full live-recognition hypothesis. Saving is
-  /// debounced to avoid rewriting the JSON file on every individual word.
+  /// Replaces the full live hypothesis. Persistence is throttled: new words
+  /// never postpone the scheduled save during uninterrupted speech.
   func updateTranscriptionDraft(noteID: UUID, sessionID: UUID, text: String) {
     guard let idx = notes.firstIndex(where: { $0.id == noteID }) else { return }
     var note = notes[idx]
     guard note.updatePendingTranscription(id: sessionID, text: text) else { return }
     notes[idx] = note
     scheduleDraftPersistence(noteID: noteID)
+  }
+
+  /// Save Whisper's original before starting remote cleanup; keep the live
+  /// preview unchanged until the complete result is ready.
+  func preserveOriginal(noteID: UUID, sessionID: UUID, text: String) {
+    guard let idx = notes.firstIndex(where: { $0.id == noteID }),
+          notes[idx].pendingTranscription?.id == sessionID else { return }
+    notes[idx].pendingTranscription?.originalText = text
+    persistNotes()
+  }
+
+  func configureCleanupRetry(noteID: UUID, sessionID: UUID, mode: AIProcessingMode,
+                             provider: AIProvider, customPrompt: String?, error: String?) {
+    guard let idx = notes.firstIndex(where: { $0.id == noteID }),
+          let record = notes[idx].transcriptions.firstIndex(where: { $0.id == sessionID }) else { return }
+    notes[idx].transcriptions[record].cleanupMode = mode
+    notes[idx].transcriptions[record].provider = provider
+    notes[idx].transcriptions[record].customPrompt = customPrompt
+    notes[idx].transcriptions[record].cleanupError = error
+    persistNotes()
+  }
+
+  private var cleanupRequests: Set<UUID> = []
+
+  func retryCleanup(noteID: UUID, recordID: UUID) async {
+    guard cleanupRequests.insert(recordID).inserted else { return }
+    defer { cleanupRequests.remove(recordID) }
+    guard let note = notes.first(where: { $0.id == noteID }),
+          let record = note.transcriptions.first(where: { $0.id == recordID }),
+          let mode = record.cleanupMode, let provider = record.provider else { return }
+    do {
+      let result = try await TextAIClient.process(text: record.original, mode: mode,
+                                                provider: provider, customSystemPrompt: record.customPrompt)
+      guard let idx = notes.firstIndex(where: { $0.id == noteID }),
+            let r = notes[idx].transcriptions.firstIndex(where: { $0.id == recordID }) else { return }
+      // Never overwrite edits or a newer recording made during this request.
+      guard notes[idx].applyCleanup(recordID: recordID, text: result, expectedBody: note.body) else {
+        notes[idx].transcriptions[r].cleanupError = "The note has changed. Your original is still available in Original Transcripts."
+        persistNotes()
+        return
+      }
+      save(syncNoteID: noteID)
+    } catch {
+      guard let idx = notes.firstIndex(where: { $0.id == noteID }),
+            let r = notes[idx].transcriptions.firstIndex(where: { $0.id == recordID }) else { return }
+      notes[idx].transcriptions[r].cleanupError = error.localizedDescription
+      persistNotes()
+    }
   }
 
   /// Forces any debounced live drafts to disk before iOS suspends the app.
@@ -203,14 +252,18 @@ final class NotesStore: ObservableObject {
     finalText: String
   ) -> (note: Note, appendedText: String)? {
     guard let idx = notes.firstIndex(where: { $0.id == noteID }) else { return nil }
-    var note = notes[idx]
+    let previous = notes[idx]
+    var note = previous
     guard let appended = note.finalizePendingTranscription(id: sessionID, finalText: finalText) else {
       return nil
     }
     pendingDraftSaves[noteID]?.cancel()
     pendingDraftSaves[noteID] = nil
     notes[idx] = note
-    save(syncNoteID: appended.isEmpty ? nil : noteID)
+    guard save(syncNoteID: appended.isEmpty ? nil : noteID) else {
+      notes[idx] = previous
+      return nil
+    }
     return (note, appended)
   }
 
@@ -413,6 +466,12 @@ final class NotesStore: ObservableObject {
     notes[idx].pendingEdit = nil
     notes[idx].updatedAt = Date()
     save(syncNoteID: id)
+  }
+
+  func deleteNoteIfEmpty(id: UUID) {
+    guard let note = notes.first(where: { $0.id == id }), note.isEmptyDraft,
+          !RecordingRecoveryStore.shared.recordings.contains(where: { $0.noteID == id }) else { return }
+    deleteNote(id: id)
   }
 
   func deleteNote(id: UUID) {
@@ -866,26 +925,31 @@ final class NotesStore: ObservableObject {
     }
   }
 
-  private func save(syncNoteID: UUID? = nil) {
-    persistNotes()
+  @discardableResult
+  private func save(syncNoteID: UUID? = nil) -> Bool {
+    guard persistNotes() else { return false }
     updateWidgetSnapshot()
 
     if let id = syncNoteID, let note = notes.first(where: { $0.id == id }) {
       syncNoteToCloud(note)
     }
+    return true
   }
 
-  private func persistNotes() {
+  @discardableResult
+  private func persistNotes() -> Bool {
     do {
       let data = try JSONEncoder.notes.encode(notes)
       try data.write(to: fileURL, options: [.atomic])
+      return true
     } catch {
-      print("NotesStore: failed to persist notes.json: \(error)")
+      HexLog.recording.error("Could not save notes: \(error.localizedDescription, privacy: .public)")
+      return false
     }
   }
 
   private func scheduleDraftPersistence(noteID: UUID) {
-    pendingDraftSaves[noteID]?.cancel()
+    guard pendingDraftSaves[noteID] == nil else { return }
     pendingDraftSaves[noteID] = Task { @MainActor [weak self] in
       try? await Task.sleep(for: .milliseconds(300))
       guard !Task.isCancelled, let self else { return }

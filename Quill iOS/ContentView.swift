@@ -33,6 +33,9 @@ private struct ActiveNoteCapture: Equatable {
   let noteID: UUID
   let createdNote: Bool
   let navigateOnFinalize: Bool
+  let cleanupMode: AIProcessingMode
+  let provider: AIProvider
+  let customPrompt: String?
 }
 
 /// How long a note capture stays re-routable. Matches the macOS HUD window.
@@ -953,6 +956,7 @@ struct ContentView: View {
   @State private var showingTypedAction = false
   @State private var showingConnections = false
   @State private var showingCustomModes = false
+  @State private var noteSaveFailed = false
   @State private var activeNoteCapture: ActiveNoteCapture?
   @State private var activeCaptureMode: QuillMode?
   @State private var showingDiscardRecordingConfirmation = false
@@ -1014,19 +1018,22 @@ struct ContentView: View {
         ZStack(alignment: .leading) {
           mainContent
             .accessibilityHidden(showingSidebar)
+            .zIndex(0)
           if showingSidebar {
             Color.black.opacity(0.25)
               .ignoresSafeArea()
-              .onTapGesture { showingSidebar = false }
+              .onTapGesture(perform: closeSidebar)
               .accessibilityLabel("Close sidebar")
               .accessibilityAddTraits(.isButton)
+              .transition(.opacity)
+              .zIndex(1)
             sidebarContent
               .frame(maxWidth: 300)
               .frame(maxHeight: .infinity)
-              .transition(.move(edge: .leading))
+              .transition(reduceMotion ? .opacity : .move(edge: .leading))
+              .zIndex(2)
           }
         }
-        .animation(.easeInOut(duration: 0.2), value: showingSidebar)
       } else {
         NavigationSplitView(columnVisibility: $sidebarVisibility) {
           sidebarContent
@@ -1044,9 +1051,13 @@ struct ContentView: View {
         Text("Quill").font(.title2.bold())
         Spacer()
         if horizontalSizeClass == .compact {
-          Button { showingSidebar = false } label: {
-            Image(systemName: "xmark").frame(width: 44, height: 44)
+          Button(action: closeSidebar) {
+            Image(systemName: "xmark")
+              .foregroundStyle(QuillTheme.of(colorScheme).text2)
+              .frame(width: 44, height: 44)
+              .contentShape(Rectangle())
           }
+          .buttonStyle(.plain)
           .accessibilityLabel("Close sidebar")
         }
       }
@@ -1080,26 +1091,22 @@ struct ContentView: View {
     .toolbar(.hidden, for: .navigationBar)
   }
 
-  private var sidebarAccess: some View {
-    HStack {
-      Button(action: showSidebar) {
-        Label("Sidebar", systemImage: "sidebar.left")
-          .padding(.horizontal, 16)
-          .frame(minHeight: 44)
-      }
-      Spacer()
+  private func showSidebar() {
+    withAnimation(.easeInOut(duration: reduceMotion ? 0.15 : 0.25)) {
+      showingSidebar = true
     }
-    .background(backgroundGradient)
+    sidebarVisibility = .all
   }
 
-  private func showSidebar() {
-    showingSidebar = true
-    sidebarVisibility = .all
+  private func closeSidebar() {
+    withAnimation(.easeInOut(duration: reduceMotion ? 0.15 : 0.25)) {
+      showingSidebar = false
+    }
   }
 
   private func openSidebarRoute(_ route: QuillRoute) {
     path = [route]
-    showingSidebar = false
+    closeSidebar()
   }
 
   private func createNoteFromSidebar() {
@@ -1129,8 +1136,15 @@ struct ContentView: View {
           NotesListView(store: notes, embedded: true, onOpenNote: { id in
             notes.setActiveNote(id: id)
             path.append(.note(id))
+          }, onAsk: {
+            askFocusedNoteID = nil
+            showingAskQuill = true
+          }, onBack: {
+            // Pop only this stack, rather than asking an enclosing split view
+            // or presentation environment to dismiss itself.
+            guard path.last == .notes else { return }
+            path.removeLast()
           })
-          .safeAreaInset(edge: .top, spacing: 0) { sidebarAccess }
         case .suggestions:
           QuillSuggestionsPage(
             suggestions: suggestions.current,
@@ -1151,6 +1165,14 @@ struct ContentView: View {
         // download + load. Happens in the background — user can
         // still interact with everything else.
         Task { await vm.prewarmModel(selectedModel) }
+      }
+      .onChange(of: path) { previous, current in
+        // Navigation, not onDisappear: opening a sheet must never delete its note.
+        for route in previous where !current.contains(route) {
+          if case .note(let id) = route, activeNoteCapture?.noteID != id {
+            notes.deleteNoteIfEmpty(id: id)
+          }
+        }
       }
       .onChange(of: selectedModel) { _, newModel in
         Task { await vm.prewarmModel(newModel) }
@@ -1189,6 +1211,10 @@ struct ContentView: View {
         }
       }
       .onChange(of: vm.phase) { _, newPhase in
+        if newPhase == .aiProcessing, let capture = activeNoteCapture {
+          notes.preserveOriginal(noteID: capture.noteID, sessionID: capture.sessionID, text: vm.rawTranscript)
+        }
+        if newPhase == .transcribing { notes.flushPendingTranscriptionDrafts() }
         if case .done = newPhase, !vm.isActionRecording {
           // Finishing a capture from home opens the note it just made.
           appendTranscriptToActiveNote(navigate: path.isEmpty)
@@ -1279,8 +1305,19 @@ struct ContentView: View {
       // otherwise a pushed note covers them: the capture sheet is a ZStack
       // overlay so it drew *under* the detail view, and the .sheets fired
       // against a screen that was no longer visible.
+      .safeAreaInset(edge: .bottom) {
+        if let capture = activeNoteCapture, path.last != .note(capture.noteID) {
+          HStack {
+            Button("Return to recording") { path = [.note(capture.noteID)] }
+            Spacer()
+            if vm.phase == .recording {
+              Button("Stop") { Task { await endCapture() } }
+            }
+          }.padding().background(.regularMaterial)
+        }
+      }
       .quillCaptureSheet(
-        isPresented: isCapturing,
+        isPresented: isCapturing && activeNoteCapture == nil,
         reduceMotion: reduceMotion
       ) {
         captureSheet
@@ -1689,7 +1726,7 @@ struct ContentView: View {
   /// append-on-done creates one rather than extending whatever was last
   /// open. Appending to an existing note happens from its own composer.
   private func beginCapture() async {
-    guard vm.phase != .recording else { return }
+    guard !isCapturing else { return }
     lockedDestinationID = nil
     if path.isEmpty { notes.setActiveNote(id: nil) }
     activeCaptureMode = captureMode
@@ -1722,10 +1759,10 @@ struct ContentView: View {
     case .auto, .dictate, .edit:
       await vm.toggleRecording(
         model: selectedModel,
-        mode: aiMode,
-        provider: aiProvider,
+        mode: activeNoteCapture?.cleanupMode ?? aiMode,
+        provider: activeNoteCapture?.provider ?? aiProvider,
         voiceCommandsEnabled: voiceCommandsEnabled,
-        customSystemPrompt: micCustomSystemPrompt,
+        customSystemPrompt: activeNoteCapture?.customPrompt ?? micCustomSystemPrompt,
         captureMode: mode
       )
     }
@@ -1751,7 +1788,8 @@ struct ContentView: View {
       sessionID: sessionID,
       noteID: result.note.id,
       createdNote: result.created,
-      navigateOnFinalize: navigate
+      navigateOnFinalize: navigate,
+      cleanupMode: aiMode, provider: aiProvider, customPrompt: micCustomSystemPrompt
     )
     vm.associateCurrentRecovery(with: result.note.id)
 
@@ -1819,14 +1857,24 @@ struct ContentView: View {
     offerReroute shouldOfferReroute: Bool,
     completeRecovery: Bool = true
   ) -> Bool {
-    guard let capture = activeNoteCapture,
-          let result = notes.finalizeTranscriptionDraft(
+    guard let capture = activeNoteCapture else { return false }
+    if !vm.rawTranscript.isEmpty {
+      notes.preserveOriginal(noteID: capture.noteID, sessionID: capture.sessionID, text: vm.rawTranscript)
+    }
+    guard let result = notes.finalizeTranscriptionDraft(
             noteID: capture.noteID,
             sessionID: capture.sessionID,
             finalText: finalText
           )
-    else { return false }
+    else {
+      noteSaveFailed = true
+      return false
+    }
 
+    noteSaveFailed = false
+    notes.configureCleanupRetry(noteID: capture.noteID, sessionID: capture.sessionID,
+                                mode: capture.cleanupMode, provider: capture.provider, customPrompt: capture.customPrompt,
+                                error: vm.aiErrorMessage)
     activeNoteCapture = nil
     activeCaptureMode = nil
     if completeRecovery { vm.completeCurrentRecovery() }
@@ -1929,7 +1977,18 @@ struct ContentView: View {
         onDismissEditError: { vm.noteEditError = nil },
         canRerouteToAction: vm.noteRerouteOffer?.noteID == note.id,
         onRerouteToAction: runNoteReroute,
-        onDismissReroute: { vm.clearNoteReroute() }
+        onDismissReroute: { vm.clearNoteReroute() },
+        captureStatus: activeNoteCapture?.noteID == id ? (vm.phase == .recording ? (vm.isPaused ? "Paused" : "Recording…") : (vm.phase == .aiProcessing ? "Cleaning up…" : "Transcribing audio…")) : nil,
+        isRecordingNote: activeNoteCapture?.noteID == id && vm.phase == .recording,
+        isRecordingPaused: vm.isPaused,
+        onStopRecording: { Task { await endNoteCapture() } },
+        onPauseRecording: { vm.togglePause() },
+        onDiscardRecording: requestCancelCapture,
+        savingFailed: noteSaveFailed && activeNoteCapture?.noteID == id,
+        onRetrySaving: { appendTranscriptToActiveNote() },
+        hasRecordingRecovery: recovery.recordings.contains { $0.noteID == id && $0.state == .needsRecovery },
+        onRecoverRecording: { showingRecoveryCenter = true }
+
       )
     }
   }
@@ -1986,7 +2045,7 @@ struct ContentView: View {
   /// A capture started from inside a note appends to THAT note rather than
   /// creating a new one.
   private func beginNoteCapture(noteID: UUID) async {
-    guard vm.phase != .recording else { return }
+    guard !isCapturing else { return }
     notes.setActiveNote(id: noteID)
     lockedDestinationID = nil
     activeCaptureMode = noteMode
@@ -2018,10 +2077,10 @@ struct ContentView: View {
     case .auto, .dictate, .edit:
       await vm.toggleRecording(
         model: selectedModel,
-        mode: aiMode,
-        provider: aiProvider,
+        mode: activeNoteCapture?.cleanupMode ?? aiMode,
+        provider: activeNoteCapture?.provider ?? aiProvider,
         voiceCommandsEnabled: voiceCommandsEnabled,
-        customSystemPrompt: micCustomSystemPrompt,
+        customSystemPrompt: activeNoteCapture?.customPrompt ?? micCustomSystemPrompt,
         captureMode: mode
       )
     }
@@ -2099,8 +2158,8 @@ struct ContentView: View {
     // Note-producing audio captures already have a provisional paragraph in
     // a specific note. Replace it in place instead of performing a second
     // generic append (which could duplicate text or target a different note).
-    if activeNoteCapture != nil,
-       finalizeActiveNoteCapture(finalText: text, offerReroute: true) {
+    if activeNoteCapture != nil {
+      _ = finalizeActiveNoteCapture(finalText: text, offerReroute: true)
       return
     }
 

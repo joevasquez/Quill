@@ -26,6 +26,7 @@ struct NotesListView: View {
   var embedded = false
   var onOpenNote: ((UUID) -> Void)?
   var onAsk: (() -> Void)?
+  var onBack: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var colorScheme
   private var theme: QuillTheme { .of(colorScheme) }
@@ -62,6 +63,7 @@ struct NotesListView: View {
     }
     .padding(.top, 4)
     .background(pageBackground.ignoresSafeArea())
+    .toolbar(.hidden, for: .navigationBar)
     .alert("Rename Note", isPresented: Binding(
       get: { renamingNoteID != nil },
       set: { if !$0 { renamingNoteID = nil } }
@@ -100,62 +102,58 @@ struct NotesListView: View {
 
   // MARK: - Header
 
-  /// Compose left, "Notes" centred, close right — then the search field.
+  /// Back left, Ask and New Note right, followed by search.
   private var header: some View {
     VStack(spacing: 13) {
-      HStack {
-        roundButton("square.and.pencil", "New note") {
-          let new = store.startNewNote(location: nil)
-          UINotificationFeedbackGenerator().notificationOccurred(.success)
-          closeList()
-          onOpenNote?(new.id)
-        }
-
-        Spacer()
-
+      ZStack {
         Text("Notes")
           .quillFont(18, weight: .bold)
           .foregroundStyle(theme.text)
+          .lineLimit(1)
+          .padding(.horizontal, 96)
 
-        Spacer()
-
-        HStack(spacing: 8) {
-          if let onAsk {
-            roundButton("sparkle.magnifyingglass", "Ask Quill") {
-              closeList()
-              Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(250))
-                onAsk()
+        HStack {
+          headerButton(embedded ? "chevron.left" : "xmark", embedded ? "Back" : "Close") {
+            if embedded { onBack?() } else { dismiss() }
+          }
+          Spacer(minLength: 0)
+          HStack(spacing: 8) {
+            if let onAsk {
+              headerButton("sparkle.magnifyingglass", "Ask all notes") {
+                if embedded {
+                  onAsk()
+                  return
+                }
+                closeList()
+                Task { @MainActor in
+                  try? await Task.sleep(for: .milliseconds(250))
+                  onAsk()
+                }
               }
             }
+            headerButton("square.and.pencil", "New note") {
+              let new = store.startNewNote(location: nil)
+              UINotificationFeedbackGenerator().notificationOccurred(.success)
+              closeList()
+              onOpenNote?(new.id)
+            }
           }
-          roundButton(embedded ? "chevron.left" : "xmark", embedded ? "Back" : "Close") { dismiss() }
         }
       }
-
       searchField
     }
     .padding(.horizontal, 16)
   }
 
-  private func roundButton(
+  private func headerButton(
     _ symbol: String,
     _ label: String,
     action: @escaping () -> Void
   ) -> some View {
     Button(action: action) {
-      Image(systemName: symbol)
-        .quillFont(16, weight: .medium)
-        .foregroundStyle(theme.text2)
-        .frame(width: 40, height: 40)
-        .background(
-          Circle()
-            .fill(theme.chip)
-            .overlay(Circle().strokeBorder(theme.hair, lineWidth: 0.5))
-        )
-        .contentShape(Circle())
+      QuillHeaderIcon(systemImage: symbol)
     }
-    .buttonStyle(QuillPressStyle())
+    .buttonStyle(.plain)
     .accessibilityLabel(label)
   }
 

@@ -58,6 +58,10 @@ struct AskQuillView: View {
           }
           .pickerStyle(.segmented)
           .padding(.horizontal, 16)
+        } else {
+          Label("Searching all notes", systemImage: "text.magnifyingglass")
+            .font(.subheadline)
+            .foregroundStyle(theme.text2)
         }
 
         ScrollView {

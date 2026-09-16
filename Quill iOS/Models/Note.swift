@@ -45,6 +45,8 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
   /// Deliberately local: it isn't uploaded by cloud sync, since a pending
   /// review on your phone shouldn't follow you to the Mac.
   var pendingEdit: NoteEdit?
+  /// Local originals and retry configuration, retained after cleanup.
+  var transcriptions: [NoteTranscription] = []
 
   init(
     id: UUID = UUID(),
@@ -87,6 +89,32 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
     isPinned = try c.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
     pendingTranscription = try c.decodeIfPresent(PendingTranscription.self, forKey: .pendingTranscription)
     pendingEdit = try c.decodeIfPresent(NoteEdit.self, forKey: .pendingEdit)
+    transcriptions = try c.decodeIfPresent([NoteTranscription].self, forKey: .transcriptions) ?? []
+  }
+
+  /// Apply a retry only to the unchanged capture at the end of this note.
+  /// An edit or another recording taking place during cleanup wins.
+  mutating func applyCleanup(recordID: UUID, text: String, expectedBody: String) -> Bool {
+    guard body == expectedBody, pendingTranscription == nil,
+          !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          let index = transcriptions.firstIndex(where: { $0.id == recordID }),
+          !transcriptions[index].appliedText.isEmpty,
+          body.hasSuffix(transcriptions[index].appliedText) else { return false }
+    body = String(body.dropLast(transcriptions[index].appliedText.count)) + text
+    transcriptions[index].appliedText = text
+    transcriptions[index].cleanupError = nil
+    updatedAt = Date()
+    return true
+  }
+
+  /// Only untouched, content-free drafts may be discarded on navigation.
+  /// A title, photo marker, original transcript, or pending work counts as content.
+  var isEmptyDraft: Bool {
+    title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && pendingTranscription == nil
+      && pendingEdit == nil
+      && transcriptions.isEmpty
   }
 
   /// The note body as rendered while recording. The durable body remains
@@ -129,6 +157,13 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
     let fallback = pendingTranscription.text.trimmingCharacters(in: .whitespacesAndNewlines)
     let resolved = final.isEmpty ? fallback : final
     self.pendingTranscription = nil
+    if !resolved.isEmpty {
+      transcriptions.append(NoteTranscription(
+        id: id, recordedAt: pendingTranscription.startedAt,
+        original: pendingTranscription.originalText ?? fallback,
+        appliedText: resolved
+      ))
+    }
     guard !resolved.isEmpty else { return "" }
     body = Self.appendingParagraph(resolved, to: body)
     updatedAt = Date()
@@ -149,6 +184,12 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
     guard let pendingTranscription else { return false }
     let recovered = pendingTranscription.text.trimmingCharacters(in: .whitespacesAndNewlines)
     self.pendingTranscription = nil
+    if !recovered.isEmpty {
+      transcriptions.append(NoteTranscription(
+        id: pendingTranscription.id, recordedAt: pendingTranscription.startedAt,
+        original: pendingTranscription.originalText ?? recovered, appliedText: recovered
+      ))
+    }
     guard !recovered.isEmpty else { return false }
     body = Self.appendingParagraph(recovered, to: body)
     updatedAt = max(updatedAt, pendingTranscription.updatedAt)
@@ -199,6 +240,18 @@ struct PendingTranscription: Codable, Equatable, Hashable {
   var text: String
   var startedAt: Date
   var updatedAt: Date
+  var originalText: String?
+}
+
+struct NoteTranscription: Codable, Equatable, Hashable, Identifiable {
+  var id: UUID
+  var recordedAt: Date
+  var original: String
+  var appliedText: String
+  var cleanupMode: AIProcessingMode?
+  var provider: AIProvider?
+  var customPrompt: String?
+  var cleanupError: String?
 }
 
 /// A revision awaiting the user's Undo/Keep. Stores the previous body so

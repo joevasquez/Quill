@@ -6,10 +6,115 @@
 //
 
 import Foundation
+import HexCore
 import Testing
 @testable import Quill_iOS
 
 struct Quill_iOSTests {
+
+    @Test("only completely empty notes can be discarded on close")
+    func emptyDraftEligibility() {
+        #expect(Note().isEmptyDraft)
+        #expect(Note(title: "  ", body: " \n ").isEmptyDraft)
+        #expect(!Note(title: "Meeting").isEmptyDraft)
+        #expect(!Note(body: "Words").isEmptyDraft)
+        #expect(!Note(body: "![photo](\(UUID().uuidString))").isEmptyDraft)
+        var recording = Note()
+        recording.beginPendingTranscription(id: UUID())
+        #expect(!recording.isEmptyDraft)
+        var withOriginal = Note()
+        withOriginal.transcriptions = [NoteTranscription(id: UUID(), recordedAt: Date(), original: "Saved original", appliedText: "")]
+        #expect(!withOriginal.isEmptyDraft)
+        #expect(!Note(pendingEdit: NoteEdit(previousBody: "Original", label: "Edited")).isEmptyDraft)
+    }
+
+    @Test("transient empty and shortened hypotheses do not hide live paragraphs")
+    func transientPreviewRetractions() {
+        var accumulator = IOSLiveTranscriptAccumulator()
+        let full = (0..<90).map { "word\($0)" }.joined(separator: " ")
+        accumulator.update(hypothesis: full)
+        let empty = accumulator.update(hypothesis: "")
+        let shortened = accumulator.update(hypothesis: "word0 word1")
+        #expect(empty == full)
+        #expect(shortened == full)
+        let resumed = accumulator.update(hypothesis: full + " and more")
+        #expect(resumed == full + " and more")
+        accumulator.finishRecognitionTask()
+        let next = accumulator.update(hypothesis: "Next segment")
+        #expect(next == full + " and more Next segment")
+    }
+
+    @Test("ordinary shorter speech corrections still apply")
+    func smallPreviewCorrections() {
+        var accumulator = IOSLiveTranscriptAccumulator()
+        accumulator.update(hypothesis: "I would would like to book a hotel")
+        let corrected = accumulator.update(hypothesis: "I would like to book a hotel")
+        #expect(corrected == "I would like to book a hotel")
+    }
+
+    @Test("thirty minutes of recognition retains every completed segment")
+    func fullMeetingPreview() {
+        var accumulator = IOSLiveTranscriptAccumulator()
+        for index in 0..<40 {
+            accumulator.update(hypothesis: "Meeting segment \(index) has tentative words")
+            accumulator.update(hypothesis: "Meeting segment \(index) has corrected words")
+            accumulator.finishRecognitionTask()
+        }
+        for index in 0..<40 {
+            #expect(accumulator.combinedText.contains("Meeting segment \(index) has corrected words"))
+        }
+        #expect(!accumulator.combinedText.contains("tentative"))
+    }
+
+    @Test("original survives successful cleanup and a disk round trip")
+    func originalSurvivesCleanup() throws {
+        let id = UUID()
+        var note = Note(body: "Existing paragraph")
+        note.beginPendingTranscription(id: id)
+        note.updatePendingTranscription(id: id, text: "live guess")
+        note.pendingTranscription?.originalText = "Original Whisper transcript"
+        note.finalizePendingTranscription(id: id, finalText: "Cleaned up paragraph")
+        let loaded = try JSONDecoder().decode(Note.self, from: JSONEncoder().encode(note))
+        #expect(loaded.body == "Existing paragraph\n\nCleaned up paragraph")
+        #expect(loaded.transcriptions.last?.original == "Original Whisper transcript")
+    }
+
+    @Test("interrupted cleanup retains both preview and authoritative original")
+    func interruptedCleanupOriginal() throws {
+        let id = UUID()
+        var note = Note()
+        note.beginPendingTranscription(id: id)
+        note.updatePendingTranscription(id: id, text: "Visible live text")
+        note.pendingTranscription?.originalText = "Full original transcription"
+        var loaded = try JSONDecoder().decode(Note.self, from: JSONEncoder().encode(note))
+        let recovered = loaded.recoverPendingTranscription()
+        #expect(recovered)
+        #expect(loaded.body == "Visible live text")
+        #expect(loaded.transcriptions.last?.original == "Full original transcription")
+    }
+
+    @Test("cleanup retries cannot overwrite concurrent edits or another capture")
+    func cleanupRetryProtectsChanges() {
+        let id = UUID()
+        var note = Note()
+        note.beginPendingTranscription(id: id)
+        note.updatePendingTranscription(id: id, text: "Original")
+        note.finalizePendingTranscription(id: id, finalText: "Original")
+        let expected = note.body
+        note.body += " User edit"
+        let rejectedEdit = note.applyCleanup(recordID: id, text: "Cleaned", expectedBody: expected)
+        #expect(!rejectedEdit)
+        #expect(note.body == "Original User edit")
+        note.body = expected
+        note.beginPendingTranscription(id: UUID())
+        let rejectedCapture = note.applyCleanup(recordID: id, text: "Cleaned", expectedBody: expected)
+        #expect(!rejectedCapture)
+        note.pendingTranscription = nil
+        let applied = note.applyCleanup(recordID: id, text: "Cleaned", expectedBody: expected)
+        #expect(applied)
+        #expect(note.transcriptions.last?.original == "Original")
+        #expect(note.body == "Cleaned")
+    }
 
     @Test("live transcript is separate from existing note text")
     func liveTranscriptPreservesExistingText() {

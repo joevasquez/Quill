@@ -33,46 +33,47 @@ struct QuillTopBar: View {
   private var theme: QuillTheme { .of(colorScheme) }
 
   var body: some View {
-    HStack(spacing: 10) {
-      button("sidebar.left", "Show sidebar", onTapList)
-
-      Image("Feather")
-        .resizable()
-        .renderingMode(.template)
-        .aspectRatio(contentMode: .fit)
-        .foregroundStyle(QuillDesign.brand.color())
-        .frame(width: 24, height: 24)
-
-      Text("Quill")
-        .quillFont(24, weight: .bold)
-        .tracking(-0.5)
-        .foregroundStyle(theme.text)
-
-      Spacer()
-
-      if recoveryCount > 0, let onTapRecovery {
-        Button(action: onTapRecovery) {
-          Image(systemName: "waveform.badge.exclamationmark")
-            .quillFont(16, weight: .medium)
-            .foregroundStyle(.orange)
-            .frame(width: 40, height: 40)
-            .background(
-              Circle()
-                .fill(theme.chip)
-                .overlay(Circle().strokeBorder(Color.orange.opacity(0.45), lineWidth: 1))
-            )
-            .overlay(alignment: .topTrailing) {
-              Text("\(min(recoveryCount, 9))")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 16, height: 16)
-                .background(Circle().fill(.orange))
-            }
-        }
-        .buttonStyle(QuillPressStyle())
-        .accessibilityLabel("\(recoveryCount) recording\(recoveryCount == 1 ? "" : "s") to recover")
+    ZStack {
+      HStack(spacing: 8) {
+        Image("Feather")
+          .resizable()
+          .renderingMode(.template)
+          .aspectRatio(contentMode: .fit)
+          .foregroundStyle(QuillDesign.brand.color())
+          .frame(width: 24, height: 24)
+        Text("Quill")
+          .quillFont(24, weight: .bold)
+          .tracking(-0.5)
+          .foregroundStyle(theme.text)
+          .lineLimit(1)
+          .minimumScaleFactor(0.75)
       }
-      button("square.and.pencil", "New note", onTapNewNote)
+      .padding(.horizontal, 88)
+      .allowsHitTesting(false)
+
+      HStack(spacing: 4) {
+        button("line.3.horizontal", "Show sidebar", onTapList)
+        Spacer(minLength: 0)
+        if recoveryCount > 0, let onTapRecovery {
+          Button(action: onTapRecovery) {
+            Image(systemName: "waveform.badge.exclamationmark")
+              .quillFont(16, weight: .medium)
+              .foregroundStyle(.orange)
+              .frame(width: 44, height: 44)
+              .contentShape(Rectangle())
+              .overlay(alignment: .topTrailing) {
+                Text("\(min(recoveryCount, 9))")
+                  .font(.system(size: 9, weight: .bold))
+                  .foregroundStyle(.white)
+                  .frame(width: 16, height: 16)
+                  .background(Circle().fill(.orange))
+              }
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("\(recoveryCount) recording\(recoveryCount == 1 ? "" : "s") to recover")
+        }
+        button("square.and.pencil", "New note", onTapNewNote)
+      }
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 10)
@@ -80,18 +81,9 @@ struct QuillTopBar: View {
 
   private func button(_ symbol: String, _ label: String, _ action: @escaping () -> Void) -> some View {
     Button(action: action) {
-      Image(systemName: symbol)
-        .quillFont(16, weight: .medium)
-        .foregroundStyle(theme.text2)
-        .frame(width: 40, height: 40)
-        .background(
-          Circle()
-            .fill(theme.chip)
-            .overlay(Circle().strokeBorder(theme.hair, lineWidth: 0.5))
-        )
-        .contentShape(Circle())
+      QuillHeaderIcon(systemImage: symbol)
     }
-    .buttonStyle(QuillPressStyle())
+    .buttonStyle(.plain)
     .accessibilityLabel(label)
   }
 }

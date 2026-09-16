@@ -63,11 +63,27 @@ struct NoteDetailView: View {
   var onRerouteToAction: () -> Void = {}
   var onDismissReroute: () -> Void = {}
 
+  var captureStatus: String?
+  var isRecordingNote = false
+  var isRecordingPaused = false
+  var onStopRecording: () -> Void = {}
+  var onPauseRecording: () -> Void = {}
+  var onDiscardRecording: () -> Void = {}
+  var savingFailed = false
+  var onRetrySaving: () -> Void = {}
+  var hasRecordingRecovery = false
+  var onRecoverRecording: () -> Void = {}
+
   @ObservedObject private var notes = NotesStore.shared
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var colorScheme
   private var theme: QuillTheme { .of(colorScheme) }
 
+  @State private var followsLatest = true
+  @State private var isAtBottom = true
+  @State private var showingOriginals = false
+  @State private var retryingCleanup = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var showingDeleteConfirmation = false
   @State private var draft: String = ""
   @State private var isBodyEditing = false
@@ -81,6 +97,17 @@ struct NoteDetailView: View {
         // Enough of a gap that the metadata reads as a caption on the
         // header rather than as the note's first line.
         .padding(.bottom, 18)
+      if savingFailed {
+        Button("Couldn’t save the note. Audio retained — Retry saving", action: onRetrySaving)
+          .font(.callout).padding(.horizontal)
+      }
+      if hasRecordingRecovery {
+        Button("Recording saved for recovery — Retry transcription", action: onRecoverRecording)
+          .font(.callout).padding(.horizontal)
+      }
+      if let record = note.transcriptions.last, let error = record.cleanupError {
+        cleanupRetryCard(record: record, error: error)
+      }
       if let pending = note.pendingEdit {
         editBanner(pending)
           .padding(.horizontal, 16)
@@ -93,12 +120,33 @@ struct NoteDetailView: View {
         ), focusOnAppear: true)
       } else {
         bodyScroll
-        composer
+        if let captureStatus {
+          recordingControls(captureStatus)
+        } else {
+          composer
+        }
       }
     }
     .background(pageBackground.ignoresSafeArea())
     .toolbar(.hidden, for: .navigationBar)
     .onDisappear { if isBodyEditing { finishBodyEditing() } }
+    .sheet(isPresented: $showingOriginals) {
+      NavigationStack {
+        ScrollView {
+          LazyVStack(alignment: .leading, spacing: 24) {
+            ForEach(note.transcriptions.reversed()) { record in
+              VStack(alignment: .leading, spacing: 8) {
+                Text(record.recordedAt, style: .date).font(.headline)
+                Text(record.recordedAt, style: .time).font(.caption).foregroundStyle(.secondary)
+                Text(record.original).textSelection(.enabled)
+              }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+          }.padding()
+        }
+        .navigationTitle("Original Transcripts")
+        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingOriginals = false } } }
+      }
+    }
     .alert("Delete Note?", isPresented: $showingDeleteConfirmation) {
       Button("Delete", role: .destructive) {
         isBodyEditing = false
@@ -113,6 +161,7 @@ struct NoteDetailView: View {
   }
 
   private func beginBodyEditing() {
+    guard captureStatus == nil, !retryingCleanup else { return }
     editingPhotoIDs = Set(NoteContent.photoIDs(in: note.body))
     isBodyEditing = true
   }
@@ -132,7 +181,11 @@ struct NoteDetailView: View {
 
   private var header: some View {
     HStack(spacing: 10) {
-      roundButton("chevron.left", "Back") { dismiss() }
+      Button { dismiss() } label: {
+        QuillHeaderIcon(systemImage: "chevron.left")
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Back")
 
       // Tapping the title opens the rename editor — the natural gesture,
       // which freed the header slot for the share menu.
@@ -164,15 +217,20 @@ struct NoteDetailView: View {
         Button(action: onAsk) { Label("Ask", systemImage: "sparkle.magnifyingglass") }
         Button(action: onAddPhoto) { Label("Add Picture", systemImage: "photo") }
         shareMenu
+        if !note.transcriptions.isEmpty {
+          Button { showingOriginals = true } label: {
+            Label("Original Transcripts", systemImage: "text.document")
+          }
+        }
         Divider()
         Button(role: .destructive) { showingDeleteConfirmation = true } label: {
           Label("Delete Note", systemImage: "trash")
         }
+        .disabled(captureStatus != nil || retryingCleanup)
       } label: {
-        Image(systemName: "ellipsis")
-          .frame(width: 44, height: 44)
-          .contentShape(Rectangle())
+        QuillHeaderIcon(systemImage: "ellipsis")
       }
+      .buttonStyle(.plain)
       .accessibilityLabel("Note actions")
     }
     .padding(.horizontal, 16)
@@ -213,28 +271,6 @@ struct NoteDetailView: View {
     .disabled(isBuildingPDF)
     .opacity(isBuildingPDF ? 0.5 : 1)
     .accessibilityLabel("Share note")
-  }
-
-  private func roundButton(
-    _ symbol: String,
-    _ label: String,
-    tint: Color? = nil,
-    action: @escaping () -> Void
-  ) -> some View {
-    Button(action: action) {
-      Image(systemName: symbol)
-        .quillFont(15, weight: .medium)
-        .foregroundStyle(tint ?? theme.text2)
-        .frame(width: 36, height: 36)
-        .background(
-          Circle()
-            .fill(theme.chip)
-            .overlay(Circle().strokeBorder(theme.hair, lineWidth: 0.5))
-        )
-        .contentShape(Circle())
-    }
-    .buttonStyle(QuillPressStyle())
-    .accessibilityLabel(label)
   }
 
   // MARK: - Edit review
@@ -300,59 +336,173 @@ struct NoteDetailView: View {
   // MARK: - Body
 
   private var bodyScroll: some View {
-    let liveText = note.pendingTranscription?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    return ScrollView {
-      VStack(alignment: .leading, spacing: 12) {
-        if let pending = note.pendingEdit {
-          diffView(from: pending.previousBody, to: note.body)
-        } else if note.body.isEmpty, liveText.isEmpty {
-          Text("Tap to write, or hold the orb below to dictate.")
-            .onTapGesture(perform: beginBodyEditing)
-            .quillFont(16.5)
-            .italic()
-            .foregroundStyle(theme.text3)
-            .padding(.top, 20)
-        } else {
-          ForEach(Array(NoteContent.segments(from: note.body).enumerated()), id: \.offset) { _, seg in
-            segmentView(seg)
+    let liveText = note.pendingTranscription?.text ?? ""
+    return ScrollViewReader { proxy in
+      ScrollView {
+        VStack(alignment: .leading, spacing: 12) {
+          if let pending = note.pendingEdit {
+            diffView(from: pending.previousBody, to: note.body)
+          } else if note.body.isEmpty, liveText.isEmpty, captureStatus == nil {
+            Text("Tap to write, or hold the orb below to dictate.")
+              .onTapGesture(perform: beginBodyEditing)
+              .foregroundStyle(theme.text3).padding(.top, 20)
+          } else {
+            ForEach(Array(NoteContent.segments(from: note.body).enumerated()), id: \.offset) { _, seg in
+              segmentView(seg)
+            }
           }
+          if !liveText.isEmpty {
+            liveTranscriptionView(liveText)
+          } else if captureStatus != nil {
+            Text(isRecordingNote ? "Listening for speech… Audio is being recorded." : "Transcribing saved audio…")
+              .foregroundStyle(theme.text2)
+          }
+          Color.clear.frame(height: 1).id("latest-transcript")
         }
-
-        if !liveText.isEmpty {
-          liveTranscriptionView(liveText)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20).padding(.bottom, 16)
+      }
+      .onScrollGeometryChange(for: Bool.self) { geometry in
+        geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 50
+      } action: { _, atBottom in
+        isAtBottom = atBottom
+      }
+      .onScrollPhaseChange { _, phase in
+        if phase == .interacting { followsLatest = false }
+        if phase == .idle, isAtBottom { followsLatest = true }
+      }
+      .onChange(of: liveText) { _, _ in
+        if followsLatest { proxy.scrollTo("latest-transcript", anchor: .bottom) }
+      }
+      .onChange(of: note.body) { _, _ in
+        if followsLatest { proxy.scrollTo("latest-transcript", anchor: .bottom) }
+      }
+      .onAppear {
+        if captureStatus != nil { proxy.scrollTo("latest-transcript", anchor: .bottom) }
+      }
+      .overlay(alignment: .bottomTrailing) {
+        if !followsLatest, captureStatus != nil {
+          Button {
+            followsLatest = true
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+              proxy.scrollTo("latest-transcript", anchor: .bottom)
+            }
+          } label: {
+            Label("Jump to latest", systemImage: "arrow.down")
+              .font(.callout.bold()).padding(12)
+              .background(.regularMaterial, in: Capsule())
+          }.padding(12)
         }
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal, 20)
-      .padding(.bottom, 16)
     }
   }
 
-  /// A provisional paragraph is visually part of the note while remaining
-  /// distinct from its durable body. The recognizer can revise this text in
-  /// place; Whisper replaces it with the authoritative paragraph on stop.
   private func liveTranscriptionView(_ text: String) -> some View {
-    VStack(alignment: .leading, spacing: 7) {
-      Label("Recording…", systemImage: "waveform")
-        .quillFont(11.5, weight: .semibold)
-        .foregroundStyle(QuillDesign.ModePalette.dictate.color())
-
-      Text(text)
-        .quillFont(16)
-        .foregroundStyle(theme.text)
-        .frame(maxWidth: .infinity, alignment: .leading)
+    let words = text.split(whereSeparator: { $0.isWhitespace })
+    let chunks = stride(from: 0, to: words.count, by: 80).map {
+      words[$0..<min($0 + 80, words.count)]
     }
-    .padding(12)
+    return VStack(alignment: .leading, spacing: 16) {
+      ForEach(chunks.indices, id: \.self) { index in
+        let chunk = chunks[index]
+        let recentCount = index == chunks.count - 1 ? min(12, chunk.count) : 0
+        let earlier = chunk.dropLast(recentCount).joined(separator: " ")
+        let recent = chunk.suffix(recentCount).joined(separator: " ")
+        (Text(earlier + (earlier.isEmpty || recent.isEmpty ? "" : " ")).foregroundColor(theme.text2)
+          + Text(recent).foregroundColor(theme.text).bold())
+          .quillFont(16)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+    }
+  }
+
+  private func cleanupRetryCard(record: NoteTranscription, error: String) -> some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(alignment: .top, spacing: 10) {
+        Image(systemName: "sparkles")
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(QuillDesign.brand.color())
+          .frame(width: 36, height: 36)
+          .background(QuillDesign.brand.color().opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        VStack(alignment: .leading, spacing: 4) {
+          Text(retryingCleanup ? "Cleaning up…" : "Your transcript is safe")
+            .quillFont(15, weight: .semibold)
+            .foregroundStyle(theme.text)
+          Text(retryingCleanup ? "You can keep reading while Quill tries again." : "Cleanup didn’t finish. Try again whenever you’re ready.")
+            .quillFont(13)
+            .foregroundStyle(theme.text2)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      HStack(spacing: 12) {
+        Button { showingOriginals = true } label: {
+          Text("View original").quillFont(13, weight: .semibold)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(theme.text2)
+        Spacer(minLength: 0)
+        Button {
+          retryingCleanup = true
+          Task {
+            await notes.retryCleanup(noteID: note.id, recordID: record.id)
+            retryingCleanup = false
+          }
+        } label: {
+          HStack(spacing: 6) {
+            if retryingCleanup { ProgressView().controlSize(.small).tint(.white) }
+            else { Image(systemName: "arrow.clockwise") }
+            Text(retryingCleanup ? "Retrying…" : "Retry cleanup")
+          }
+          .quillFont(13, weight: .semibold)
+          .foregroundStyle(.white)
+          .padding(.horizontal, 12).frame(minHeight: 44)
+          .background(QuillDesign.brand.color(), in: RoundedRectangle(cornerRadius: QuillDesign.Radius.chip))
+        }
+        .buttonStyle(.plain)
+        .disabled(retryingCleanup || captureStatus != nil)
+      }
+      DisclosureGroup("Details") {
+        Text(error).font(.caption).foregroundStyle(theme.text2)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .textSelection(.enabled)
+      }
+      .font(.caption)
+      .foregroundStyle(theme.text3)
+    }
+    .padding(14)
     .background(
-      RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
-        .fill(QuillDesign.ModePalette.dictate.color(0.1))
-        .overlay(
-          RoundedRectangle(cornerRadius: QuillDesign.Radius.card, style: .continuous)
-            .strokeBorder(QuillDesign.ModePalette.dictate.color(0.35), lineWidth: 1)
-        )
+      RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
+        .fill(theme.card)
+        .overlay(RoundedRectangle(cornerRadius: QuillDesign.Radius.panel, style: .continuous)
+          .strokeBorder(theme.hair, lineWidth: 0.5))
     )
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel("Live transcription: \(text)")
+    .padding(.horizontal, 16).padding(.bottom, 10)
+  }
+
+  private func recordingControls(_ status: String) -> some View {
+    HStack(spacing: 14) {
+      if !isRecordingNote { ProgressView().controlSize(.small) }
+      VStack(alignment: .leading, spacing: 3) {
+        Text(status).font(.callout.bold())
+        Text(isRecordingNote ? "Live preview · recording audio" : "Your text stays here until processing finishes")
+          .font(.caption).foregroundStyle(.secondary)
+      }.frame(maxWidth: .infinity, alignment: .leading)
+      if isRecordingNote {
+        Button(action: onPauseRecording) {
+          Image(systemName: isRecordingPaused ? "play.fill" : "pause.fill").frame(width: 44, height: 44)
+        }.accessibilityLabel(isRecordingPaused ? "Resume recording" : "Pause recording")
+        Button("Stop", action: onStopRecording).buttonStyle(.borderedProminent)
+        Menu {
+          Button("Discard recording", role: .destructive, action: onDiscardRecording)
+        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+        .accessibilityLabel("Recording options")
+      }
+    }
+    .padding(.horizontal, 14)
+    .padding(.top, 11)
+    .padding(.bottom, 8)
+    .background(composerBackground)
   }
 
   /// Removed lines struck through in red with a `−` gutter; additions
@@ -644,18 +794,21 @@ struct NoteDetailView: View {
     .padding(.horizontal, 14)
     .padding(.top, 11)
     .padding(.bottom, 8)
-    .background(
-      UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
-        .fill(theme.glass)
-        .background(
-          UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
-            .fill(.ultraThinMaterial)
-        )
-        .overlay(alignment: .top) {
-          Rectangle().fill(theme.hair).frame(height: 0.5)
-        }
-        .ignoresSafeArea(edges: .bottom)
-    )
+    .background(composerBackground)
+  }
+
+  /// Shared chrome keeps recording and composing in the same visual surface.
+  private var composerBackground: some View {
+    UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
+      .fill(theme.glass)
+      .background(
+        UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24, style: .continuous)
+          .fill(.ultraThinMaterial)
+      )
+      .overlay(alignment: .top) {
+        Rectangle().fill(theme.hair).frame(height: 0.5)
+      }
+      .ignoresSafeArea(edges: .bottom)
   }
 
   @ViewBuilder
@@ -664,7 +817,7 @@ struct NoteDetailView: View {
     case .dictate:
       QuillFormatChips(format: $format, hidden: hiddenFormats, onAddCustom: onAddFormat)
     case .edit:
-      QuillEditChips(learned: learnedEditCommands, onCommand: onEditCommand)
+      QuillEditMenu(learned: learnedEditCommands, onCommand: onEditCommand)
     case .act:
       QuillActChips(destinations: destinations, disabled: $mutedDestinations, onAdd: onAddDestination)
     case .auto:

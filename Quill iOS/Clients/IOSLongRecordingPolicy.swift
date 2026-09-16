@@ -52,7 +52,14 @@ struct IOSLiveTranscriptAccumulator {
 
   @discardableResult
   mutating func update(hypothesis: String) -> String {
-    currentHypothesis = hypothesis.trimmingCharacters(in: .whitespacesAndNewlines)
+    let candidate = hypothesis.trimmingCharacters(in: .whitespacesAndNewlines)
+    let previousCount = currentHypothesis.split(whereSeparator: { $0.isWhitespace }).count
+    let candidateCount = candidate.split(whereSeparator: { $0.isWhitespace }).count
+    // Live hypotheses can transiently clear or retract a large block. Keep
+    // the readable preview until a fuller update arrives or the task rotates.
+    // Small corrections still apply; final Whisper output remains authoritative.
+    guard !candidate.isEmpty, previousCount - candidateCount <= 12 else { return combinedText }
+    currentHypothesis = candidate
     return combinedText
   }
 
