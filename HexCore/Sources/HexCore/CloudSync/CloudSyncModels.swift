@@ -12,6 +12,9 @@ public struct SyncableNote: Codable, Identifiable, Equatable, Sendable {
   public var longitude: Double?
   public var placeName: String?
   public var isAutoTitle: Bool
+  /// iOS recording records, including speaker IDs and display names. Kept
+  /// optional so existing Firestore notes and macOS-created notes still decode.
+  public var transcriptionMetadataJSON: String?
   public var sourceDevice: String
   public var sourcePlatform: SyncPlatform
 
@@ -25,6 +28,7 @@ public struct SyncableNote: Codable, Identifiable, Equatable, Sendable {
     longitude: Double? = nil,
     placeName: String? = nil,
     isAutoTitle: Bool = false,
+    transcriptionMetadataJSON: String? = nil,
     sourceDevice: String,
     sourcePlatform: SyncPlatform
   ) {
@@ -37,6 +41,7 @@ public struct SyncableNote: Codable, Identifiable, Equatable, Sendable {
     self.longitude = longitude
     self.placeName = placeName
     self.isAutoTitle = isAutoTitle
+    self.transcriptionMetadataJSON = transcriptionMetadataJSON
     self.sourceDevice = sourceDevice
     self.sourcePlatform = sourcePlatform
   }
@@ -51,6 +56,7 @@ public struct SyncableTranscript: Codable, Identifiable, Equatable, Sendable {
   public var duration: TimeInterval
   public var sourceAppBundleID: String?
   public var sourceAppName: String?
+  public var speakerTranscript: SpeakerTranscript?
   public var sourceDevice: String
   public var sourcePlatform: SyncPlatform
 
@@ -61,6 +67,7 @@ public struct SyncableTranscript: Codable, Identifiable, Equatable, Sendable {
     duration: TimeInterval,
     sourceAppBundleID: String? = nil,
     sourceAppName: String? = nil,
+    speakerTranscript: SpeakerTranscript? = nil,
     sourceDevice: String,
     sourcePlatform: SyncPlatform
   ) {
@@ -70,6 +77,7 @@ public struct SyncableTranscript: Codable, Identifiable, Equatable, Sendable {
     self.duration = duration
     self.sourceAppBundleID = sourceAppBundleID
     self.sourceAppName = sourceAppName
+    self.speakerTranscript = speakerTranscript
     self.sourceDevice = sourceDevice
     self.sourcePlatform = sourcePlatform
   }

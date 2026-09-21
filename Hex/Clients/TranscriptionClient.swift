@@ -24,6 +24,9 @@ struct TranscriptionClient {
   /// Reports transcription progress via `progressCallback`.
   var transcribe: @Sendable (URL, String, DecodingOptions, @escaping (Progress) -> Void) async throws -> String
 
+  /// Transcribes while retaining word timestamps for speaker attribution.
+  var transcribeTimestamped: @Sendable (URL, String, DecodingOptions, @escaping (Progress) -> Void) async throws -> TimestampedTranscription
+
   /// Ensures a model is downloaded (if missing) and loaded into memory, reporting progress via `progressCallback`.
   var downloadModel: @Sendable (String, @escaping (Progress) -> Void) async throws -> Void
 
@@ -45,6 +48,7 @@ extension TranscriptionClient: DependencyKey {
     let live = TranscriptionClientLive()
     return Self(
       transcribe: { try await live.transcribe(url: $0, model: $1, options: $2, progressCallback: $3) },
+      transcribeTimestamped: { try await live.transcribeTimestamped(url: $0, model: $1, options: $2, progressCallback: $3) },
       downloadModel: { try await live.downloadAndLoadModel(variant: $0, progressCallback: $1) },
       deleteModel: { try await live.deleteModel(variant: $0) },
       isModelDownloaded: { await live.isModelDownloaded($0) },
@@ -227,6 +231,20 @@ actor TranscriptionClientLive {
     options: DecodingOptions,
     progressCallback: @escaping (Progress) -> Void
   ) async throws -> String {
+    try await transcribeTimestamped(
+      url: url,
+      model: model,
+      options: options,
+      progressCallback: progressCallback
+    ).text
+  }
+
+  func transcribeTimestamped(
+    url: URL,
+    model: String,
+    options: DecodingOptions,
+    progressCallback: @escaping (Progress) -> Void
+  ) async throws -> TimestampedTranscription {
     let startAll = Date()
     if isParakeet(model) {
       transcriptionLogger.notice("Transcribing with Parakeet model=\(model) file=\(url.lastPathComponent)")
@@ -238,10 +256,10 @@ actor TranscriptionClientLive {
       let preparedClip = try ParakeetClipPreparer.ensureMinimumDuration(url: url, logger: parakeetLogger)
       defer { preparedClip.cleanup() }
       let startTx = Date()
-      let text = try await parakeet.transcribe(preparedClip.url)
+      let result = try await parakeet.transcribeTimestamped(preparedClip.url)
       transcriptionLogger.info("Parakeet transcription took \(String(format: "%.2f", Date().timeIntervalSince(startTx)))s")
       transcriptionLogger.info("Parakeet request total elapsed \(String(format: "%.2f", Date().timeIntervalSince(startAll)))s")
-      return text
+      return result
     }
     let model = await resolveVariant(model)
     // Load or switch to the required model if needed.
@@ -269,13 +287,28 @@ actor TranscriptionClientLive {
     // Perform the transcription.
     transcriptionLogger.notice("Transcribing with WhisperKit model=\(model) file=\(url.lastPathComponent)")
     let startTx = Date()
-    let results = try await whisperKit.transcribe(audioPath: url.path, decodeOptions: options)
+    var timestampOptions = options
+    timestampOptions.withoutTimestamps = false
+    timestampOptions.wordTimestamps = true
+    let results = try await whisperKit.transcribe(audioPath: url.path, decodeOptions: timestampOptions)
     transcriptionLogger.info("WhisperKit transcription took \(String(format: "%.2f", Date().timeIntervalSince(startTx)))s")
     transcriptionLogger.info("WhisperKit request total elapsed \(String(format: "%.2f", Date().timeIntervalSince(startAll)))s")
 
     // Concatenate results from all segments.
     let text = results.map(\.text).joined(separator: " ")
-    return text
+    let words = results.flatMap { result in
+      result.segments.flatMap { segment in
+        (segment.words ?? []).map { word in
+          TimedTranscriptWord(
+            text: word.word,
+            startTime: TimeInterval(word.start),
+            endTime: TimeInterval(word.end),
+            confidence: word.probability
+          )
+        }
+      }
+    }
+    return TimestampedTranscription(text: text, words: words)
   }
 
   // MARK: - Private Helpers

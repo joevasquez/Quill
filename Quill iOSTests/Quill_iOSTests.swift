@@ -153,6 +153,168 @@ struct Quill_iOSTests {
         #expect(note.body == "Pack a charger\n\nBook a hotel")
     }
 
+    @Test("a completed live recording stores speaker-labelled turns")
+    func liveRecordingStoresSpeakers() throws {
+        let sessionID = UUID()
+        let conversation = SpeakerTranscript(
+            speakers: [
+                TranscriptSpeaker(id: "a", colorIndex: 0),
+                TranscriptSpeaker(id: "b", colorIndex: 1),
+            ],
+            utterances: [
+                SpeakerUtterance(speakerID: "a", startTime: 0, endTime: 1, text: "Hello."),
+                SpeakerUtterance(speakerID: "b", startTime: 1, endTime: 2, text: "Hi there."),
+            ]
+        )
+        var note = Note()
+        note.beginPendingTranscription(id: sessionID)
+
+        let appended = note.finalizePendingTranscription(
+            id: sessionID,
+            finalText: conversation.formattedText,
+            speakerTranscript: conversation
+        )
+
+        #expect(appended == "Speaker 1:\nHello.\n\nSpeaker 2:\nHi there.")
+        #expect(note.transcriptions.last?.speakerTranscript == conversation)
+        let loaded = try JSONDecoder().decode(Note.self, from: JSONEncoder().encode(note))
+        #expect(loaded.transcriptions.last?.speakerTranscript == conversation)
+    }
+
+    @Test("renaming a live-recording speaker updates every turn in the note")
+    func renameLiveRecordingSpeaker() {
+        let sessionID = UUID()
+        let conversation = SpeakerTranscript(
+            speakers: [
+                TranscriptSpeaker(id: "a", colorIndex: 0),
+                TranscriptSpeaker(id: "b", colorIndex: 1),
+            ],
+            utterances: [
+                SpeakerUtterance(speakerID: "a", startTime: 0, endTime: 1, text: "First."),
+                SpeakerUtterance(speakerID: "b", startTime: 1, endTime: 2, text: "Second."),
+                SpeakerUtterance(speakerID: "a", startTime: 2, endTime: 3, text: "Third."),
+            ]
+        )
+        var note = Note()
+        note.beginPendingTranscription(id: sessionID)
+        note.finalizePendingTranscription(
+            id: sessionID,
+            finalText: conversation.formattedText,
+            speakerTranscript: conversation
+        )
+
+        let renamed = note.renameSpeaker(
+            transcriptionID: sessionID,
+            speakerID: "a",
+            to: "Joe"
+        )
+
+        #expect(renamed)
+        #expect(note.body.contains("Joe:\nFirst."))
+        #expect(note.body.contains("Joe:\nThird."))
+        #expect(!note.body.contains("Speaker 1:"))
+    }
+
+    @Test("typing inside a speaker turn keeps pills and rename working")
+    func manualTranscriptEditKeepsSpeakers() {
+        let id = UUID()
+        let conversation = SpeakerTranscript(
+            speakers: [TranscriptSpeaker(id: "a", colorIndex: 0), TranscriptSpeaker(id: "b", colorIndex: 1)],
+            utterances: [
+                SpeakerUtterance(speakerID: "a", startTime: 0, endTime: 1, text: "Hello."),
+                SpeakerUtterance(speakerID: "b", startTime: 1, endTime: 2, text: "Hi."),
+            ]
+        )
+        var note = Note()
+        note.beginPendingTranscription(id: id)
+        note.finalizePendingTranscription(id: id, finalText: conversation.formattedText, speakerTranscript: conversation)
+        let edited = note.body.replacingOccurrences(of: "Hello.", with: "Hello there.")
+
+        note.updateBodyPreservingSpeakerLabels(edited)
+
+        #expect(note.speakerLabelOccurrences.count == 2)
+        let renamed = note.renameSpeaker(transcriptionID: id, speakerID: "a", to: "Melissa")
+        #expect(renamed)
+        #expect(note.body.contains("Melissa:\nHello there."))
+
+        var otherDevice = Note(body: note.body)
+        if let metadata = note.transcriptionMetadataJSON {
+            #expect(!metadata.contains("original"))
+            #expect(!metadata.contains("utterances"))
+            otherDevice.restoreTranscriptionMetadata(from: metadata)
+        }
+        #expect(otherDevice.speakerLabelOccurrences.count == 2)
+    }
+
+    @Test("adding a separate note paragraph does not absorb it into a recording")
+    func appendedParagraphStaysOutsideTranscript() {
+        let id = UUID()
+        let conversation = SpeakerTranscript(
+            speakers: [TranscriptSpeaker(id: "a", colorIndex: 0), TranscriptSpeaker(id: "b", colorIndex: 1)],
+            utterances: [
+                SpeakerUtterance(speakerID: "a", startTime: 0, endTime: 1, text: "Hello."),
+                SpeakerUtterance(speakerID: "b", startTime: 1, endTime: 2, text: "Hi."),
+            ]
+        )
+        var note = Note()
+        note.beginPendingTranscription(id: id)
+        note.finalizePendingTranscription(id: id, finalText: conversation.formattedText, speakerTranscript: conversation)
+        note.updateBodyPreservingSpeakerLabels(note.body + "\n\nMy separate note")
+        #expect(note.transcriptions[0].appliedText == conversation.formattedText)
+        #expect(note.speakerLabelOccurrences.count == 2)
+    }
+
+    @Test("speaker label pills stay scoped to their recording")
+    func speakerLabelOccurrencesStayScoped() {
+        let firstID = UUID()
+        let secondID = UUID()
+        let first = SpeakerTranscript(
+            speakers: [
+                TranscriptSpeaker(id: "first-a", colorIndex: 0),
+                TranscriptSpeaker(id: "first-b", colorIndex: 1),
+            ],
+            utterances: [
+                SpeakerUtterance(speakerID: "first-a", startTime: 0, endTime: 1, text: "First recording."),
+                SpeakerUtterance(speakerID: "first-b", startTime: 1, endTime: 2, text: "Reply one."),
+            ]
+        )
+        let second = SpeakerTranscript(
+            speakers: [
+                TranscriptSpeaker(id: "second-a", colorIndex: 0),
+                TranscriptSpeaker(id: "second-b", colorIndex: 1),
+            ],
+            utterances: [
+                SpeakerUtterance(speakerID: "second-a", startTime: 0, endTime: 1, text: "First recording."),
+                SpeakerUtterance(speakerID: "second-b", startTime: 1, endTime: 2, text: "Reply one."),
+            ]
+        )
+        var note = Note()
+        note.beginPendingTranscription(id: firstID)
+        note.finalizePendingTranscription(
+            id: firstID,
+            finalText: first.formattedText,
+            speakerTranscript: first
+        )
+        note.beginPendingTranscription(id: secondID)
+        note.finalizePendingTranscription(
+            id: secondID,
+            finalText: second.formattedText,
+            speakerTranscript: second
+        )
+
+        let occurrences = note.speakerLabelOccurrences
+
+        #expect(occurrences.count == 4)
+        #expect(occurrences.map(\.transcriptionID) == [firstID, firstID, secondID, secondID])
+        #expect(occurrences.map(\.speakerID) == ["first-a", "first-b", "second-a", "second-b"])
+        #expect(occurrences.map(\.utf16Location) == occurrences.map(\.utf16Location).sorted())
+
+        let didRename = note.renameSpeaker(transcriptionID: firstID, speakerID: "first-a", to: "Joe")
+        #expect(didRename)
+        #expect(note.body == first.formattedText.replacingOccurrences(of: "Speaker 1:", with: "Joe:")
+            + "\n\n" + second.formattedText)
+    }
+
     @Test("discard removes only the provisional paragraph")
     func discardPreservesExistingText() {
         let sessionID = UUID()

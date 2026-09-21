@@ -106,12 +106,53 @@ actor ParakeetClient {
   }
 
   func transcribe(_ url: URL) async throws -> String {
+    try await transcribeTimestamped(url).text
+  }
+
+  func transcribeTimestamped(_ url: URL) async throws -> TimestampedTranscription {
     guard let asr else { throw NSError(domain: "Parakeet", code: -1, userInfo: [NSLocalizedDescriptionKey: "Parakeet not initialized"]) }
     let t0 = Date()
     logger.notice("Transcribing with Parakeet file=\(url.lastPathComponent)")
     let result = try await asr.transcribe(url)
     logger.info("Parakeet transcription finished in \(String(format: "%.2f", Date().timeIntervalSince(t0)))s")
-    return result.text
+    let words = mergeTokensIntoWords(result.tokenTimings ?? [])
+    return TimestampedTranscription(text: result.text, words: words)
+  }
+
+  private func mergeTokensIntoWords(_ timings: [TokenTiming]) -> [TimedTranscriptWord] {
+    var words: [TimedTranscriptWord] = []
+    var text = ""
+    var start: TimeInterval?
+    var end: TimeInterval = 0
+    var confidences: [Float] = []
+
+    func appendCurrentWord() {
+      guard !text.isEmpty, let start else { return }
+      let confidence = confidences.isEmpty ? nil : confidences.reduce(0, +) / Float(confidences.count)
+      words.append(TimedTranscriptWord(
+        text: text,
+        startTime: start,
+        endTime: end,
+        confidence: confidence
+      ))
+    }
+
+    for timing in timings {
+      let beginsWord = timing.token.first?.isWhitespace == true
+      if beginsWord {
+        appendCurrentWord()
+        text = timing.token.trimmingCharacters(in: .whitespacesAndNewlines)
+        start = timing.startTime
+        confidences = [timing.confidence]
+      } else {
+        if start == nil { start = timing.startTime }
+        text += timing.token
+        confidences.append(timing.confidence)
+      }
+      end = timing.endTime
+    }
+    appendCurrentWord()
+    return words
   }
 
   // Delete cached Parakeet models from known locations and reset state

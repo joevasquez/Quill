@@ -1,6 +1,23 @@
 import XCTest
 @testable import HexCore
 
+final class MarkdownMultiLineFormattingTests: XCTestCase {
+  func testSelectedLinesEachGetBullet() {
+    let text = "before\nfirst\nsecond\nafter"
+    let selection = (text as NSString).range(of: "first\nsecond")
+    let result = MarkdownLineFormatting.apply(marker: "- ", to: text, selection: selection)
+    XCTAssertEqual(result.text, "before\n- first\n- second\nafter")
+  }
+
+  func testCaretStaysCollapsedAfterAddingBullet() {
+    let result = MarkdownLineFormatting.apply(
+      marker: "- ", to: "first", selection: NSRange(location: 3, length: 0)
+    )
+    XCTAssertEqual(result.text, "- first")
+    XCTAssertEqual(result.selection, NSRange(location: 5, length: 0))
+  }
+}
+
 final class MarkdownListContinuationTests: XCTestCase {
   private func result(_ text: String, caretAtEnd: Bool = true, caret: Int? = nil) -> MarkdownListContinuation.Result {
     MarkdownListContinuation.handleNewline(

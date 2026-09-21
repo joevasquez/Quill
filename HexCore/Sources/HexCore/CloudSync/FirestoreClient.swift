@@ -207,7 +207,7 @@ public actor FirestoreClient {
 
   // MARK: - Field encoding (Note)
 
-  private func noteToFields(_ note: SyncableNote) -> [String: Any] {
+  nonisolated func noteToFields(_ note: SyncableNote) -> [String: Any] {
     var fields: [String: Any] = [
       "id": ["stringValue": note.id.uuidString],
       "title": ["stringValue": note.title],
@@ -227,10 +227,30 @@ public actor FirestoreClient {
     if let place = note.placeName {
       fields["placeName"] = ["stringValue": place]
     }
+    if let metadata = note.transcriptionMetadataJSON,
+       CloudNotePayloadBudget.canInclude(metadata: metadata, in: note) {
+      fields["transcriptionMetadataJSON"] = ["stringValue": metadata]
+    }
     return fields
   }
 
-  private func fieldsToNote(_ fields: [String: [String: Any]]) -> SyncableNote? {
+  /// Firestore's hard document ceiling is 1 MiB. Keep headroom for field
+  /// names, timestamps, and Firestore's encoded representation so adding
+  /// speaker metadata never turns an otherwise syncable note into a failed
+  /// upload. The note body remains authoritative if metadata is omitted.
+  private enum CloudNotePayloadBudget {
+    static let safeDocumentBytes = 900 * 1_024
+
+    static func canInclude(metadata: String, in note: SyncableNote) -> Bool {
+      let contentBytes = [
+        note.title, note.body, note.placeName ?? "", note.sourceDevice,
+        note.sourcePlatform.rawValue, metadata,
+      ].reduce(0) { $0 + $1.utf8.count }
+      return contentBytes <= safeDocumentBytes
+    }
+  }
+
+  nonisolated func fieldsToNote(_ fields: [String: [String: Any]]) -> SyncableNote? {
     guard let idStr = fields["id"]?["stringValue"] as? String,
           let id = UUID(uuidString: idStr),
           let title = fields["title"]?["stringValue"] as? String,
@@ -251,6 +271,7 @@ public actor FirestoreClient {
       longitude: fields["longitude"]?["doubleValue"] as? Double,
       placeName: fields["placeName"]?["stringValue"] as? String,
       isAutoTitle: fields["isAutoTitle"]?["booleanValue"] as? Bool ?? false,
+      transcriptionMetadataJSON: fields["transcriptionMetadataJSON"]?["stringValue"] as? String,
       sourceDevice: fields["sourceDevice"]?["stringValue"] as? String ?? "unknown",
       sourcePlatform: SyncPlatform(rawValue: fields["sourcePlatform"]?["stringValue"] as? String ?? "") ?? .iOS
     )
@@ -273,6 +294,13 @@ public actor FirestoreClient {
     if let name = t.sourceAppName {
       fields["sourceAppName"] = ["stringValue": name]
     }
+    if let conversation = t.speakerTranscript,
+       let data = try? JSONEncoder().encode(conversation),
+       let json = String(data: data, encoding: .utf8) {
+      // Keep the structured payload in one versionable field. The original
+      // `text` field remains readable by older Quill versions.
+      fields["speakerTranscriptJSON"] = ["stringValue": json]
+    }
     return fields
   }
 
@@ -292,9 +320,15 @@ public actor FirestoreClient {
       duration: duration,
       sourceAppBundleID: fields["sourceAppBundleID"]?["stringValue"] as? String,
       sourceAppName: fields["sourceAppName"]?["stringValue"] as? String,
+      speakerTranscript: decodeSpeakerTranscript(fields["speakerTranscriptJSON"]?["stringValue"] as? String),
       sourceDevice: fields["sourceDevice"]?["stringValue"] as? String ?? "unknown",
       sourcePlatform: SyncPlatform(rawValue: fields["sourcePlatform"]?["stringValue"] as? String ?? "") ?? .macOS
     )
+  }
+
+  private func decodeSpeakerTranscript(_ json: String?) -> SpeakerTranscript? {
+    guard let json, let data = json.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode(SpeakerTranscript.self, from: data)
   }
 
   // MARK: - Helpers
@@ -304,11 +338,11 @@ public actor FirestoreClient {
          .replacingOccurrences(of: "@", with: "_at_")
   }
 
-  private func iso8601(_ date: Date) -> String {
+  private nonisolated func iso8601(_ date: Date) -> String {
     ISO8601DateFormatter().string(from: date)
   }
 
-  private func parseISO8601(_ string: String) -> Date? {
+  private nonisolated func parseISO8601(_ string: String) -> Date? {
     let fmt = ISO8601DateFormatter()
     fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     return fmt.date(from: string) ?? ISO8601DateFormatter().date(from: string)

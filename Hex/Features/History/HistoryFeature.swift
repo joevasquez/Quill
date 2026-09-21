@@ -97,6 +97,8 @@ struct HistoryFeature {
 		var isTranscribingFile: Bool = false
 		var fileTranscriptionResult: String?
 		var fileTranscriptionError: String?
+		var speakerDetectionInFlight: Set<UUID> = []
+		var speakerDetectionErrors: [UUID: String] = [:]
 
 		mutating func stopAudioPlayback() {
 			audioPlayerController?.stop()
@@ -115,10 +117,14 @@ struct HistoryFeature {
 		case confirmDeleteAll
 		case playbackFinished
 		case navigateToSettings
+		case detectSpeakers(UUID)
+		case speakerDetectionCompleted(UUID, SpeakerTranscript?)
+		case speakerDetectionFailed(UUID, String)
+		case renameSpeaker(transcriptID: UUID, speakerID: String, name: String)
 
 		// File transcription
 		case transcribeFile(URL)
-		case fileTranscriptionCompleted(String)
+		case fileTranscriptionCompleted(Transcript, shouldStore: Bool)
 		case fileTranscriptionFailed(String)
 		case clearFileTranscription
 	}
@@ -126,6 +132,7 @@ struct HistoryFeature {
 	@Dependency(\.pasteboard) var pasteboard
 	@Dependency(\.transcriptPersistence) var transcriptPersistence
 	@Dependency(\.transcription) var transcription
+	@Dependency(\.speakerDiarization) var speakerDiarization
 
 	private func deleteAudioEffect(for transcripts: [Transcript]) -> Effect<Action> {
 		.run { [transcriptPersistence] _ in
@@ -236,14 +243,15 @@ struct HistoryFeature {
 				// This will be handled by the parent reducer
 				return .none
 
-			// File transcription
-			case let .transcribeFile(url):
-				state.isTranscribingFile = true
-				state.fileTranscriptionResult = nil
-				state.fileTranscriptionError = nil
-				@Shared(.hexSettings) var hexSettings: HexSettings
-				let model = hexSettings.selectedModel
-				let language = hexSettings.outputLanguage
+			case let .detectSpeakers(id):
+				guard let transcript = state.transcriptionHistory.history.first(where: { $0.id == id }),
+				      !state.speakerDetectionInFlight.contains(id)
+				else { return .none }
+				state.speakerDetectionInFlight.insert(id)
+				state.speakerDetectionErrors[id] = nil
+				@Shared(.hexSettings) var settings: HexSettings
+				let model = settings.selectedModel
+				let language = settings.outputLanguage
 
 				return .run { send in
 					do {
@@ -252,20 +260,139 @@ struct HistoryFeature {
 							detectLanguage: language == nil,
 							chunkingStrategy: .vad
 						)
-						let result = try await transcription.transcribe(url, model, options) { _ in }
-						await send(.fileTranscriptionCompleted(result))
+						let timed = try await transcription.transcribeTimestamped(
+							transcript.audioPath, model, options
+						) { _ in }
+						let ranges = try await speakerDiarization.diarize(transcript.audioPath)
+						let speakerTranscript = SpeakerTranscriptAssembler.assemble(
+							words: timed.words,
+							speakerRanges: ranges
+						)
+						await send(.speakerDetectionCompleted(id, speakerTranscript))
+					} catch {
+						historyLogger.error("Speaker detection failed: \(error.localizedDescription, privacy: .public)")
+						await send(.speakerDetectionFailed(id, error.localizedDescription))
+					}
+				}
+
+			case let .speakerDetectionCompleted(id, speakerTranscript):
+				state.speakerDetectionInFlight.remove(id)
+				guard let speakerTranscript else {
+					state.speakerDetectionErrors[id] = "Multiple speakers were not detected."
+					return .none
+				}
+				var updatedTranscript: Transcript?
+				state.$transcriptionHistory.withLock { history in
+					guard let index = history.history.firstIndex(where: { $0.id == id }) else { return }
+					history.history[index].speakerTranscript = speakerTranscript
+					updatedTranscript = history.history[index]
+				}
+				guard let updatedTranscript else { return .none }
+				return .run { _ in await MacCloudSync.shared.uploadTranscript(updatedTranscript) }
+
+			case let .speakerDetectionFailed(id, error):
+				state.speakerDetectionInFlight.remove(id)
+				state.speakerDetectionErrors[id] = error
+				return .none
+
+			case let .renameSpeaker(transcriptID, speakerID, name):
+				var updatedTranscript: Transcript?
+				state.$transcriptionHistory.withLock { history in
+					guard let index = history.history.firstIndex(where: { $0.id == transcriptID }),
+					      history.history[index].speakerTranscript != nil
+					else { return }
+					history.history[index].speakerTranscript?.renameSpeaker(id: speakerID, to: name)
+					updatedTranscript = history.history[index]
+				}
+				guard let updatedTranscript else { return .none }
+				return .run { _ in await MacCloudSync.shared.uploadTranscript(updatedTranscript) }
+
+			// File transcription
+			case let .transcribeFile(url):
+				state.isTranscribingFile = true
+				state.fileTranscriptionResult = nil
+				state.fileTranscriptionError = nil
+				@Shared(.hexSettings) var hexSettings: HexSettings
+				let model = hexSettings.selectedModel
+				let language = hexSettings.outputLanguage
+				let shouldStore = hexSettings.saveTranscriptionHistory
+
+				return .run { send in
+					let accessed = url.startAccessingSecurityScopedResource()
+					defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+					do {
+						let options = DecodingOptions(
+							language: language,
+							detectLanguage: language == nil,
+							chunkingStrategy: .vad
+						)
+						let timed = try await transcription.transcribeTimestamped(url, model, options) { _ in }
+						var conversation: SpeakerTranscript?
+						do {
+							let ranges = try await speakerDiarization.diarize(url)
+							conversation = SpeakerTranscriptAssembler.assemble(
+								words: timed.words,
+								speakerRanges: ranges
+							)
+						} catch {
+							// Diarization is an enhancement; never discard a successful
+							// transcription because speaker detection failed.
+							historyLogger.warning("Imported file speaker detection failed: \(error.localizedDescription, privacy: .public)")
+						}
+
+						var duration = timed.words.map(\.endTime).max() ?? 0
+						if duration <= 0 {
+							let asset = AVURLAsset(url: url)
+							if let assetDuration = try? await asset.load(.duration), assetDuration.seconds.isFinite {
+								duration = assetDuration.seconds
+							}
+						}
+						let storedURL: URL
+						if shouldStore {
+							let folder = try URL.hexApplicationSupport.appendingPathComponent("Recordings", isDirectory: true)
+							try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+							let ext = url.pathExtension.isEmpty ? "m4a" : url.pathExtension
+							storedURL = folder.appendingPathComponent("import-\(UUID().uuidString).\(ext)")
+							try FileManager.default.copyItem(at: url, to: storedURL)
+						} else {
+							storedURL = url
+						}
+						let transcript = Transcript(
+							timestamp: Date(),
+							text: timed.text.trimmingCharacters(in: .whitespacesAndNewlines),
+							audioPath: storedURL,
+							duration: duration,
+							speakerTranscript: conversation
+						)
+						await send(.fileTranscriptionCompleted(transcript, shouldStore: shouldStore))
 					} catch {
 						historyLogger.error("File transcription failed: \(error.localizedDescription)")
 						await send(.fileTranscriptionFailed(error.localizedDescription))
 					}
 				}
 
-			case let .fileTranscriptionCompleted(text):
+			case let .fileTranscriptionCompleted(transcript, shouldStore):
 				state.isTranscribingFile = false
-				state.fileTranscriptionResult = text
-				return .run { [pasteboard] _ in
-					await pasteboard.copy(text)
+				state.fileTranscriptionResult = transcript.shareableText
+				var evictedTranscripts: [Transcript] = []
+				if shouldStore {
+					@Shared(.hexSettings) var hexSettings: HexSettings
+					state.$transcriptionHistory.withLock { history in
+						history.history.insert(transcript, at: 0)
+						if let maxEntries = hexSettings.maxHistoryEntries, maxEntries > 0 {
+							while history.history.count > maxEntries {
+								if let removed = history.history.popLast() {
+									evictedTranscripts.append(removed)
+								}
+							}
+						}
+					}
 				}
+				return .merge(
+					.run { [pasteboard] _ in await pasteboard.copy(transcript.shareableText) },
+					.run { _ in await MacCloudSync.shared.uploadTranscript(transcript) },
+					deleteAudioEffect(for: evictedTranscripts)
+				)
 
 			case let .fileTranscriptionFailed(error):
 				state.isTranscribingFile = false
@@ -310,24 +437,61 @@ struct TranscriptView: View {
 	let onPlay: () -> Void
 	let onCopy: () -> Void
 	let onDelete: () -> Void
+	let isDetectingSpeakers: Bool
+	let speakerDetectionError: String?
+	let onDetectSpeakers: () -> Void
+	let onRenameSpeaker: (String, String) -> Void
 
 	/// Long dictations used to render in full, making a single row fill
 	/// the window. Collapse past this many lines with a toggle.
 	private static let collapsedLineLimit = 6
 	@State private var isExpanded = false
+	@State private var speakerBeingRenamed: String?
+	@State private var speakerNameDraft = ""
 
 	private var isLongTranscript: Bool {
-		transcript.text.count > 500 || transcript.text.filter { $0 == "\n" }.count >= Self.collapsedLineLimit
+		transcript.text.count > 500
+			|| transcript.text.filter { $0 == "\n" }.count >= Self.collapsedLineLimit
+			|| (transcript.speakerTranscript?.utterances.count ?? 0) > Self.collapsedLineLimit
 	}
 
 	var body: some View {
 		VStack(alignment: .leading, spacing: 0) {
-			VStack(alignment: .leading, spacing: 6) {
-				Text(transcript.text)
-					.font(.body)
-					.lineLimit(isExpanded ? nil : Self.collapsedLineLimit)
-					.fixedSize(horizontal: false, vertical: true)
-					.textSelection(.enabled)
+			VStack(alignment: .leading, spacing: 8) {
+				if let conversation = transcript.speakerTranscript {
+					ForEach(visibleUtterances(in: conversation)) { utterance in
+						HStack(alignment: .top, spacing: 10) {
+							Button {
+								speakerBeingRenamed = utterance.speakerID
+								speakerNameDraft = conversation.displayName(for: utterance.speakerID)
+							} label: {
+								Text(conversation.displayName(for: utterance.speakerID))
+									.font(.caption.weight(.semibold))
+									.foregroundStyle(speakerColor(for: utterance.speakerID, in: conversation))
+									.frame(width: 76, alignment: .leading)
+							}
+							.buttonStyle(.plain)
+							.help("Rename speaker")
+
+							Text(utterance.text)
+								.font(.body)
+								.fixedSize(horizontal: false, vertical: true)
+								.textSelection(.enabled)
+						}
+					}
+				} else {
+					Text(transcript.text)
+						.font(.body)
+						.lineLimit(isExpanded ? nil : Self.collapsedLineLimit)
+						.fixedSize(horizontal: false, vertical: true)
+						.textSelection(.enabled)
+				}
+
+				if let speakerDetectionError {
+					Label(speakerDetectionError, systemImage: "exclamationmark.triangle")
+						.font(.caption)
+						.foregroundStyle(.orange)
+				}
 
 				if isLongTranscript {
 					Button(isExpanded ? "Show less" : "Show more") {
@@ -375,6 +539,21 @@ struct TranscriptView: View {
 				Spacer()
 
 				HStack(spacing: 10) {
+					if transcript.speakerTranscript == nil {
+						Button(action: onDetectSpeakers) {
+							if isDetectingSpeakers {
+								ProgressView().controlSize(.mini)
+							} else {
+								Image(systemName: "person.2.wave.2")
+							}
+						}
+						.buttonStyle(.plain)
+						.disabled(isDetectingSpeakers)
+						.foregroundStyle(.secondary)
+						.help(isDetectingSpeakers ? "Detecting speakers…" : "Detect speakers")
+						.accessibilityLabel("Detect speakers")
+					}
+
 					Button {
 						onCopy()
 						showCopyAnimation()
@@ -409,7 +588,7 @@ struct TranscriptView: View {
 				.font(.subheadline)
 				// Quieter rows: actions only appear on hover (or while
 				// active), so the list reads as content, not chrome.
-				.opacity(isHovering || isPlaying || showCopied ? 1 : 0)
+				.opacity(isHovering || isPlaying || isDetectingSpeakers || showCopied ? 1 : 0)
 				.animation(.easeOut(duration: 0.12), value: isHovering)
 			}
 			.frame(height: 20)
@@ -429,6 +608,31 @@ struct TranscriptView: View {
 			// Clean up any running task when view disappears
 			copyTask?.cancel()
 		}
+		.alert("Rename Speaker", isPresented: Binding(
+			get: { speakerBeingRenamed != nil },
+			set: { if !$0 { speakerBeingRenamed = nil } }
+		)) {
+			TextField("Speaker name", text: $speakerNameDraft)
+			Button("Rename") {
+				if let speakerID = speakerBeingRenamed {
+					onRenameSpeaker(speakerID, speakerNameDraft)
+				}
+				speakerBeingRenamed = nil
+			}
+			Button("Cancel", role: .cancel) { speakerBeingRenamed = nil }
+		} message: {
+			Text("This changes the name everywhere this speaker appears in the transcript.")
+		}
+	}
+
+	private func visibleUtterances(in conversation: SpeakerTranscript) -> [SpeakerUtterance] {
+		isExpanded ? conversation.utterances : Array(conversation.utterances.prefix(Self.collapsedLineLimit))
+	}
+
+	private func speakerColor(for id: String, in conversation: SpeakerTranscript) -> Color {
+		let palette: [Color] = [.blue, .purple, .orange, .teal, .pink, .indigo]
+		let index = conversation.speakers.first(where: { $0.id == id })?.colorIndex ?? 0
+		return palette[index % palette.count]
 	}
 
 	@State private var showCopied = false
@@ -458,7 +662,11 @@ struct TranscriptView: View {
 		isPlaying: false,
 		onPlay: {},
 		onCopy: {},
-		onDelete: {}
+		onDelete: {},
+		isDetectingSpeakers: false,
+		speakerDetectionError: nil,
+		onDetectSpeakers: {},
+		onRenameSpeaker: { _, _ in }
 	)
 }
 
@@ -476,13 +684,17 @@ struct HistoryView: View {
 	@Shared(.usageStats) var usageStats: UsageStats
 
 	/// Transcripts filtered by the current search query. Matches case-
-	/// insensitively against the transcript text and the source app name
+	/// insensitively against transcript text, speaker names, and source app name
 	/// — so "slack" surfaces every dictation routed into Slack.
 	private var visibleTranscripts: [Transcript] {
 		let trimmed = debouncedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
 		guard !trimmed.isEmpty else { return store.transcriptionHistory.history }
 		return store.transcriptionHistory.history.filter { transcript in
 			if transcript.text.localizedCaseInsensitiveContains(trimmed) { return true }
+			if transcript.speakerTranscript?.speakers.contains(where: {
+				transcript.speakerTranscript?.displayName(for: $0.id)
+					.localizedCaseInsensitiveContains(trimmed) == true
+			}) == true { return true }
 			if let app = transcript.sourceAppName,
 			   app.localizedCaseInsensitiveContains(trimmed) { return true }
 			return false
@@ -545,9 +757,15 @@ struct HistoryView: View {
                       transcript: transcript,
                       isPlaying: store.playingTranscriptID == transcript.id,
                       onPlay: { store.send(.playTranscript(transcript.id)) },
-                      onCopy: { store.send(.copyToClipboard(transcript.text)) },
-                      onDelete: { store.send(.deleteTranscript(transcript.id)) }
-                    )
+					  onCopy: { store.send(.copyToClipboard(transcript.shareableText)) },
+					  onDelete: { store.send(.deleteTranscript(transcript.id)) },
+					  isDetectingSpeakers: store.speakerDetectionInFlight.contains(transcript.id),
+					  speakerDetectionError: store.speakerDetectionErrors[transcript.id],
+					  onDetectSpeakers: { store.send(.detectSpeakers(transcript.id)) },
+					  onRenameSpeaker: { speakerID, name in
+						store.send(.renameSpeaker(transcriptID: transcript.id, speakerID: speakerID, name: name))
+					  }
+					)
                   }
                 }
               }
@@ -625,7 +843,7 @@ struct FileDropZoneView: View {
 			if store.isTranscribingFile {
 				ProgressView()
 					.controlSize(.small)
-				Text("Transcribing file...")
+				Text("Transcribing and identifying speakers...")
 					.font(.caption)
 					.foregroundStyle(.secondary)
 			} else if let result = store.fileTranscriptionResult {

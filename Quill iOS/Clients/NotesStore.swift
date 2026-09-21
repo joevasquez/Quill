@@ -249,12 +249,17 @@ final class NotesStore: ObservableObject {
   func finalizeTranscriptionDraft(
     noteID: UUID,
     sessionID: UUID,
-    finalText: String
+    finalText: String,
+    speakerTranscript: SpeakerTranscript? = nil
   ) -> (note: Note, appendedText: String)? {
     guard let idx = notes.firstIndex(where: { $0.id == noteID }) else { return nil }
     let previous = notes[idx]
     var note = previous
-    guard let appended = note.finalizePendingTranscription(id: sessionID, finalText: finalText) else {
+    guard let appended = note.finalizePendingTranscription(
+      id: sessionID,
+      finalText: finalText,
+      speakerTranscript: speakerTranscript
+    ) else {
       return nil
     }
     pendingDraftSaves[noteID]?.cancel()
@@ -265,6 +270,24 @@ final class NotesStore: ObservableObject {
       return nil
     }
     return (note, appended)
+  }
+
+  @discardableResult
+  func renameSpeaker(
+    noteID: UUID,
+    transcriptionID: UUID,
+    speakerID: String,
+    to name: String
+  ) -> Bool {
+    guard let index = notes.firstIndex(where: { $0.id == noteID }) else { return false }
+    var note = notes[index]
+    guard note.renameSpeaker(
+      transcriptionID: transcriptionID,
+      speakerID: speakerID,
+      to: name
+    ) else { return false }
+    notes[index] = note
+    return save(syncNoteID: noteID)
   }
 
   /// Drops only this recording's provisional paragraph. A newly-created empty
@@ -316,8 +339,7 @@ final class NotesStore: ObservableObject {
 
   func updateBody(id: UUID, to body: String) {
     guard let idx = notes.firstIndex(where: { $0.id == id }) else { return }
-    notes[idx].body = body
-    notes[idx].updatedAt = Date()
+    notes[idx].updateBodyPreservingSpeakerLabels(body)
     save(syncNoteID: id)
   }
 
@@ -863,6 +885,7 @@ final class NotesStore: ObservableObject {
       longitude: note.location?.longitude,
       placeName: note.location?.placeName,
       isAutoTitle: note.isAutoTitle,
+      transcriptionMetadataJSON: note.transcriptionMetadataJSON,
       sourceDevice: DeviceIdentity.id,
       sourcePlatform: .iOS
     )
@@ -875,6 +898,9 @@ final class NotesStore: ObservableObject {
         notes[idx].body = cloud.body
         notes[idx].updatedAt = cloud.updatedAt
         notes[idx].isAutoTitle = cloud.isAutoTitle
+        if let metadata = cloud.transcriptionMetadataJSON {
+          notes[idx].restoreTranscriptionMetadata(from: metadata)
+        }
         if let lat = cloud.latitude, let lng = cloud.longitude {
           notes[idx].location = NoteLocation(latitude: lat, longitude: lng, placeName: cloud.placeName)
         }
@@ -893,7 +919,11 @@ final class NotesStore: ObservableObject {
         },
         isAutoTitle: cloud.isAutoTitle
       )
-      notes.append(note)
+      var restored = note
+      if let metadata = cloud.transcriptionMetadataJSON {
+        restored.restoreTranscriptionMetadata(from: metadata)
+      }
+      notes.append(restored)
     }
     save()
   }

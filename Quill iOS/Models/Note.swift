@@ -11,6 +11,14 @@
 import Foundation
 import HexCore
 
+struct NoteSpeakerLabelOccurrence: Equatable {
+  let transcriptionID: UUID
+  let speakerID: String
+  let displayName: String
+  let colorIndex: Int
+  let utf16Location: Int
+}
+
 struct Note: Codable, Identifiable, Equatable, Hashable {
   var id: UUID
   var title: String
@@ -151,7 +159,11 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
   /// final transcription failed, an empty `finalText` falls back to the last
   /// live partial so the recoverable words are still kept.
   @discardableResult
-  mutating func finalizePendingTranscription(id: UUID, finalText: String) -> String? {
+  mutating func finalizePendingTranscription(
+    id: UUID,
+    finalText: String,
+    speakerTranscript: SpeakerTranscript? = nil
+  ) -> String? {
     guard let pendingTranscription, pendingTranscription.id == id else { return nil }
     let final = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
     let fallback = pendingTranscription.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -161,13 +173,208 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
       transcriptions.append(NoteTranscription(
         id: id, recordedAt: pendingTranscription.startedAt,
         original: pendingTranscription.originalText ?? fallback,
-        appliedText: resolved
+        appliedText: resolved,
+        speakerTranscript: speakerTranscript
       ))
     }
     guard !resolved.isEmpty else { return "" }
     body = Self.appendingParagraph(resolved, to: body)
     updatedAt = Date()
     return resolved
+  }
+
+  /// Renames one diarized speaker and rewrites the exact transcript block
+  /// in the note body. If the user has edited that block since capture, the
+  /// rename is rejected rather than replacing unrelated text.
+  @discardableResult
+  mutating func renameSpeaker(
+    transcriptionID: UUID,
+    speakerID: String,
+    to name: String
+  ) -> Bool {
+    guard let index = transcriptions.firstIndex(where: { $0.id == transcriptionID }),
+          var conversation = transcriptions[index].speakerTranscript
+    else { return false }
+
+    let previousText = transcriptions[index].appliedText
+    let previousLabel = conversation.displayName(for: speakerID) + ":"
+    conversation.renameSpeaker(id: speakerID, to: name)
+    let renamedLabel = conversation.displayName(for: speakerID) + ":"
+    let renamedText = previousText
+      .components(separatedBy: .newlines)
+      .map { $0 == previousLabel ? renamedLabel : $0 }
+      .joined(separator: "\n")
+    guard let range = bodyRange(forTranscriptionAt: index) else { return false }
+
+    body.replaceSubrange(range, with: renamedText)
+    transcriptions[index].appliedText = renamedText
+    transcriptions[index].speakerTranscript = conversation
+    updatedAt = Date()
+    return true
+  }
+
+  private func bodyRange(forTranscriptionAt targetIndex: Int) -> Range<String.Index>? {
+    var searchStart = body.startIndex
+    for index in transcriptions.indices {
+      let appliedText = transcriptions[index].appliedText
+      guard !appliedText.isEmpty,
+            let range = body.range(of: appliedText, range: searchStart..<body.endIndex)
+      else { continue }
+      if index == targetIndex { return range }
+      searchStart = range.upperBound
+    }
+    return nil
+  }
+
+  /// Keeps a recording's editable body block anchored when a manual edit
+  /// changes its words but leaves the speaker label lines intact. The timed
+  /// original remains untouched in `speakerTranscript`.
+  mutating func updateBodyPreservingSpeakerLabels(_ newBody: String) {
+    guard newBody != body else { return }
+    let old = body as NSString
+    let new = newBody as NSString
+    let prefixLimit = min(old.length, new.length)
+    var prefix = 0
+    while prefix < prefixLimit, old.character(at: prefix) == new.character(at: prefix) {
+      prefix += 1
+    }
+    var suffix = 0
+    while suffix < old.length - prefix,
+          suffix < new.length - prefix,
+          old.character(at: old.length - suffix - 1) == new.character(at: new.length - suffix - 1) {
+      suffix += 1
+    }
+    let changedEnd = old.length - suffix
+    let delta = new.length - old.length
+
+    for index in transcriptions.indices {
+      guard let conversation = transcriptions[index].speakerTranscript else { continue }
+      guard let range = bodyRange(forTranscriptionAt: index),
+            let start = range.lowerBound.samePosition(in: body.utf16),
+            let end = range.upperBound.samePosition(in: body.utf16)
+      else { continue }
+      let startOffset = body.utf16.distance(from: body.utf16.startIndex, to: start)
+      let endOffset = body.utf16.distance(from: body.utf16.startIndex, to: end)
+      guard prefix >= startOffset, changedEnd <= endOffset else { continue }
+      // A new paragraph after the recording is independent note content,
+      // not an edit to the final spoken turn.
+      if prefix == endOffset, changedEnd == endOffset,
+         new.substring(from: prefix).hasPrefix("\n\n") {
+        continue
+      }
+      let newLength = endOffset - startOffset + delta
+      guard newLength >= 0, startOffset + newLength <= new.length else { continue }
+      let candidate = new.substring(with: NSRange(location: startOffset, length: newLength))
+      let previousLabels = speakerLabelLines(in: transcriptions[index].appliedText, conversation: conversation)
+      let candidateLabels = speakerLabelLines(in: candidate, conversation: conversation)
+      guard previousLabels == candidateLabels else { continue }
+      transcriptions[index].appliedText = candidate
+      break
+    }
+    body = newBody
+    updatedAt = Date()
+  }
+
+  private func speakerLabelLines(in text: String, conversation: SpeakerTranscript) -> [String] {
+    let labels = Set(conversation.speakers.map { conversation.displayName(for: $0.id) + ":" })
+    return text.components(separatedBy: "\n").filter { labels.contains($0) }
+  }
+
+  var transcriptionMetadataJSON: String? {
+    let speakerRecords = transcriptions.compactMap(SyncedSpeakerTranscription.init)
+    guard !speakerRecords.isEmpty,
+          let data = try? JSONEncoder().encode(speakerRecords)
+    else { return nil }
+    return String(data: data, encoding: .utf8)
+  }
+
+  mutating func restoreTranscriptionMetadata(from json: String) {
+    guard let data = json.data(using: .utf8) else { return }
+    let records: [NoteTranscription]
+    if let compact = try? JSONDecoder().decode([SyncedSpeakerTranscription].self, from: data) {
+      records = compact.map(\.noteTranscription)
+    } else if let legacy = try? JSONDecoder().decode([NoteTranscription].self, from: data) {
+      records = legacy
+    } else {
+      return
+    }
+    let incomingIDs = Set(records.map(\.id))
+    transcriptions.removeAll { incomingIDs.contains($0.id) }
+    transcriptions.append(contentsOf: records)
+    transcriptions.sort { $0.recordedAt < $1.recordedAt }
+  }
+
+  /// Cloud only needs the editable block plus speaker identity to render and
+  /// rename pills. Raw audio-derived utterances, retry prompts, and duplicate
+  /// originals stay local; omitting them roughly halves long-meeting payloads.
+  private struct SyncedSpeakerTranscription: Codable {
+    var id: UUID
+    var recordedAt: Date
+    var appliedText: String
+    var speakers: [TranscriptSpeaker]
+
+    init?(_ transcription: NoteTranscription) {
+      guard let speakerTranscript = transcription.speakerTranscript else { return nil }
+      id = transcription.id
+      recordedAt = transcription.recordedAt
+      appliedText = transcription.appliedText
+      speakers = speakerTranscript.speakers
+    }
+
+    var noteTranscription: NoteTranscription {
+      NoteTranscription(
+        id: id,
+        recordedAt: recordedAt,
+        original: "",
+        appliedText: appliedText,
+        speakerTranscript: SpeakerTranscript(speakers: speakers, utterances: [])
+      )
+    }
+  }
+
+  /// Finds the speaker-label lines that still belong to their original
+  /// recording block in the note body. The absolute offsets let the reading
+  /// view distinguish two separate recordings that both contain "Speaker 1".
+  /// If a user substantially edits a transcript block, it intentionally stops
+  /// becoming interactive rather than risking a rename in the wrong place.
+  var speakerLabelOccurrences: [NoteSpeakerLabelOccurrence] {
+    var result: [NoteSpeakerLabelOccurrence] = []
+    var searchStart = body.startIndex
+
+    for transcription in transcriptions {
+      guard let conversation = transcription.speakerTranscript,
+            !transcription.appliedText.isEmpty,
+            searchStart <= body.endIndex,
+            let blockRange = body.range(
+              of: transcription.appliedText,
+              range: searchStart..<body.endIndex
+            )
+      else { continue }
+
+      let blockStart = body.utf16.distance(
+        from: body.utf16.startIndex,
+        to: blockRange.lowerBound.samePosition(in: body.utf16) ?? body.utf16.startIndex
+      )
+      var relativeLocation = 0
+      let lines = transcription.appliedText.components(separatedBy: "\n")
+      for line in lines {
+        if let speaker = conversation.speakers.first(where: {
+          line == conversation.displayName(for: $0.id) + ":"
+        }) {
+          result.append(NoteSpeakerLabelOccurrence(
+            transcriptionID: transcription.id,
+            speakerID: speaker.id,
+            displayName: conversation.displayName(for: speaker.id),
+            colorIndex: speaker.colorIndex,
+            utf16Location: blockStart + relativeLocation
+          ))
+        }
+        relativeLocation += line.utf16.count + 1
+      }
+      searchStart = blockRange.upperBound
+    }
+
+    return result
   }
 
   @discardableResult
@@ -252,6 +459,7 @@ struct NoteTranscription: Codable, Equatable, Hashable, Identifiable {
   var provider: AIProvider?
   var customPrompt: String?
   var cleanupError: String?
+  var speakerTranscript: SpeakerTranscript? = nil
 }
 
 /// A revision awaiting the user's Undo/Keep. Stores the previous body so

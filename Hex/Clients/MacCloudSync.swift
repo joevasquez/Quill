@@ -294,6 +294,7 @@ final class MacCloudSync: ObservableObject {
         duration: t.duration,
         sourceAppBundleID: t.sourceAppBundleID,
         sourceAppName: t.sourceAppName,
+        speakerTranscript: t.speakerTranscript,
         sourceDevice: device,
         sourcePlatform: .macOS
       )
@@ -431,6 +432,7 @@ final class MacCloudSync: ObservableObject {
       duration: transcript.duration,
       sourceAppBundleID: transcript.sourceAppBundleID,
       sourceAppName: transcript.sourceAppName,
+      speakerTranscript: transcript.speakerTranscript,
       sourceDevice: Host.current().localizedName ?? "Mac",
       sourcePlatform: .macOS
     )

@@ -33,6 +33,26 @@ enum IOSOnDeviceModel {
     return false
   }
 
+  static var availabilityDescription: String {
+    #if canImport(FoundationModels)
+    if #available(iOS 26.0, *) {
+      switch SystemLanguageModel.default.availability {
+      case .available:
+        return "Available on this device"
+      case .unavailable(.deviceNotEligible):
+        return "This device doesn't support Apple Intelligence"
+      case .unavailable(.appleIntelligenceNotEnabled):
+        return "Turn on Apple Intelligence in Settings"
+      case .unavailable(.modelNotReady):
+        return "Apple Intelligence is still preparing its model"
+      case .unavailable:
+        return "The on-device model is currently unavailable"
+      }
+    }
+    #endif
+    return "Requires iOS 26 and an Apple Intelligence device"
+  }
+
   /// One-shot completion: system instructions + user message → raw text.
   /// Returns nil when the framework/model is unavailable — callers fall
   /// back to their cloud path (or surface the missing-key error).

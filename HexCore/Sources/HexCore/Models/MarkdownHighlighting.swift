@@ -389,3 +389,41 @@ public enum MarkdownListContinuation {
     return .none
   }
 }
+
+/// Applies a toolbar list marker to every selected line, rather than only
+/// the first line of a multi-line selection. Pure text logic so both the
+/// editor behavior and its edge cases can be tested without UIKit.
+public enum MarkdownLineFormatting {
+  public struct Result: Equatable {
+    public let text: String
+    public let selection: NSRange
+  }
+
+  public static func apply(marker: String, to text: String, selection: NSRange) -> Result {
+    let source = text as NSString
+    guard selection.location != NSNotFound,
+          selection.location >= 0,
+          selection.location + selection.length <= source.length
+    else { return Result(text: text, selection: selection) }
+    let selectedEnd = selection.length > 0 ? selection.location + selection.length - 1 : selection.location
+    let linesRange = source.lineRange(for: NSRange(location: selection.location, length: selectedEnd - selection.location))
+    let lines = source.substring(with: linesRange).components(separatedBy: "\n")
+    var number = 1
+    let formatted = lines.enumerated().map { index, line in
+      guard !line.isEmpty || (lines.count == 1 && index == 0) else { return line }
+      let currentMarker: String
+      if marker == "1. " {
+        currentMarker = "\(number). "
+        number += 1
+      } else {
+        currentMarker = marker
+      }
+      return currentMarker + line
+    }.joined(separator: "\n")
+    let changed = source.replacingCharacters(in: linesRange, with: formatted)
+    let resultingSelection = selection.length == 0
+      ? NSRange(location: selection.location + (marker as NSString).length, length: 0)
+      : NSRange(location: linesRange.location, length: (formatted as NSString).length)
+    return Result(text: changed, selection: resultingSelection)
+  }
+}

@@ -190,10 +190,19 @@ struct MarkdownTextEditorIOS: UIViewRepresentable {
     private func insertAtLineStart(_ marker: String) {
       guard let tv = textView else { return }
       let range = tv.selectedRange
-      let ns = tv.text as NSString
-      let lineRange = ns.lineRange(for: range)
-      replaceText(in: tv, range: NSRange(location: lineRange.location, length: 0), with: marker)
-      tv.selectedRange = NSRange(location: range.location + (marker as NSString).length, length: range.length)
+      let formatted = MarkdownLineFormatting.apply(marker: marker, to: tv.text, selection: range)
+      guard formatted.text != tv.text else { return }
+      let current = tv.text as NSString
+      let revised = formatted.text as NSString
+      let commonPrefix = (0..<min(current.length, revised.length)).prefix {
+        current.character(at: $0) == revised.character(at: $0)
+      }.count
+      replaceText(
+        in: tv,
+        range: NSRange(location: commonPrefix, length: current.length - commonPrefix),
+        with: revised.substring(from: commonPrefix)
+      )
+      tv.selectedRange = formatted.selection
     }
   }
 }

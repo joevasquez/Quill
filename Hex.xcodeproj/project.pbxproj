@@ -27,6 +27,7 @@
 		F50542E12F9C284D0067B323 /* HexCore in Frameworks */ = {isa = PBXBuildFile; productRef = F50542E02F9C284D0067B323 /* HexCore */; };
 		F5D5A14B2F943A8E00A3E16D /* HexCore in Frameworks */ = {isa = PBXBuildFile; productRef = F5D5A14A2F943A8E00A3E16D /* HexCore */; };
 		F5D5A14D2F943AB900A3E16D /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = F5D5A14C2F943AB900A3E16D /* WhisperKit */; };
+		F5D5A1502F943AB900A3E16D /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 47E16A612EC6C9D300885CF7 /* FluidAudio */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -208,6 +209,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F5D5A1502F943AB900A3E16D /* FluidAudio in Frameworks */,
 				F5D5A14D2F943AB900A3E16D /* WhisperKit in Frameworks */,
 				F5D5A14B2F943A8E00A3E16D /* HexCore in Frameworks */,
 			);
@@ -376,6 +378,7 @@
 			packageProductDependencies = (
 				F5D5A14A2F943A8E00A3E16D /* HexCore */,
 				F5D5A14C2F943AB900A3E16D /* WhisperKit */,
+				47E16A612EC6C9D300885CF7 /* FluidAudio */,
 			);
 			productName = "Quill iOS";
 			productReference = F5D5A10F2F9438B200A3E16D /* Quill iOS.app */;

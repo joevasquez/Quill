@@ -13,6 +13,10 @@ enum QuillIOSSettingsKey {
   static let selectedModel = "quill.selectedModel"
   static let aiProcessingMode = "quill.aiProcessingMode"
   static let aiProvider = "quill.aiProvider"
+  /// Automatic, on-device, or cloud routing for text transformations.
+  /// Automatic prefers Apple's private local model for Free users when it
+  /// is available and keeps Quill Pro on its included cloud service.
+  static let textAIExecutionPreference = "quill.textAIExecutionPreference"
   /// When true, inline phrases like "period", "comma", "new paragraph",
   /// etc. are substituted into punctuation / line breaks before AI
   /// post-processing runs. Mirrors the macOS `voiceCommandsEnabled`
@@ -73,6 +77,7 @@ enum QuillIOSSettingsKey {
   // AI defaults to .off so users see raw transcripts until they pick a mode.
   static let defaultMode = "off"
   static let defaultProvider = "anthropic"
+  static let defaultTextAIExecutionPreference = TextAIExecutionPreference.automatic.rawValue
   /// On by default — most users dictate naturally and expect "period"
   /// to become a `.` rather than the literal word.
   static let defaultVoiceCommandsEnabled = true

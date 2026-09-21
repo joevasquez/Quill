@@ -19,6 +19,8 @@ struct SettingsView: View {
   /// here so a relaunch reopens where the user left off.
   @AppStorage(QuillIOSSettingsKey.defaultCaptureMode) private var defaultCaptureModeRaw: String = QuillIOSSettingsKey.defaultCaptureModeValue
   @AppStorage(QuillIOSSettingsKey.aiProvider) private var aiProviderRaw: String = QuillIOSSettingsKey.defaultProvider
+  @AppStorage(QuillIOSSettingsKey.textAIExecutionPreference)
+  private var textAIExecutionPreferenceRaw: String = QuillIOSSettingsKey.defaultTextAIExecutionPreference
   @AppStorage(QuillIOSSettingsKey.voiceCommandsEnabled) private var voiceCommandsEnabled: Bool = QuillIOSSettingsKey.defaultVoiceCommandsEnabled
   @AppStorage(QuillIOSSettingsKey.autoActionRouting) private var autoActionRouting: Bool = QuillIOSSettingsKey.defaultAutoActionRouting
   @AppStorage(CustomAIModesStorage.userDefaultsKey) private var customModesData: Data = Data()
@@ -459,6 +461,27 @@ struct SettingsView: View {
 
   @ViewBuilder private var aiScreen: some View {
     Form {
+        Section {
+          Picker("Run text AI", selection: $textAIExecutionPreferenceRaw) {
+            ForEach(TextAIExecutionPreference.allCases, id: \.rawValue) { preference in
+              Text(preference.displayName).tag(preference.rawValue)
+            }
+          }
+          .pickerStyle(.segmented)
+
+          Label {
+            Text(IOSOnDeviceModel.availabilityDescription)
+              .foregroundStyle(.secondary)
+          } icon: {
+            Image(systemName: IOSOnDeviceModel.isAvailable ? "checkmark.circle.fill" : "exclamationmark.circle")
+              .foregroundStyle(IOSOnDeviceModel.isAvailable ? .green : .orange)
+          }
+          .font(.caption)
+        } header: {
+          Text("Text AI Processing")
+        } footer: {
+          Text("Automatic uses the private on-device model for Free users when available; Pro uses Quill Pro. Choose On Device or Cloud to compare results. This controls transcript cleanup, note edits, questions, and automatic titles.")
+        }
         Section {
           Picker("Provider", selection: $aiProviderRaw) {
             ForEach(AIProvider.allCases, id: \.rawValue) { provider in

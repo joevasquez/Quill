@@ -19,6 +19,8 @@ import os.log
 enum TextAIError: LocalizedError {
   case missingAPIKey(AIProvider)
   case proAuthenticationRequired
+  case onDeviceUnavailable(String)
+  case onDeviceGenerationFailed
   case networkFailure(Int, String)
   case invalidResponse
 
@@ -28,6 +30,10 @@ enum TextAIError: LocalizedError {
       "No \(p.displayName) API key — add one in Settings."
     case .proAuthenticationRequired:
       "Reconnect Google in Settings to use Quill Pro AI."
+    case .onDeviceUnavailable(let reason):
+      "On-device AI isn't available. \(reason). Choose Automatic or Cloud in Settings to use another route."
+    case .onDeviceGenerationFailed:
+      "The on-device model couldn't complete this edit. Try again, or choose Cloud in Settings."
     case .networkFailure(let code, _):
       "AI service returned HTTP \(code)"
     case .invalidResponse:
@@ -57,9 +63,16 @@ enum TextAIClient {
     guard !systemPrompt.isEmpty else { return text }
 
     let modeLabel = customSystemPrompt != nil ? "custom" : mode.rawValue
-    let routeLabel = UserDefaults.standard.string(forKey: QuillIOSSettingsKey.selectedPlan) == "pro"
-      ? "Quill Pro"
-      : provider.displayName
+    let preference = TextAIExecutionPreference(
+      rawValue: UserDefaults.standard.string(forKey: QuillIOSSettingsKey.textAIExecutionPreference)
+        ?? QuillIOSSettingsKey.defaultTextAIExecutionPreference
+    ) ?? .automatic
+    let isPro = UserDefaults.standard.string(forKey: QuillIOSSettingsKey.selectedPlan) == "pro"
+    let route = TextAIRouteResolver.resolve(
+      preference: preference, isPro: isPro,
+      onDeviceAvailable: IOSOnDeviceModel.isAvailable
+    )
+    let routeLabel = route == .onDevice ? "On-device AI" : (isPro ? "Quill Pro" : provider.displayName)
     HexLog.aiProcessing.info("TextAIClient: processing \(text.count, privacy: .public) chars via \(routeLabel, privacy: .public) mode=\(modeLabel, privacy: .public)")
 
     let result: String
@@ -244,17 +257,44 @@ enum TextAIClient {
     requestTimeout: TimeInterval = 30
   ) async throws -> String {
     let userMessage = wrapAsTranscript ? TranscriptWrapper.wrap(text) : text
+    let preference = TextAIExecutionPreference(
+      rawValue: UserDefaults.standard.string(forKey: QuillIOSSettingsKey.textAIExecutionPreference)
+        ?? QuillIOSSettingsKey.defaultTextAIExecutionPreference
+    ) ?? .automatic
+    let isPro = UserDefaults.standard.string(forKey: QuillIOSSettingsKey.selectedPlan) == "pro"
+    let route = TextAIRouteResolver.resolve(
+      preference: preference,
+      isPro: isPro,
+      onDeviceAvailable: IOSOnDeviceModel.isAvailable
+    )
+
+    if route == .onDevice {
+      guard IOSOnDeviceModel.isAvailable else {
+        throw TextAIError.onDeviceUnavailable(IOSOnDeviceModel.availabilityDescription)
+      }
+      guard let local = await IOSOnDeviceModel.complete(
+        systemPrompt: systemPrompt,
+        userMessage: userMessage
+      ) else {
+        throw TextAIError.onDeviceGenerationFailed
+      }
+      HexLog.aiProcessing.info("TextAIClient: used the on-device route")
+      return stripMetaCommentary(local)
+    }
+
     let credential: LLMCredential
     do {
       credential = try await IOSActionParsingClient.resolveCredential(for: provider)
     } catch {
-      // No API key and no Pro plan — Apple Intelligence devices can
-      // still run the core note flow on-device, free and offline.
-      if let local = await IOSOnDeviceModel.complete(
+      // Automatic remains resilient if a Pro session or saved cloud key
+      // becomes unavailable. An explicit Cloud choice never crosses the
+      // privacy boundary without the user changing the setting.
+      if preference == .automatic,
+         let local = await IOSOnDeviceModel.complete(
         systemPrompt: systemPrompt,
         userMessage: userMessage
       ) {
-        HexLog.aiProcessing.info("TextAIClient: ran on-device (no API key)")
+        HexLog.aiProcessing.info("TextAIClient: cloud credential unavailable; used on-device fallback")
         return stripMetaCommentary(local)
       }
       throw error

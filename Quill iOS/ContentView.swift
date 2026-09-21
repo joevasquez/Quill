@@ -57,6 +57,7 @@ final class RecordingViewModel: ObservableObject {
   @Published var phase: Phase = .idle
   @Published var rawTranscript: String = ""
   @Published var processedTranscript: String = ""
+  @Published var speakerTranscript: SpeakerTranscript?
   @Published var livePartial: String = ""
   @Published var meterLevel: Float = 0
   @Published var elapsedSeconds: TimeInterval = 0
@@ -202,7 +203,8 @@ final class RecordingViewModel: ObservableObject {
   }
 
   var displayedText: String {
-    processedTranscript.isEmpty ? rawTranscript : processedTranscript
+    if !processedTranscript.isEmpty { return processedTranscript }
+    return speakerTranscript?.formattedText ?? rawTranscript
   }
 
   var hasResult: Bool {
@@ -255,6 +257,7 @@ final class RecordingViewModel: ObservableObject {
     Task { await liveActivity.end(elapsed: elapsedSeconds) }
     rawTranscript = ""
     processedTranscript = ""
+    speakerTranscript = nil
     livePartial = ""
     isActionRecording = false
     wasAutoRouted = false
@@ -329,6 +332,7 @@ final class RecordingViewModel: ObservableObject {
     recordingSessionID = UUID()
     rawTranscript = ""
     processedTranscript = ""
+    speakerTranscript = nil
     livePartial = ""
     elapsedSeconds = 0
     isPaused = false
@@ -411,18 +415,32 @@ final class RecordingViewModel: ObservableObject {
         HexLog.recording.info(
           "iOS recording stopped elapsed=\(expectedDuration, privacy: .public)s captured=\(capturedDuration, privacy: .public)s"
         )
-        let decodeOptions: DecodingOptions? = switch IOSLongRecordingPolicy.transcriptionStrategy(
+        var decodeOptions: DecodingOptions = switch IOSLongRecordingPolicy.transcriptionStrategy(
           for: capturedDuration
         ) {
         case .continuous:
-          nil
+          DecodingOptions()
         case .voiceActivityChunks:
           DecodingOptions(concurrentWorkerCount: 1, chunkingStrategy: .vad)
         }
+        decodeOptions.withoutTimestamps = false
+        decodeOptions.wordTimestamps = true
         let results = try await whisperKit!.transcribe(
           audioPath: url.path,
           decodeOptions: decodeOptions
         )
+        let timedWords = results.flatMap { result in
+          result.segments.flatMap { segment in
+            (segment.words ?? []).map { word in
+              TimedTranscriptWord(
+                text: word.word,
+                startTime: TimeInterval(word.start),
+                endTime: TimeInterval(word.end),
+                confidence: word.probability
+              )
+            }
+          }
+        }
         let rawText = results.map(\.text).joined(separator: " ")
         let cleaned = WhisperOutputCleaner.clean(rawText)
         let text = voiceCommandsEnabled
@@ -508,12 +526,31 @@ final class RecordingViewModel: ObservableObject {
           return
         }
 
+        // Speaker attribution is finalized after recording, once Whisper's
+        // word timestamps and FluidAudio's full-file speaker regions are both
+        // available. A diarization failure is non-fatal: the plain transcript
+        // still lands in the note.
+        if !isActionRecording {
+          do {
+            let speakerRanges = try await IOSSpeakerDiarizationClient.shared.diarize(url)
+            speakerTranscript = SpeakerTranscriptAssembler.assemble(
+              words: timedWords,
+              speakerRanges: speakerRanges
+            )
+          } catch {
+            speakerTranscript = nil
+            HexLog.transcription.warning(
+              "iOS speaker diarization failed: \(error.localizedDescription, privacy: .public)"
+            )
+          }
+        }
+
         let shouldRunAI = mode != .off || customSystemPrompt != nil
         if shouldRunAI {
           phase = .aiProcessing
           do {
             let processed = try await TextAIClient.process(
-              text: text,
+              text: speakerTranscript?.formattedText ?? text,
               mode: mode,
               provider: provider,
               customSystemPrompt: customSystemPrompt
@@ -918,6 +955,8 @@ struct ContentView: View {
   @AppStorage(MCPServersStorage.userDefaultsKey) private var mcpServersData: Data = Data()
   @AppStorage(QuillIOSSettingsKey.suggestionsEnabled) private var suggestionsEnabled: Bool = true
   @AppStorage(QuillIOSSettingsKey.selectedPlan) private var selectedPlanRaw: String = ""
+  @AppStorage(QuillIOSSettingsKey.textAIExecutionPreference)
+  private var textAIExecutionPreferenceRaw: String = QuillIOSSettingsKey.defaultTextAIExecutionPreference
 
   @StateObject private var vm = RecordingViewModel()
   @StateObject private var notes = NotesStore.shared
@@ -1006,6 +1045,17 @@ struct ContentView: View {
 
   private var aiProvider: AIProvider {
     AIProvider(rawValue: aiProviderRaw) ?? .anthropic
+  }
+
+  private var textAIRouteDisplayName: String {
+    let preference = TextAIExecutionPreference(rawValue: textAIExecutionPreferenceRaw) ?? .automatic
+    let route = TextAIRouteResolver.resolve(
+      preference: preference,
+      isPro: selectedPlanRaw == "pro",
+      onDeviceAvailable: IOSOnDeviceModel.isAvailable
+    )
+    if route == .onDevice { return "On-device AI" }
+    return selectedPlanRaw == "pro" ? "Quill Pro" : aiProvider.displayName
   }
 
   private var customModes: [CustomAIMode] {
@@ -1864,7 +1914,8 @@ struct ContentView: View {
     guard let result = notes.finalizeTranscriptionDraft(
             noteID: capture.noteID,
             sessionID: capture.sessionID,
-            finalText: finalText
+            finalText: finalText,
+            speakerTranscript: vm.speakerTranscript
           )
     else {
       noteSaveFailed = true
@@ -2020,7 +2071,29 @@ struct ContentView: View {
         provider: aiProvider,
         customSystemPrompt: InlineEditPrompt.systemPrompt
       )
-      let cleaned = revised.trimmingCharacters(in: .whitespacesAndNewlines)
+      var cleaned = revised.trimmingCharacters(in: .whitespacesAndNewlines)
+      if NoteEditOutputValidator.needsBulletRetry(
+        command: command, source: body, output: cleaned
+      ) {
+        let retryInstruction = """
+          \(command)
+
+          Important: The source contains multiple distinct ideas. Put each idea on its own Markdown line beginning with `- `. Return at least two bullet lines and no introductory text.
+          """
+        let retry = try await TextAIClient.process(
+          text: InlineEditPrompt.userMessage(instruction: retryInstruction, selection: body),
+          mode: .clean,
+          provider: aiProvider,
+          customSystemPrompt: InlineEditPrompt.systemPrompt
+        )
+        cleaned = retry.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !NoteEditOutputValidator.needsBulletRetry(
+          command: command, source: body, output: cleaned
+        ) else {
+          vm.noteEditError = "Quill couldn't separate the note into useful bullets. Your original note was left unchanged."
+          return
+        }
+      }
       guard !cleaned.isEmpty, cleaned != body else {
         // The model handed back the note unchanged (or nothing at all).
         // Say so — silently returning here is indistinguishable from a
@@ -2318,7 +2391,7 @@ struct ContentView: View {
     case .actionParsing:
       statusPill("Parsing action…", icon: "bolt.fill", tint: QuillDesign.actionAccent)
     case .aiProcessing:
-      statusPill("Enhancing with \(aiProvider.displayName)…", icon: "sparkles", tint: .purple)
+      statusPill("Enhancing with \(textAIRouteDisplayName)…", icon: "sparkles", tint: .purple)
     case .error(let msg):
       statusPill(msg, icon: "exclamationmark.triangle", tint: .red)
     case .idle, .done:

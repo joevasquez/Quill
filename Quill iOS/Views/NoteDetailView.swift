@@ -17,6 +17,11 @@
 import HexCore
 import SwiftUI
 
+private struct SpeakerRenameTarget {
+  let transcriptionID: UUID
+  let speakerID: String
+}
+
 struct NoteDetailView: View {
   /// Composer capsule height — a minimum, so the field can grow with type.
   @ScaledMetric(relativeTo: .body) private var composerHeight: CGFloat = 48
@@ -88,6 +93,8 @@ struct NoteDetailView: View {
   @State private var draft: String = ""
   @State private var isBodyEditing = false
   @State private var editingPhotoIDs: Set<UUID> = []
+  @State private var speakerRenameTarget: SpeakerRenameTarget?
+  @State private var speakerNameDraft = ""
 
   var body: some View {
     VStack(spacing: 0) {
@@ -138,7 +145,27 @@ struct NoteDetailView: View {
               VStack(alignment: .leading, spacing: 8) {
                 Text(record.recordedAt, style: .date).font(.headline)
                 Text(record.recordedAt, style: .time).font(.caption).foregroundStyle(.secondary)
-                Text(record.original).textSelection(.enabled)
+                if let conversation = record.speakerTranscript {
+                  ForEach(conversation.utterances) { utterance in
+                    HStack(alignment: .top, spacing: 10) {
+                      Button(conversation.displayName(for: utterance.speakerID)) {
+                        speakerNameDraft = conversation.displayName(for: utterance.speakerID)
+                        speakerRenameTarget = SpeakerRenameTarget(
+                          transcriptionID: record.id,
+                          speakerID: utterance.speakerID
+                        )
+                      }
+                      .font(.caption.weight(.semibold))
+                      .buttonStyle(.plain)
+                      .foregroundStyle(speakerColor(for: utterance.speakerID, in: conversation))
+                      .frame(width: 76, alignment: .leading)
+
+                      Text(utterance.text).textSelection(.enabled)
+                    }
+                  }
+                } else {
+                  Text(record.original).textSelection(.enabled)
+                }
               }.frame(maxWidth: .infinity, alignment: .leading)
             }
           }.padding()
@@ -158,6 +185,32 @@ struct NoteDetailView: View {
     } message: {
       Text("This permanently removes the note and all attached photos. This can't be undone.")
     }
+    .alert("Rename Speaker", isPresented: Binding(
+      get: { speakerRenameTarget != nil },
+      set: { if !$0 { speakerRenameTarget = nil } }
+    )) {
+      TextField("Speaker name", text: $speakerNameDraft)
+      Button("Rename") {
+        if let target = speakerRenameTarget {
+          _ = notes.renameSpeaker(
+            noteID: note.id,
+            transcriptionID: target.transcriptionID,
+            speakerID: target.speakerID,
+            to: speakerNameDraft
+          )
+        }
+        speakerRenameTarget = nil
+      }
+      Button("Cancel", role: .cancel) { speakerRenameTarget = nil }
+    } message: {
+      Text("This changes the name everywhere this speaker appears in that recording.")
+    }
+  }
+
+  private func speakerColor(for id: String, in conversation: SpeakerTranscript) -> Color {
+    let palette: [Color] = [.blue, .purple, .orange, .teal, .pink, .indigo]
+    let index = conversation.speakers.first(where: { $0.id == id })?.colorIndex ?? 0
+    return palette[index % palette.count]
   }
 
   private func beginBodyEditing() {
@@ -347,8 +400,9 @@ struct NoteDetailView: View {
               .onTapGesture(perform: beginBodyEditing)
               .foregroundStyle(theme.text3).padding(.top, 20)
           } else {
-            ForEach(Array(NoteContent.segments(from: note.body).enumerated()), id: \.offset) { _, seg in
-              segmentView(seg)
+            let segments = NoteContent.segments(from: note.body)
+            ForEach(Array(segments.enumerated()), id: \.offset) { index, seg in
+              segmentView(seg, at: index, in: segments)
             }
           }
           if !liveText.isEmpty {
@@ -557,12 +611,20 @@ struct NoteDetailView: View {
   }
 
   @ViewBuilder
-  private func segmentView(_ seg: NoteSegment) -> some View {
+  private func segmentView(_ seg: NoteSegment, at index: Int, in segments: [NoteSegment]) -> some View {
     switch seg {
     case .text(let text):
       NoteTextView(
         text: text,
         headingColor: QuillDesign.brand.color(),
+        speakerPills: speakerPills(for: text, segmentIndex: index, segments: segments),
+        onTapSpeakerPill: { speaker in
+          speakerNameDraft = speaker.title
+          speakerRenameTarget = SpeakerRenameTarget(
+            transcriptionID: speaker.transcriptionID,
+            speakerID: speaker.speakerID
+          )
+        },
         onToggleCheckbox: { lineIndex in
           toggleCheckbox(segmentText: text, lineIndex: lineIndex)
         }
@@ -591,6 +653,51 @@ struct NoteDetailView: View {
         analysisCard(photoID: photoID)
       }
     }
+  }
+
+  private func speakerPills(
+    for text: String,
+    segmentIndex: Int,
+    segments: [NoteSegment]
+  ) -> [Int: SpeakerPillDescriptor] {
+    guard let segmentStart = segmentStartUTF16(at: segmentIndex, in: segments) else { return [:] }
+    let occurrences = Dictionary(
+      uniqueKeysWithValues: note.speakerLabelOccurrences.map { ($0.utf16Location, $0) }
+    )
+    var pills: [Int: SpeakerPillDescriptor] = [:]
+    var relativeLocation = 0
+    for (lineIndex, line) in text.components(separatedBy: "\n").enumerated() {
+      if let occurrence = occurrences[segmentStart + relativeLocation] {
+        pills[lineIndex] = SpeakerPillDescriptor(
+          transcriptionID: occurrence.transcriptionID,
+          speakerID: occurrence.speakerID,
+          title: occurrence.displayName,
+          colorIndex: occurrence.colorIndex
+        )
+      }
+      relativeLocation += line.utf16.count + 1
+    }
+    return pills
+  }
+
+  private func segmentStartUTF16(at targetIndex: Int, in segments: [NoteSegment]) -> Int? {
+    var searchStart = note.body.startIndex
+    for (index, segment) in segments.enumerated() {
+      let needle: String
+      switch segment {
+      case .text(let text): needle = text
+      case .photo(let id): needle = NoteContent.photoToken(for: id)
+      }
+      guard let range = note.body.range(of: needle, range: searchStart..<note.body.endIndex) else {
+        return nil
+      }
+      if index == targetIndex {
+        guard let utf16Index = range.lowerBound.samePosition(in: note.body.utf16) else { return nil }
+        return note.body.utf16.distance(from: note.body.utf16.startIndex, to: utf16Index)
+      }
+      searchStart = range.upperBound
+    }
+    return nil
   }
 
   @ViewBuilder

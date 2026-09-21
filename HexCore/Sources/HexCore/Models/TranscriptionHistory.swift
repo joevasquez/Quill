@@ -14,6 +14,9 @@ public struct Transcript: Codable, Equatable, Identifiable, Sendable {
     public var sourceAppName: String?
     /// The mode that produced this transcript. `nil` for legacy entries (treated as `.dictate`).
     public var mode: TranscriptionMode?
+    /// Structured speaker-attributed content. Absent for legacy and ordinary
+    /// single-speaker transcripts, which continue to render `text` directly.
+    public var speakerTranscript: SpeakerTranscript?
 
     public init(
         id: UUID = UUID(),
@@ -23,7 +26,8 @@ public struct Transcript: Codable, Equatable, Identifiable, Sendable {
         duration: TimeInterval,
         sourceAppBundleID: String? = nil,
         sourceAppName: String? = nil,
-        mode: TranscriptionMode? = nil
+        mode: TranscriptionMode? = nil,
+        speakerTranscript: SpeakerTranscript? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -33,6 +37,12 @@ public struct Transcript: Codable, Equatable, Identifiable, Sendable {
         self.sourceAppBundleID = sourceAppBundleID
         self.sourceAppName = sourceAppName
         self.mode = mode
+        self.speakerTranscript = speakerTranscript
+    }
+
+    /// Speaker-labelled text when available, otherwise the original plain text.
+    public var shareableText: String {
+        speakerTranscript?.formattedText ?? text
     }
 }
 
