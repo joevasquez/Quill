@@ -12,6 +12,27 @@ import Testing
 
 struct Quill_iOSTests {
 
+    @Test("Transcript is the user-facing name for the compatible off value")
+    func transcriptModeName() {
+        #expect(AIProcessingMode.off.iosDisplayName == "Transcript")
+        #expect(AIProcessingMode.off.rawValue == "off")
+    }
+
+    @Test("speaker diarization and AI formatting are mutually exclusive")
+    func captureProcessingPlan() {
+        let transcript = IOSCaptureProcessingPlan(mode: .off, customSystemPrompt: nil)
+        #expect(transcript.shouldDiarize)
+        #expect(!transcript.shouldRunAI)
+
+        let clean = IOSCaptureProcessingPlan(mode: .clean, customSystemPrompt: nil)
+        #expect(!clean.shouldDiarize)
+        #expect(clean.shouldRunAI)
+
+        let custom = IOSCaptureProcessingPlan(mode: .off, customSystemPrompt: "Custom")
+        #expect(!custom.shouldDiarize)
+        #expect(custom.shouldRunAI)
+    }
+
     @Test("only completely empty notes can be discarded on close")
     func emptyDraftEligibility() {
         #expect(Note().isEmptyDraft)

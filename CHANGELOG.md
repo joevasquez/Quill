@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.29.0
+
+### Minor Changes
+
+- 7e68a87: Auto mode now recognizes an edit instruction by its shape — an imperative verb pointing at your selection ('turn this into a table', 'reword this') — instead of matching a fixed list of phrasings. Prose that merely mentions 'this' still dictates normally.
+- 8798ee4: Show full live notes without dimming, follow the latest words, preserve original transcripts, and offer recovery and cleanup retries
+- fdc87fe: Add an iOS sidebar with pinned Settings, tap-to-edit notes, and a compact note menu with confirmed deletion
+- d2ce2fa: Add speaker-labeled transcripts, editable speaker names, and optional on-device AI processing on iOS.
+- fdc87fe: Improve macOS note capture and recovery, add Ask Quill, and organize account and appearance settings
+- 0b5c89c: Add durable long-recording recovery, Ask Quill note Q&A, and Lock Screen recording controls on iOS.
+- 8a7eee6: Show live iOS dictation directly in the destination note and recover partial text after interruption or termination.
+
+### Patch Changes
+
+- 6f86e13: Fix an inline edit pasting the raw AI prompt into your document when the edited text happened to begin like a refusal ('I can't...', 'I'm sorry...'). Auto mode now recognizes 'convert this into bullets' and similar phrasings as edits. Auto also records what it decided, locally, so misroutes can be measured.
+- 8798ee4: Match recording controls to the composer, refine cleanup retry cards, and prevent live preview blocks from disappearing
+- 8798ee4: Reorder the Notes header with Back left and matching Ask and New Note icons on the right
+- 8798ee4: Unify Dictate, Edit, and Act dropdown buttons with shared sizing, colors, borders, and chevrons
+- 8798ee4: Discard completely empty notes when closing them while preserving titled notes and recordings
+- 8798ee4: Remove the Notes sidebar row and enable asking questions across all notes from the Notes header
+- 8798ee4: Keep Notes navigation chrome stable and route its Back button through the owning navigation stack
+- 8798ee4: Restore compact mode-tinted dropdown pills and match the sidebar close icon to the hamburger
+- Rename the iOS Direct format to Transcript and limit automatic speaker labels to that mode so AI formatting cannot corrupt or discard diarized content.
+- 8798ee4: Match Notes back and note menu icons to the plain home navigation buttons
+- 8798ee4: Replace Edit command pills with an alphabetical menu and make keyboard formatting controls scroll on narrow screens
+- fdc87fe: Add per-tool MCP controls and improve Google account handling and long-text processing
+- 8798ee4: Center the home branding, enlarge and simplify navigation icons, and animate sidebar dismissal
+- 8a7eee6: Simplify iOS Settings with combined Plan & Account and dedicated Appearance panes, and merge duplicate Gmail connections into one row.
+- 8a7eee6: Route Quill Pro AI through OpenRouter and surface expired Google authentication instead of falling back to an invalid BYOK key.
+
 ## 0.28.0
 
 ### Minor Changes

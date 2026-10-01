@@ -281,7 +281,12 @@ struct Note: Codable, Identifiable, Equatable, Hashable {
   }
 
   var transcriptionMetadataJSON: String? {
-    let speakerRecords = transcriptions.compactMap(SyncedSpeakerTranscription.init)
+    // An explicit closure preserves the surrounding MainActor isolation;
+    // passing the initializer as a function value loses that context under
+    // Swift's upcoming strict-concurrency checks.
+    let speakerRecords = transcriptions.compactMap { transcription in
+      SyncedSpeakerTranscription(transcription)
+    }
     guard !speakerRecords.isEmpty,
           let data = try? JSONEncoder().encode(speakerRecords)
     else { return nil }

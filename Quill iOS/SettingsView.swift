@@ -296,7 +296,7 @@ struct SettingsView: View {
   }
 
   private func loadKey() {
-    let (existing, status) = KeychainStore.read(account: keychainKey)
+    let (existing, _) = KeychainStore.read(account: keychainKey)
     if let existing, !existing.isEmpty {
       apiKeyText = existing
       apiKeySaved = true
@@ -311,7 +311,7 @@ struct SettingsView: View {
     guard !key.isEmpty else { return }
     let status = KeychainStore.save(account: keychainKey, value: key)
     // Verify round-trip so we never show "Saved" when read would miss.
-    let (roundTrip, readStatus) = KeychainStore.read(account: keychainKey)
+    let (roundTrip, _) = KeychainStore.read(account: keychainKey)
     apiKeySaved = (status == errSecSuccess) && (roundTrip == key)
   }
 
@@ -367,7 +367,7 @@ struct SettingsView: View {
   private func builtInModeDescription(_ mode: AIProcessingMode) -> String {
     switch mode {
     case .off:
-      return "Direct transcript — no AI processing."
+      return "Keep the transcript as spoken and identify multiple speakers."
     case .clean:
       return "Tighten phrasing, drop filler words, fix punctuation."
     case .email:

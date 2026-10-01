@@ -72,7 +72,11 @@ enum IOSGoogleOAuthClient {
 
   /// Runs the system Safari sheet via ASWebAuthenticationSession, exchanges
   /// the authorization code for tokens with PKCE, persists tokens.
-  static func authorize(scopes: [String] = defaultScopes) async throws -> GoogleTokensIOS {
+  static func authorize(scopes requestedScopes: [String]? = nil) async throws -> GoogleTokensIOS {
+    // Default arguments are evaluated at the caller, which can be outside
+    // this MainActor-isolated type. Resolve the default inside the function
+    // so this remains valid under Swift 6 strict concurrency.
+    let scopes = requestedScopes ?? defaultScopes
     let codeVerifier = generateCodeVerifier()
     let challenge = codeChallenge(for: codeVerifier)
 

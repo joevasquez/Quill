@@ -415,6 +415,10 @@ final class RecordingViewModel: ObservableObject {
         HexLog.recording.info(
           "iOS recording stopped elapsed=\(expectedDuration, privacy: .public)s captured=\(capturedDuration, privacy: .public)s"
         )
+        let processingPlan = IOSCaptureProcessingPlan(
+          mode: mode,
+          customSystemPrompt: customSystemPrompt
+        )
         var decodeOptions: DecodingOptions = switch IOSLongRecordingPolicy.transcriptionStrategy(
           for: capturedDuration
         ) {
@@ -424,30 +428,32 @@ final class RecordingViewModel: ObservableObject {
           DecodingOptions(concurrentWorkerCount: 1, chunkingStrategy: .vad)
         }
         decodeOptions.withoutTimestamps = false
-        decodeOptions.wordTimestamps = true
+        decodeOptions.wordTimestamps = processingPlan.shouldDiarize
         let results = try await whisperKit!.transcribe(
           audioPath: url.path,
           decodeOptions: decodeOptions
         )
-        let timedWords = results.flatMap { result in
-          result.segments.flatMap { segment in
-            (segment.words ?? []).map { word in
-              TimedTranscriptWord(
-                text: word.word,
-                startTime: TimeInterval(word.start),
-                endTime: TimeInterval(word.end),
-                confidence: word.probability
-              )
+        let timedWords: [TimedTranscriptWord] = processingPlan.shouldDiarize
+          ? results.flatMap { result in
+              result.segments.flatMap { segment in
+                (segment.words ?? []).map { word in
+                  TimedTranscriptWord(
+                    text: word.word,
+                    startTime: TimeInterval(word.start),
+                    endTime: TimeInterval(word.end),
+                    confidence: word.probability
+                  )
+                }
+              }
             }
-          }
-        }
+          : []
         let rawText = results.map(\.text).joined(separator: " ")
         let cleaned = WhisperOutputCleaner.clean(rawText)
         let text = voiceCommandsEnabled
           ? VoiceCommandSubstituter.substitute(in: cleaned)
           : cleaned
         if text != cleaned {
-          print("RecordingViewModel: applied voice-command substitutions")
+          HexLog.transcription.info("Applied voice-command substitutions to iOS transcript")
         }
 
         guard sessionID == recordingSessionID else { return }
@@ -530,7 +536,7 @@ final class RecordingViewModel: ObservableObject {
         // word timestamps and FluidAudio's full-file speaker regions are both
         // available. A diarization failure is non-fatal: the plain transcript
         // still lands in the note.
-        if !isActionRecording {
+        if processingPlan.shouldDiarize, !isActionRecording {
           do {
             let speakerRanges = try await IOSSpeakerDiarizationClient.shared.diarize(url)
             speakerTranscript = SpeakerTranscriptAssembler.assemble(
@@ -545,12 +551,14 @@ final class RecordingViewModel: ObservableObject {
           }
         }
 
-        let shouldRunAI = mode != .off || customSystemPrompt != nil
-        if shouldRunAI {
+        if processingPlan.shouldRunAI {
           phase = .aiProcessing
           do {
             let processed = try await TextAIClient.process(
-              text: speakerTranscript?.formattedText ?? text,
+              // Formatting always starts from the plain transcript. Speaker
+              // labels belong only to Transcript mode and must never become
+              // model input that can be merged or discarded.
+              text: text,
               mode: mode,
               provider: provider,
               customSystemPrompt: customSystemPrompt

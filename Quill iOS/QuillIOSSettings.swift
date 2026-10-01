@@ -203,12 +203,11 @@ extension AIProvider {
 }
 
 extension AIProcessingMode {
-  /// User-facing label for the iOS app. We show "Direct" instead of the
-  /// platform-neutral "Off" / "Raw" — clearer about what the mode does
-  /// (no transformation; dictation goes straight through) without
-  /// implying a state ("recording is off").
+  /// User-facing label for the iOS app. The persisted enum case remains
+  /// `.off` for compatibility, but "Transcript" describes the result instead
+  /// of implying that recording itself is disabled.
   var iosDisplayName: String {
-    self == .off ? "Direct" : displayName
+    self == .off ? "Transcript" : displayName
   }
 
   /// SF Symbol used in the iOS pill / dropdown row.
@@ -227,6 +226,20 @@ extension AIProcessingMode {
   /// the only mode that doesn't — used by the dropdown to gate non-Off
   /// modes when the user hasn't configured an API key yet.
   var requiresAPIKey: Bool { self != .off }
+}
+
+/// Resolves the two mutually-exclusive post-transcription paths. Keeping this
+/// decision outside the recording view model makes the privacy/performance
+/// boundary explicit and regression-testable.
+struct IOSCaptureProcessingPlan: Equatable {
+  let shouldRunAI: Bool
+  let shouldDiarize: Bool
+
+  init(mode: AIProcessingMode, customSystemPrompt: String?) {
+    let hasCustomPrompt = customSystemPrompt != nil
+    shouldRunAI = mode != .off || hasCustomPrompt
+    shouldDiarize = mode.supportsAutomaticSpeakerDiarization && !hasCustomPrompt
+  }
 }
 
 /// Encodes / decodes the set of built-in AI modes the user has hidden
